@@ -1,0 +1,26 @@
+# 编辑器统一配置（EditorConfig）
+# https://editorconfig.org
+# 让不同编辑器对缩进、换行、编码保持一致。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Rust：4 空格缩进（rustfmt 默认）
+[*.rs]
+indent_size = 4
+
+# TOML / YAML / Markdown：2 空格缩进
+[*.{toml,yml,yaml,md}]
+indent_size = 2
+
+# 二进制 / 生成物不做处理
+[*.{png,jpg,jpeg,gif,ico,exe,pdb}]
+insert_final_newline = false
+trim_trailing_whitespace = false

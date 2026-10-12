@@ -1,0 +1,22 @@
+[package]
+name = "voke-app"
+description = "voke 的 gpui-kit UI 层与程序入口"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "voke"
+path = "src/main.rs"
+
+[dependencies]
+async-channel = "2.5"
+env_logger = "0.11"
+gpui-kit = "0.7"
+log = { workspace = true }
+raw-window-handle = "0.6"
+voke-core = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+voke-sys = { workspace = true }

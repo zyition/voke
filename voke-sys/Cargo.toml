@@ -1,0 +1,44 @@
+[package]
+name = "voke-sys"
+description = "voke 的 Win32 / COM 系统集成层（unsafe 隔离区）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+log = { workspace = true }
+# 编辑器历史（Zed / VSCode）的只读 SQLite reader。
+# 不做 cfg 门控：rusqlite 在任何平台都能编译，这样 `cargo test -p voke-sys`
+# 里"用临时 SQLite fixture 建真表"的测试在 WSL 里就有真实覆盖（只有解析
+# %LOCALAPPDATA% / %USERPROFILE% 的包装函数才是 cfg(windows)）。
+rusqlite = { workspace = true }
+# 复用 core 里的共享数据结构体（`WorkspaceEntry` 等），避免类型重复定义。
+# core 零 gpui / 零 windows，sys 依赖它不违反分层。
+voke-core = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+image = { workspace = true }
+# `Win32_System_Registry`：autostart.rs 的 RegOpenKeyExW / RegSetValueExW /
+# RegDeleteValueW / RegQueryValueExW / RegCloseKey（0.62.2 的 Registry 模块整体
+# 挂在这个 feature 下）。自启这条路径**不**用 RegCreateKeyExW——`Run` 键在系统里
+# 本来就已存在，打开即可写值，不必建键。
+# （`Win32_Security` 另由 workspace 根为 single_instance.rs 的 CreateMutexW /
+# CreateEventW 打开，与自启无关。）
+# `Win32_System_ProcessStatus`：mem.rs 的 K32GetProcessMemoryInfo /
+# PROCESS_MEMORY_COUNTERS_EX（0.62.2 里整个 ProcessStatus 模块挂在它下面）。
+windows = { workspace = true, features = ["Win32_System_Registry", "Win32_System_ProcessStatus"] }
+# 托盘图标（阶段 2.3）。`default-features = false` 关掉 libappindicator/GTK，
+# 否则 WSL 原生 `cargo test -p voke-sys` 会去编 GTK；再叠加 target 门控，
+# Linux 上根本不解析这条依赖。
+# 风险：若它在 windows-gnu 交叉目标下编不过，回退为手写 Shell_NotifyIconW
+# （见 docs/design/settings-plugins.md §9 风险表）。
+tray-icon = { version = "0.26", default-features = false }
+
+# 枚举/去重测试要造临时目录树。不做 cfg 门控：这些测试在 Linux 上也能跑，
+# 让 `cargo test -p voke-sys` 在 WSL 里就有实际覆盖（COM 部分测不了是另一回事）。
+[dev-dependencies]
+tempfile = "3"
+# 探针（examples/lnk_probe.rs）要在 Windows 上打印 debug 级剔除日志。
+[target.'cfg(windows)'.dev-dependencies]
+env_logger = "0.11"

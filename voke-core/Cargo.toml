@@ -1,0 +1,16 @@
+[package]
+name = "voke-core"
+description = "voke 的查询引擎、Provider 契约与拼音模糊匹配（零 UI 依赖）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+log = { workspace = true }
+nucleo-matcher = { workspace = true }
+pinyin = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }

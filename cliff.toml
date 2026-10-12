@@ -1,0 +1,70 @@
+# git-cliff ~ configuration file
+# https://git-cliff.org/docs/configuration
+#
+# CHANGELOG.md 由 Conventional Commits 生成（规范见 AGENTS.md「提交规范 / 发版流程」）。
+# `git-cliff -o CHANGELOG.md` 按 git 历史重写该文件；下面的模板沿用 git-cliff 默认模板，
+# 只改了两处：commit_parsers 决定哪些提交类型进 changelog，分组标题改成简体中文。
+
+[changelog]
+# 每个 release 渲染用的 Tera 模板之前的固定抬头，整份文件只渲染一次。
+# 放在这里（而不是手写在 CHANGELOG.md 里）是因为 `git-cliff -o CHANGELOG.md`
+# 是**整份重写**（实测 2.14.2 会覆盖原文件，不是追加），手写的说明会被冲掉。
+header = """
+# 更新日志
+
+> 本文件由 [git-cliff](https://git-cliff.org/) 依据 Conventional Commits 自动生成
+> （分组规则见 `cliff.toml`，发版流程见 `AGENTS.md`），**请勿手工编辑**。
+
+"""
+# 每个 release 渲染用的 Tera 模板
+# https://keats.github.io/tera/docs/#introduction
+body = """
+{% if version %}\
+    ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+    ## [Unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+    ### {{ group | striptags | trim | upper_first }}
+    {% for commit in commits %}
+        - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
+            {% if commit.breaking %}[**breaking**] {% endif %}\
+            {{ commit.message | upper_first }}\
+    {% endfor %}
+{% endfor %}
+"""
+# 去掉 body 首尾空白
+trim = true
+# 没有 release 时也渲染 body
+render_always = true
+
+[git]
+# 按 Conventional Commits 规范解析提交
+# https://www.conventionalcommits.org
+conventional_commits = true
+# 丢弃不符合规范的提交：不合规范的提交直接不出现在 changelog 里
+filter_unconventional = true
+# 标了 breaking（如 `feat!`）的提交即使不合规范也保留
+protect_breaking_commits = true
+# 每组 / 每个 release 内提交的排序
+sort_commits = "oldest"
+# 按拓扑序而非时间序排
+topo_order_commits = true
+
+# 哪些提交类型进 changelog。chore / ci / build / style 属于内部噪音，一律不进。
+# 标题前的 `<!-- N -->` 只是排序用的隐藏前缀，渲染时会被 striptags 掉。
+commit_parsers = [
+    { message = "^feat", group = "<!-- 0 -->新功能" },
+    { message = "^fix", group = "<!-- 1 -->缺陷修复" },
+    { message = "^perf", group = "<!-- 2 -->性能优化" },
+    { message = "^refactor", group = "<!-- 3 -->重构" },
+    { message = "^test", group = "<!-- 4 -->测试" },
+    # changelog 自身的维护提交不该被当成变更列出来
+    { message = "^docs?: (changelog|更新日志|update changelog)", skip = true },
+    { message = "^docs", group = "<!-- 5 -->文档" },
+    { message = "^style|^build|^ci|^chore|^revert", skip = true },
+    { body = ".*security", group = "<!-- 6 -->安全" },
+    { message = ".*", group = "<!-- 7 -->其他" },
+]
+# 不丢弃没被任何 parser 命中的提交（走 `.*` 落到「其他」）
+filter_commits = false

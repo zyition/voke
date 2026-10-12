@@ -1,0 +1,8 @@
+# Clippy 配置（仅放稳定、确定存在的键；阈值类键如 too_many_arguments 随版本改名，不在此写死）
+#
+# msrv：声明最低支持 Rust 版本（Minimum Supported Rust Version）。
+#   1.85 是 edition 2024 的硬下限，但实测代码已用到了 stable-since-1.87.0 的 API，
+#   故 clippy 的 `incompatible_msrv` 在 msrv=1.85 下会报 2 条新告警——说明 1.85 是
+#   “假的”下限。这里如实填 1.87（实际代码所需的最低版本），既保留 msrv 约束意图，
+#   又不凭空制造 clippy 告警。若将来发现用到更高版本 API，再上提。
+msrv = "1.87"

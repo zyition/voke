@@ -1,0 +1,12 @@
+# rustfmt 配置（仅使用 stable rustfmt 支持的选项，避免 CI 因 nightly-only 键而失败）
+#
+# edition：与 Cargo.toml 的各 crate edition 保持一致（2024）。
+#   明确写出可避免 rustfmt 按旧版排版规则处理 2024 专属语法。
+edition = "2024"
+
+# max_width：与现有代码风格完全一致——默认宽度本就是 100。
+#   实测对比（见审计）：改成 120 → 293 文件 / 4520 行 diff；
+#   改成 80 → 376 文件 / 4617 行；extras(120+fn_params_layout) → 480 文件 / 6869 行。
+#   保持 100 则全量 fmt 零 churn。压平 initial commit 后，本仓库长期由
+#   CI 强制 `cargo fmt --all --check`，任何偏离 100 宽度的提交都会被立刻拦下。
+max_width = 100

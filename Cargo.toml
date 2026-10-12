@@ -1,0 +1,94 @@
+[workspace]
+members = ["voke-core", "voke-sys", "voke-app"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "voke —— 键盘优先的 Windows 桌面启动器（单 exe 零运行时）"
+repository = "https://github.com/zyition/voke"
+readme = "README.md"
+
+[workspace.dependencies]
+voke-core = { path = "voke-core" }
+voke-sys = { path = "voke-sys" }
+
+# 逻辑层：纯 Rust，零 UI 依赖，Linux native 秒级测试
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+pinyin = "0.11"
+nucleo-matcher = "0.3.1"
+log = "0.4"
+thiserror = "2"
+
+# 图标编码：把 sys 层提取出的 RGBA 像素写成 PNG（app 层的 img() 只吃文件路径）。
+# 复用 gpui-pre 已经在用的同一个大版本，避免引入第二份图像栈；
+# 只开 png feature（图标只落 PNG）。
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# 只读 SQLite：Zed（db.sqlite）与 VSCode（state.vscdb）的最近工作区历史。
+#
+# 用 `bundled` 是因为 Windows 上没有系统级 libsqlite3，而且 bundled 编出来的
+# sqlite3.c 在 xwin/msvc 下能过（spike 实测：libsqlite3-sys 0.38.2 +
+# rusqlite 0.40.2，release 19.3s）。版本在 workspace 根统一，避免下游
+# 出现第二份 libsqlite3-sys（两份会导致符号冲突/链接失败）。
+rusqlite = { version = "0.40", features = ["bundled"] }
+
+# 系统层：Win32 / COM 封装
+#
+# .lnk 解析（C 块）新增的 feature：
+# - Win32_UI_Shell：IShellLinkW / ShellLink CLSID / CommandLineToArgvW
+# - Win32_Storage_FileSystem：IShellLinkW::GetPath 的 WIN32_FIND_DATAW 参数被
+#   windows-bindgen 用 #[cfg(feature = "Win32_Storage_FileSystem")] 门控（不开这个
+#   feature 时 GetPath 在 0.62.2 里根本不存在，vtable 槽位退化成 usize）
+# - Win32_System_Com（已有）：CoInitializeEx / CoUninitialize / CoCreateInstance / IPersistFile
+#
+# 窗口枚举（M2）新增的 feature：
+# - Win32_Graphics_Dwm：windows.rs 的 DwmGetWindowAttribute + DWMWA_CLOAKED
+#   （剔除 UWP 幽灵窗口）。0.62.2 里 `Dwm` 模块整体挂在
+#   `#[cfg(feature = "Win32_Graphics_Dwm")]` 下（Win32/Graphics/mod.rs:29），
+#   该 feature 自带 `Win32_Graphics` 传递依赖（Cargo.toml:437）。
+#
+# 保持唤醒（M5 的 awake）新增的 feature：
+# - Win32_System_Power：SetThreadExecutionState + ES_CONTINUOUS /
+#   ES_SYSTEM_REQUIRED / ES_DISPLAY_REQUIRED（0.62.2 里 Power 模块整体挂在
+#   `#[cfg(feature = "Win32_System_Power")]` 下，Cargo.toml:625）
+# - Win32_System_Time：GetTimeZoneInformation + TIME_ZONE_INFORMATION /
+#   TIME_ZONE_ID_INVALID（timestamp 插件要本地时区偏移，Cargo.toml:651）
+# - Win32_System_SystemServices：TIME_ZONE_ID_DAYLIGHT（**不在 Time 模块里**，
+#   0.62.2 把它放在 SystemServices/mod.rs:5088）
+# - Win32_System_SystemInformation：GetLocalTime / GetSystemTime
+#
+# 顺手补上的（原来靠下游 gpui-kit 的 feature 统一才可见）：
+# - Win32_UI_Input_KeyboardAndMouse：hotkey.rs 的 RegisterHotKey / VK_SPACE，
+#   windows.rs 的 SendInput / keybd_event / SetFocus / SetActiveWindow（后两个
+#   在 0.62.2 里确实定义在 KeyboardAndMouse 而非 WindowsAndMessaging）。
+#   单独 `cargo check -p voke-sys` 时会报 "could not find Input in UI" /
+#   "could not find KeyboardAndMouse in Input"。注意要开**叶子** feature，
+#   只开父级 Win32_UI_Input 不够。
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    # 单实例保护（single_instance.rs）的 CreateMutexW / CreateEventW 在 0.62.2
+    # 里整体挂在 `#[cfg(feature = "Win32_Security")]` 下（它们收 SECURITY_ATTRIBUTES
+    # 参数）。只开这一个叶子 feature，不牵连别处。
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Environment",
+    "Win32_System_Power",
+    "Win32_System_SystemServices",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Time",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+opt-level = 3
