@@ -132,11 +132,11 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 ;   * 与上面 RestartApplications=no 不矛盾：后者管的是"Setup 为替换文件而关掉的进程
 ;     是否被自动拉起"（这里保持关闭，不越俎代庖）；本段的启动是用户在完成页显式勾选的
 ;     一次性动作，两码事。
-;   * WorkingDir: 让 voke 从合理 cwd 启动（用户主目录 USERPROFILE，借 {code:GetUserHomeDir} 取得），
-;     而非安装程序目录。
+;   * WorkingDir: 让 voke 从合理 cwd 启动（用户主目录 = Inno Setup 内建环境变量常量
+;     {%USERPROFILE}，安装时解析为目标机的 C:\Users\<name>），而非安装程序目录。
 ;     否则 voke 继承安装程序 cwd，后续兜底直启 wt.exe 时会把该目录泄漏给
 ;     pwsh profile（mise/scoop shim 会报错）。自启动/菜单启动无此问题。
-Filename: "{app}\voke.exe"; Description: "{cm:LaunchProgram,Voke}"; WorkingDir: "{code:GetUserHomeDir}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\voke.exe"; Description: "{cm:LaunchProgram,Voke}"; WorkingDir: "{%USERPROFILE}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 ; 卸载的**第一步**执行（官方 [Run] & [UninstallRun] 帮助：「the [UninstallRun] section
@@ -151,11 +151,3 @@ Filename: "{app}\voke.exe"; Description: "{cm:LaunchProgram,Voke}"; WorkingDir: 
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM voke.exe /F"; RunOnceId: "KillVoke"
 
 ; 说明：卸载**保留** %APPDATA%\voke（用户配置/日志），故本脚本不写任何删除它的语句。
-
-[Code]
-; WorkingDir 用的脚本化常量：返回用户主目录（C:\Users\<name>），等价于 Windows 的
-; %USERPROFILE%。Inno Setup 没有内置 {userprofile} 常量，故用 {code:...} 从环境变量取。
-function GetUserHomeDir(Value: string): string;
-begin
-  Result := GetEnv('USERPROFILE');
-end;
