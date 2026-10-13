@@ -213,7 +213,9 @@ fn run_app_activation(request: AppActivationRequest) {
         &["-p".to_string(), request.profile.clone()],
         &request.fallback_path,
         false,
-        "",
+        // 兜底直启不继承 voke 自身 cwd（安装包「立即运行」时 cwd 可能是安装程序
+        // 目录），显式给一个与 voke 无关的安全目录，避免泄漏给 wt.exe → pwsh。
+        &voke_sys::env::safe_fallback_working_dir(&request.fallback_path),
     );
 }
 
