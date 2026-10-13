@@ -109,6 +109,33 @@ pub fn expand_env_path(raw: &str) -> String {
     expand_tilde_with(&expanded, home.as_deref())
 }
 
+/// 子进程兜底启动工作目录（不依赖调用方 voke 自身 cwd）。
+///
+/// **背景**：安装包「立即运行」启动的 voke 可能继承安装程序目录作为 cwd；
+/// 此时若走解包版 WT 兜底直启（`dispatcher::run_app_activation`），会把该
+/// cwd 泄漏给 `wt.exe` → 其拉起的 pwsh（mise/scoop shim 报错）。自启动 / 菜单
+/// 启动无此问题（它们的 cwd 本就是用户目录）。故兜底直启必须显式指定一个
+/// **与 voke 自身 cwd 无关**的安全目录，而不是把空串（= 继承 voke cwd）传下去。
+///
+/// 取值优先级：
+/// 1. `%USERPROFILE%`（经 [`expand_env_path`] 展开后须是真实目录）；
+/// 2. 否则回退到 `exe` 所在目录（能从路径解析且确为目录时）；
+/// 3. 都拿不到返回空串——交给 [`prepare_working_dir`] 判为"未声明"，
+///    子进程继承默认 cwd（已无法再更安全，属极端兜底）。
+pub fn safe_fallback_working_dir(exe: &str) -> String {
+    let candidate = expand_env_path("%USERPROFILE%");
+    if Path::new(&candidate).is_dir() {
+        return candidate;
+    }
+    if let Some(parent) = Path::new(exe).parent() {
+        let dir = parent.to_string_lossy().into_owned();
+        if Path::new(&dir).is_dir() {
+            return dir;
+        }
+    }
+    String::new()
+}
+
 /// 当前用户主目录（`~` 展开用）。
 fn home_dir() -> Option<String> {
     #[cfg(windows)]

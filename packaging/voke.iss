@@ -132,7 +132,10 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 ;   * 与上面 RestartApplications=no 不矛盾：后者管的是"Setup 为替换文件而关掉的进程
 ;     是否被自动拉起"（这里保持关闭，不越俎代庖）；本段的启动是用户在完成页显式勾选的
 ;     一次性动作，两码事。
-Filename: "{app}\voke.exe"; Description: "{cm:LaunchProgram,Voke}"; Flags: nowait postinstall skipifsilent
+;   * WorkingDir: 让 voke 从合理 cwd 启动（{userprofile}），而非安装程序目录。
+;     否则 voke 继承安装程序 cwd，后续兜底直启 wt.exe 时会把该目录泄漏给
+;     pwsh profile（mise/scoop shim 会报错）。自启动/菜单启动无此问题。
+Filename: "{app}\voke.exe"; Description: "{cm:LaunchProgram,Voke}"; WorkingDir: "{userprofile}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 ; 卸载的**第一步**执行（官方 [Run] & [UninstallRun] 帮助：「the [UninstallRun] section
