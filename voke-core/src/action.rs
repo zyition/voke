@@ -20,8 +20,27 @@ pub enum Action {
         path: String,
         /// 命令行参数。
         args: Vec<String>,
+        /// 子进程工作目录（`.lnk` 的"起始位置"）。**空串 = 不设置**（子进程
+        /// 继承启动器的默认 cwd）。
+        ///
+        /// 这里是**解析期已展开但未校验**的原始值（core 是纯数据层，不做
+        /// 文件系统判定）：`%VAR%` / `~` 应当已在 provider 数据源展开；
+        /// "展开后存不存在"由 app 层 dispatcher 在启动那一刻校验
+        /// （不存在就不设 cwd，绝不把字面量/死路径传给 `CreateProcessW`）。
+        working_dir: String,
         /// 以管理员权限启动（对应 Ctrl+Shift+Enter，§5 的 runas verb）。
         elevated: bool,
+        /// 该条目是否来自开始菜单的 `.lnk`（快捷方式**本体路径**，非 lnk 条目
+        /// 为空串）。
+        ///
+        /// 主流启动器（PowerToys Run / Flow）把 `.lnk` 本体交 shell 执行，借用
+        /// shell 链接处理器的目标解析 / 参数 / 起始位置 / 环境变量展开——与资源
+        /// 管理器双击完全同义。voke 早期走"解析期展开 target+args → CreateProcessW
+        /// 直启"的快路径（`voke-sys/src/env.rs` 的展开语义就是为它补的），本字段
+        /// 让 dispatcher 能改走 shell 路线：非空时 `lpFile` 用这里的 `.lnk`，
+        /// **忽略** `path`/`args`/`working_dir`（lnk 里存着什么，shell 自己知道）。
+        /// `path` 仍保留解析后的目标，供副标题与图标使用。
+        lnk_path: String,
         /// 启动时**隐藏控制台窗口**（Windows 的 `CREATE_NO_WINDOW`）。
         ///
         /// 默认 `false`：绝大多数启动（应用、文档、终端 profile……）本就该
@@ -33,6 +52,32 @@ pub enum Action {
         /// [`crate::workspace`]）。这是**逐动作**的标记，不是全局开关——
         /// 全局加会误伤 apps 插件启动命令提示符/PowerShell 的窗口。
         no_console: bool,
+    },
+
+    /// 启动 Windows Terminal 的某个 profile。
+    ///
+    /// **为什么不复用 [`Action::Launch`] 直启 wt.exe**：对齐 PowerToys CmdPal 的
+    /// Windows Terminal 扩展（microsoft/PowerToys@`b76d14e3` 的
+    /// `Microsoft.CmdPal.Ext.WindowsTerminal`，`Commands/LaunchProfileCommand.cs`）——
+    /// 它用 `IApplicationActivationManager::ActivateApplication(aumid, args, …)`
+    /// 激活 WT 包，而不是 `CreateProcess` 直启 wt.exe 的 App Execution Alias。
+    /// 真机实测（2026-10-13 `voke.log`）：经 voke 直启别名时，WT 内 pwsh 的
+    /// `$PROFILE` 调 scoop shim 起 mise.exe 失败；同一 profile 经 shell 激活
+    /// （`explorer.exe shell:AppsFolder\…`）则正常。App Activation 是 WT 的
+    /// 官方启动路径（store 版 WT 的 exe 在 `WindowsApps` 缓存目录，直启本就该
+    /// 绕开），也顺带把 WT 的父进程从启动器换成激活服务。
+    LaunchTerminalProfile {
+        /// WT 包的 AUMID（App Activation 的 `appUserModelId`），例如
+        /// `Microsoft.WindowsTerminal_8wekyb3d8bbwe!App`。
+        aumid: String,
+        /// profile 标识：**优先 guid**（`{574e775e-4f2a-5b96-ac1e-a2962a402336}`），
+        /// guid 缺失的老条目退化为显示名。显示名会本地化、会重复、会由 `source`
+        /// 动态生成（实测 pwsh profile 就是 `Windows.Terminal.PowershellCore`
+        /// 生成的），guid 才是 WT 的稳定标识；`--profile` 两者都收。
+        profile: String,
+        /// App Activation 失败时的兜底直启路径（wt.exe 别名）。WT 不是以 MSIX
+        /// 包安装（解包版）时激活会失败，此时退回 `wt.exe -p <profile>`。
+        fallback_path: String,
     },
 
     /// 激活一个已经打开的窗口。
@@ -105,8 +150,10 @@ impl Action {
         Action::Launch {
             path: path.into(),
             args: Vec::new(),
+            working_dir: String::new(),
             elevated: false,
             no_console: false,
+            lnk_path: String::new(),
         }
     }
 
@@ -115,8 +162,10 @@ impl Action {
         Action::Launch {
             path: path.into(),
             args,
+            working_dir: String::new(),
             elevated: false,
             no_console: false,
+            lnk_path: String::new(),
         }
     }
 
@@ -130,8 +179,66 @@ impl Action {
         Action::Launch {
             path: path.into(),
             args,
+            working_dir: String::new(),
             elevated: false,
             no_console: true,
+            lnk_path: String::new(),
+        }
+    }
+
+    /// 启动一个来自 `.lnk` 的条目：**把快捷方式本体交 shell 执行**（双击同款）。
+    ///
+    /// `path`/`args`/`working_dir` 是 sys 层解析期从 lnk 里展开出来的值（副标题、
+    /// 图标、日志用）；dispatcher 见到 [`lnk_path`](Action::Launch::lnk_path)
+    /// 非空时以它作为 `ShellExecuteExW` 的 `lpFile`，忽略其余字段——lnk 里存的
+    /// 目标/参数/起始位置由 shell 链接处理器负责，避免我们复刻的展开语义与
+    /// shell 不一致。
+    pub fn launch_lnk(
+        path: impl Into<String>,
+        args: Vec<String>,
+        working_dir: impl Into<String>,
+        lnk_path: impl Into<String>,
+    ) -> Self {
+        Action::Launch {
+            path: path.into(),
+            args,
+            working_dir: working_dir.into(),
+            elevated: false,
+            no_console: false,
+            lnk_path: lnk_path.into(),
+        }
+    }
+
+    /// 该动作执行后，搜索面板是否应**复位**（清空输入框、退出插件/子模式、
+    /// 结果列表回到顶层空查询）。
+    ///
+    /// 规则来自用户实测 UX：**按"用户意图是不是离开面板"分类**——
+    /// - **离开面板去做别的事**（启动应用 / 切换窗口 / 打开 URL / 在资源管理器
+    ///   里显示 / 保持唤醒）→ `true`：launcher 一次只干一件事，干完就收；
+    ///   下次唤回不该还留着上次的查询、插件页和旧结果。
+    /// - **产出可复制内容**（[`Action::Copy`]：随机值 / UUID / 时间戳 /
+    ///   base64 编解码 / 计算器结果）→ `false`：面板隐藏再唤回时，输入与
+    ///   结果原样保留，用户能看到并再次复制。
+    /// - **信号 / 展示类**（[`Action::Refresh`] 重掷、[`Action::None`] 纯展示、
+    ///   [`Action::ActivatePlugin`] 由视图状态机消费）→ `false`：语义上就
+    ///   不该动输入。
+    ///
+    /// 未来新增动作变体时**默认保守归 `false`**（不重置）：宁可多留一会儿
+    /// 输入，也不要把用户刚打的字弄丢——新动作想要"复位"语义时应显式加进来。
+    /// 本 match 是穷尽的：新增变体不改这里会直接编译报错，逼你显式表态。
+    pub fn should_reset_input(&self) -> bool {
+        match self {
+            Action::Launch { .. }
+            | Action::LaunchTerminalProfile { .. }
+            | Action::ActivateWindow { .. }
+            | Action::OpenUrl { .. }
+            | Action::Reveal { .. }
+            | Action::SetAwake { .. }
+            | Action::CancelAwake => true,
+            Action::Copy { .. }
+            | Action::Refresh
+            | Action::None
+            | Action::ActivatePlugin { .. } => false,
         }
     }
 }
@@ -147,8 +254,10 @@ mod tests {
             Action::Launch {
                 path: "C:/a.exe".to_string(),
                 args: vec![],
+                working_dir: String::new(),
                 elevated: false,
                 no_console: false,
+                lnk_path: String::new(),
             }
         );
     }
@@ -181,8 +290,31 @@ mod tests {
             Action::Launch {
                 path: "cmd.exe".to_string(),
                 args: vec!["/c".to_string()],
+                working_dir: String::new(),
                 elevated: false,
                 no_console: true,
+                lnk_path: String::new(),
+            }
+        );
+    }
+
+    /// `.lnk` 条目：`launch_lnk` 只多带一个 lnk 本体路径，其余字段语义不变。
+    #[test]
+    fn launch_lnk_carries_the_shortcut_itself() {
+        assert_eq!(
+            Action::launch_lnk(
+                r"C:\exe\alacritty.exe",
+                vec!["--working-directory".into(), r"C:\Users\u".into()],
+                r"C:\Users\u",
+                r"C:\Users\u\Desktop\Alacritty.lnk",
+            ),
+            Action::Launch {
+                path: r"C:\exe\alacritty.exe".to_string(),
+                args: vec!["--working-directory".into(), r"C:\Users\u".into()],
+                working_dir: r"C:\Users\u".to_string(),
+                elevated: false,
+                no_console: false,
+                lnk_path: r"C:\Users\u\Desktop\Alacritty.lnk".to_string(),
             }
         );
     }
@@ -192,5 +324,154 @@ mod tests {
         let action = Action::launch_with("wt.exe".to_string(), vec!["-p".into(), "Ubuntu".into()]);
         let json = serde_json::to_string(&action).unwrap();
         assert!(json.contains("wt.exe"));
+    }
+
+    /// **输入框重置规则**（用户实测 UX）：按"用户意图是不是离开面板"分类。
+    /// 覆盖 `Action` 的每个变体，规则漂移立刻在这里红。
+    #[test]
+    fn should_reset_input_classifies_all_variants() {
+        // 离开面板去做别的事 → 复位（清空输入、退出插件、回到顶层列表）。
+        for action in [
+            Action::launch(r"C:\Users\test\a.exe"),
+            Action::launch_with("wt.exe", vec!["-p".into(), "Ubuntu".into()]),
+            Action::launch_with_hidden("cmd.exe", vec!["/c".into(), "code.cmd".into()]),
+            Action::launch_lnk(r"C:\a\alacritty.exe", vec![], "", r"C:\a\Alacritty.lnk"),
+            Action::LaunchTerminalProfile {
+                aumid: "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App".into(),
+                profile: "{574e775e-4f2a-5b96-ac1e-a2962a402336}".into(),
+                fallback_path: r"C:\a\wt.exe".into(),
+            },
+            Action::ActivateWindow { hwnd: 1234 },
+            Action::OpenUrl {
+                url: "https://example.com".into(),
+            },
+            Action::Reveal {
+                path: r"C:\Users\test".into(),
+            },
+            Action::SetAwake {
+                minutes: Some(30),
+                keep_screen: false,
+            },
+            Action::CancelAwake,
+        ] {
+            assert!(
+                action.should_reset_input(),
+                "{action:?} 是「离开面板」类，应重置输入框"
+            );
+        }
+        // 产出可复制内容 / 信号 / 展示 → 保留输入与结果。
+        for action in [
+            Action::Copy {
+                text: "a1b2c3".into(),
+            },
+            Action::Refresh,
+            Action::None,
+            Action::ActivatePlugin {
+                plugin_id: "base64".into(),
+                prefix: "#b ".into(),
+            },
+        ] {
+            assert!(
+                !action.should_reset_input(),
+                "{action:?} 是「保留」类，不该重置输入框"
+            );
+        }
+    }
+
+    /// 把规则落到**每个内置插件选中后真实产出的动作**上（含子模式）：
+    /// 这条用例是"用户视角"的验收表——哪个插件 Enter 之后输入框该空、
+    /// 哪个该留着，全在这里列一遍。
+    #[test]
+    fn should_reset_input_covers_every_builtin_plugin() {
+        // (插件 / 场景说明, 该场景 Enter 后 core 产出的动作, 期望是否重置)
+        let cases: &[(&str, Action, bool)] = &[
+            (
+                "apps：打开应用（Launch）",
+                Action::launch(r"C:\Program Files\VideoLAN\VLC\vlc.exe"),
+                true,
+            ),
+            (
+                "apps：MSIX 应用（Launch msix://）",
+                Action::launch("msix://Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"),
+                true,
+            ),
+            (
+                "windows：切换窗口（ActivateWindow）",
+                Action::ActivateWindow { hwnd: 6557 },
+                true,
+            ),
+            (
+                "terminal：WT profile（App Activation + --profile <guid>）",
+                Action::LaunchTerminalProfile {
+                    aumid: "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App".into(),
+                    profile: "{574e775e-4f2a-5b96-ac1e-a2962a402336}".into(),
+                    fallback_path: r"C:\a\wt.exe".into(),
+                },
+                true,
+            ),
+            (
+                "workspaces：打开工作区（Launch 隐藏控制台）",
+                Action::launch_with_hidden(
+                    "cmd.exe",
+                    vec!["/c".into(), "code.cmd".into(), r"C:\repo".into()],
+                ),
+                true,
+            ),
+            (
+                "random：复制随机串 / 整数 / hex（Copy）",
+                Action::Copy {
+                    text: "Kx9$mQ2v".into(),
+                },
+                false,
+            ),
+            ("random：重新生成（Refresh）", Action::Refresh, false),
+            (
+                "uuid：复制 v4（Copy）",
+                Action::Copy {
+                    text: "3f2504e0-4f89-11d3-9a0c-0305e82c3301".into(),
+                },
+                false,
+            ),
+            (
+                "timestamp：复制时间戳 / 日期（Copy）",
+                Action::Copy {
+                    text: "1700000000".into(),
+                },
+                false,
+            ),
+            (
+                "base64：复制加密 / 解密结果（Copy）",
+                Action::Copy {
+                    text: "aGVsbG8=".into(),
+                },
+                false,
+            ),
+            (
+                "calculator：复制计算结果（Copy）",
+                Action::Copy { text: "42".into() },
+                false,
+            ),
+            (
+                "awake：设置保持唤醒（SetAwake）",
+                Action::SetAwake {
+                    minutes: Some(30),
+                    keep_screen: true,
+                },
+                true,
+            ),
+            (
+                "awake：取消保持唤醒（CancelAwake）",
+                Action::CancelAwake,
+                true,
+            ),
+            ("awake：状态展示行（Hint，不可选）", Action::None, false),
+        ];
+        for (label, action, expected) in cases {
+            assert_eq!(
+                action.should_reset_input(),
+                *expected,
+                "规则漂移：{label}（{action:?}）"
+            );
+        }
     }
 }

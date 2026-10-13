@@ -19,6 +19,24 @@
 //! | [`Interact::EnterSubquery`] | 进入该子模式 | 进入该子模式 |
 //! | [`Interact::Hint`] | 不可选（不在列表里） | 不可点（不在列表里） |
 //!
+//! **执行后的输入框复位**（用户实测 UX，判据是 core 的纯函数
+//! `Action::should_reset_input`，见 `confirm_index`）：
+//!
+//! - **离开面板去做别的事**（启动应用 / 切换窗口 / 打开 URL / 保持唤醒）→
+//!   清空输入、退出插件、结果列表复位（`reset_after_action`）；
+//! - **产出可复制内容**（Copy：随机值 / UUID / 时间戳 / base64 编解码 /
+//!   计算器结果）→ 输入与结果**原样保留**，供用户再看一眼、再次复制；
+//! - `Refresh`（random 的「重新生成」）→ 不改输入，重跑一次当前查询。
+//!
+//! **面板重新显示 ≠ 用户修改了输入**（用户实测 UX）：热键/托盘重新唤起时
+//! 窗口激活观察者聚焦输入框，并**仅当当前插件不会因查询重掷值时才刷新**
+//! （判据是 core 纯函数 `QueryEngine::plugin_regenerates_on_query`）——`#w`
+//! 等窗口列表没有后台热更新、只是每次查询实时枚举，靠这次唤回刷新保证隐藏
+//! 期间新开/退出的窗口在用户敲第一个键前出现；random / uuid / timestamp
+//! 唤回不刷新，上次的值原样留在结果里，直接可复制。应用列表另走「重扫 →
+//! 签名变化才热更新」，热更新的重跑也被重掷护栏挡住；awake 倒计时由常驻
+//! ticker 自己走。用户改输入仍照常重算（`on_query_changed`）。
+//!
 //! **多级状态**（`active_plugin` + `sub_mode` + `picker`）：
 //!
 //! ```text
@@ -194,7 +212,7 @@ static WINDOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// | apps | — | ✓ | 开始菜单应用 |
 /// | windows | — | ✓ | 已打开窗口 |
 /// | awake | — | ✓ | 保持唤醒（输入 awake 直接命中） |
-/// | terminal | — | ✓ | WT profiles（`wt -p <name>` 启动） |
+/// | terminal | — | ✓ | WT profiles（App Activation + `--profile <guid>` 启动） |
 /// | workspaces | — | ✓ | 编辑器最近工作区（Zed / VSCode 历史，用记录它的编辑器打开） |
 /// | calculator | `=` | ✗ | 内联计算器 |
 /// | timestamp | `#` | ✗ | 时间戳换算 |
@@ -228,10 +246,12 @@ pub fn set_providers(
     )));
     // WT profiles。数据源每次查询现读 settings.json（stable + Preview 合并，
     // 解析/去重是 voke-core 的纯逻辑）；与窗口枚举同款，跑在 background executor 上。
+    // 启动走 App Activation + `--profile "<guid>"`（对齐 PowerToys CmdPal 的
+    // Windows Terminal 扩展），不用 CreateProcess 直启 wt.exe 别名。
     // 非 Windows 平台注入空数据源（编译用，无实际功能）。
     #[cfg(windows)]
     let terminal_fetch: voke_core::ProfileFetcher = std::sync::Arc::new(|| {
-        voke_core::profiles_from_settings(&voke_sys::read_settings_contents())
+        voke_core::profiles_from_settings(&voke_sys::read_settings_sources())
     });
     #[cfg(not(windows))]
     let terminal_fetch: voke_core::ProfileFetcher = std::sync::Arc::new(Vec::new);
@@ -494,16 +514,24 @@ impl SearchView {
             if window.is_window_active() {
                 let focus = this.query_input_focus_handle(cx);
                 window.focus(&focus, cx);
-                // 面板**每次重新显示**都重跑当前查询（窗口实时性修复）。
-                //
-                // 窗口 provider 本身每次查询都现枚举 `EnumWindows`（无缓存），
-                // 但面板只在**输入变化**时才查——面板隐藏期间退出/新开的窗口不会
-                // 自己更新，重开面板看到的还是上次查询的快照（用户看到的 stale 根因）。
-                // 这里在"窗口重新激活"这一刻强制重查即可，无需 `SetWinEventHook`。
-                this.refresh(cx);
-                // 同时触发一次应用列表扫描（异步、不阻塞本条回调）：这条路径覆盖
-                // **点击任务栏图标重新激活**的唤起（热键/托盘那条走 `main::toggle_panel`）。
-                // 防抖在扫描线程内做，这里重复投递是安全的。
+                // 唤回时的刷新策略（2026-10-12 拍板）：**仅当当前插件不会因查询
+                // 重掷值时才刷新**。窗口列表（`#w` 等）没有后台热更新、只是每次
+                // 查询实时枚举，隐藏期间新开/退出的窗口要靠这次刷新才在用户敲
+                // 第一个键前出现；而 random / uuid / timestamp 每次查询都产出
+                // 新值，唤回重跑会把用户刚复制的值换掉——直接跳过。判据与
+                // `refresh()` 的护栏同源：core 纯函数
+                // `QueryEngine::plugin_regenerates_on_query`。
+                let safe_to_refresh = this.active_plugin.as_deref().is_none_or(|id| {
+                    !with_engine(|engine| engine.plugin_regenerates_on_query(id)).unwrap_or(false)
+                });
+                if safe_to_refresh {
+                    this.refresh(cx);
+                }
+                // 应用列表的实时性与刷新策略无关：唤回照样触发后台重扫，集合
+                // 真变了才走热更新（热更新里的重跑被 `refresh()` 的重掷护栏
+                // 挡住重掷类插件）；awake 倒计时由常驻每秒 ticker 自己走，与
+                // 显隐无关。用户改输入仍照常重算（`on_query_changed`），
+                // 「重新生成」按钮仍走 `Action::Refresh` 显式重掷。
                 crate::request_apps_scan();
             }
         });
@@ -551,13 +579,28 @@ impl SearchView {
 
     /// 强制重跑**当前输入**的查询（无视去重）。
     ///
-    /// 两个触发点：
-    /// - 面板每次重新显示（窗口激活观察者）——让"隐藏期间退出/新开的窗口"同步；
-    /// - 应用列表后台重扫到变化时（`main` 的热更新消费循环）——让新装应用立刻出现。
+    /// 触发点：
+    /// 1. 应用列表后台重扫到变化时（`main` 的热更新消费循环）——让新装/卸载的
+    ///    应用立刻反映到列表里；
+    /// 2. 面板唤回时（窗口激活观察者；调用前已自行判过「当前插件不会因查询
+    ///    重掷值」，这里面的护栏是第二道防线）。
+    ///
+    /// **重掷类插件不重跑**（护栏，判据是 core 的纯函数
+    /// [`QueryEngine::plugin_regenerates_on_query`]）：random / uuid /
+    /// timestamp 的每次查询都会产出新值，热更新时重跑只会把用户刚复制、
+    /// 正要复制的值悄悄换掉。跳过没有损失——热更新的目的是让新应用可见，
+    /// 而重跑一个 random 查询本来也变不出任何应用；等用户退回全局搜索时
+    /// （`deactivate_plugin`）自然就看到了。
     ///
     /// 走的是常规查询路径（`spawn_query` 在 background executor 上跑），
     /// 不会阻塞 UI 线程。
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        if let Some(active) = self.active_plugin.as_deref() {
+            if with_engine(|engine| engine.plugin_regenerates_on_query(active)).unwrap_or(false) {
+                log::debug!("跳过刷新：当前插件 {active} 的查询会重掷值（应用热更新不打扰）");
+                return;
+            }
+        }
         let query = self.query_input.read(cx).value().to_string();
         self.spawn_query(query, cx, true);
     }
@@ -794,6 +837,15 @@ impl SearchView {
     /// - `Execute` → 走 dispatcher（副作用集中在那里）
     /// - `EnterSubquery(mode)` → 进入子模式（纯 view 状态 + 输入框，需要 Window）
     /// - `Hint` → 不可选，理论上到不了这里；只记一条日志
+    ///
+    /// **执行后的输入框复位规则**（用户实测 UX，判据是
+    /// [`Action::should_reset_input`](voke_core::Action::should_reset_input)）：
+    /// - 「离开面板去做别的事」（启动 / 切窗 / 开 URL / 保持唤醒）→ 复位：
+    ///   清空输入、退出插件、结果列表回顶层（`reset_after_action`）。
+    /// - 「产出可复制内容」（Copy：随机值 / UUID / 时间戳 / base64 / 计算器）
+    ///   → **什么都不做**：输入与结果原样保留（面板已被 dispatcher 隐藏，
+    ///   下次唤回即见，可再次复制）。
+    /// - `Refresh`（random 的「重新生成」）→ 不改输入，用同一查询重跑一次。
     fn confirm_index(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ranked) = self.rows.get(index) else {
             return;
@@ -847,28 +899,44 @@ impl SearchView {
         }
 
         // 副作用能力由 gpui 的 `App` 提供（`Context<T>` Deref 到 `App`）。
+        //
+        // **纪律：本调用运行在 gpui 事件分发的 App 借作用域内**（按键/点击经
+        // `AsyncApp::update_window` 持有 `AppCell` 可变借用）。`dispatcher::execute`
+        // 内部对会泵消息的 Win32 API（`ShellExecuteExW` / App Activation）一律两阶段
+        // 处理：借作用域内只做决策 + 登记请求，真正执行推迟到前台执行器（借作用域
+        // 之外）。**不得在本作用域内新增任何同步泵消息的 Win32 调用**——嵌套消息泵
+        // 会重入 gpui wndproc，硬 `borrow_mut` panic 出在 extern "C" 里不可 unwind，
+        // 直接 abort 整进程（2026-10-13 用户实测 `.lnk` 启动崩溃，详见
+        // `dispatcher` 模块文档「两阶段纪律」）。
         let hwnd = self.hwnd;
         let had_side_effect = dispatcher::execute(&action, hwnd, &**cx);
         if !had_side_effect {
             return;
         }
 
-        // awake 动作：窗口已由 dispatcher 在状态落地后隐藏（见 dispatcher.rs 的
-        // `SetAwake` / `CancelAwake` 分支）。这里把界面复位成干净的顶层状态，
-        // 保证下次唤起不是残留的插件页——一次只干一件事，干完就收。
-        if matches!(
-            action,
-            voke_core::Action::SetAwake { .. } | voke_core::Action::CancelAwake
-        ) {
+        // 「离开面板去做别的事」的动作（启动 / 切窗 / 开 URL / Reveal / 保持
+        // 唤醒）：窗口已由 dispatcher 先隐藏，这里把界面复位成干净的顶层状态
+        // ——清空输入、退出插件、结果列表复位，保证下次唤回不是残留的插件页
+        // 或上次的查询。一次只干一件事，干完就收。
+        //
+        // 判据集中在 core 的 `Action::should_reset_input`（纯函数 + 单测），
+        // 这里不维护第二份动作清单。
+        if action.should_reset_input() {
             self.reset_after_action(window, cx);
             return;
         }
 
-        // 其余有副作用的动作（Copy / Launch / ActivateWindow / Refresh…）照旧：
-        // 留在原地并重跑当前查询。`Refresh`（random 的「重新生成」）绝不能隐藏，
-        // 走的就是这条。
-        let query = self.query_text(cx);
-        self.spawn_query(query, cx, true);
+        // 「产出可复制内容」的 Copy：**什么都不做**——输入与结果原样保留。
+        // 注意不能顺手重跑查询：random 的每次查询都会重新生成，重跑会把刚
+        // 复制掉的值换掉，用户就没法"再看一眼 / 再复制一次"了。想要新值是
+        // random 二级里首条显式的「重新生成」（Action::Refresh），它仍走
+        // 下面的重跑分支。
+        //
+        // `Refresh`：不改输入、不动路由，用同一份查询再跑一次（random 重掷）。
+        if matches!(action, voke_core::Action::Refresh) {
+            let query = self.query_text(cx);
+            self.spawn_query(query, cx, true);
+        }
     }
 
     /// 按 provider id **程序化**激活插件（托盘「保持唤醒」条目直达）。
@@ -1050,12 +1118,13 @@ impl SearchView {
         window.focus(&handle, cx);
     }
 
-    /// awake 动作执行完后的界面复位：退出插件 + 清空输入 + 回到顶层列表。
+    /// 「离开面板」类动作执行完后的界面复位：退出插件 + 清空输入 + 回到顶层列表。
     ///
-    /// 调用时机在窗口**已被 `dispatcher` 隐藏之后**（见 `confirm_index` 的
-    /// `SetAwake` / `CancelAwake` 分支）。末尾那次空查询是有意的：它把顶层结果
-    /// 预置好，下次唤起的第一帧就是干净的全局列表，不会闪一下残留的插件结果；
-    /// 同时也把 `active_plugin` 从视图中清掉（倒计时刷新等插件态就此停下）。
+    /// 调用时机在窗口**已被 `dispatcher` 隐藏之后**（见 `confirm_index` 里
+    /// `Action::should_reset_input` 为真的分支——启动 / 切窗 / 开 URL /
+    /// 保持唤醒等）。末尾那次空查询是有意的：它把顶层结果预置好，下次唤起的
+    /// 第一帧就是干净的全局列表，不会闪一下残留的插件结果；同时也把
+    /// `active_plugin` 从视图中清掉（倒计时刷新等插件态就此停下）。
     fn reset_after_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.query_input.read(cx).value().is_empty() && self.active_plugin.is_none() {
             return;
@@ -1733,7 +1802,9 @@ pub fn to_core_entries(entries: Vec<voke_sys::AppEntry>) -> Vec<AppEntry> {
             path: e.path,
             icon: e.icon,
             args: e.args,
+            working_dir: e.working_dir,
             app_id: e.app_id,
+            lnk_path: e.lnk_path,
         })
         .collect()
 }
@@ -2359,7 +2430,7 @@ pub fn routing_selftest() -> usize {
                 m.inner.interact != Interact::Execute
                     || !matches!(
                         &m.inner.action,
-                        Action::Launch { path, args, elevated, no_console }
+                        Action::Launch { path, args, elevated, no_console, .. }
                             if !*elevated
                                 && !*no_console
                                 && path.ends_with("wt.exe")

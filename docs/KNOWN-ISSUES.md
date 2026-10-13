@@ -7,11 +7,15 @@
 
 ## 1. 上游平台层拖放目标泄漏（设置窗）
 
-- **现象**：关闭设置窗会滞留整套 GPU 资源（每关一次约 +50MB+）。
-- **原因**：上游 `gpui-pre-windows` 的 `register_drag_drop` 把窗口内部引用存进 OLE
-  `IDropTarget`，而 `RevokeDragDrop` 放在窗口 `Drop` 的延迟异步任务里，执行时 HWND 已销毁
-  必然失败 → 资源不被释放。
-- **规避办法**：本仓把设置窗改为「关闭 = 隐藏、复用」，不真正销毁窗口，绕开泄漏。
+- **现象**：以「放行 WM_CLOSE」的方式关闭设置窗会滞留整套 GPU 资源（每关一次约 +26.5MB）。
+- **原因**：上游 `gpui-pre-windows` 的 `register_drag_drop`（window.rs:571/1511）把窗口内部
+  引用存进 OLE `IDropTarget`，而 `RevokeDragDrop` 放在窗口 `Drop` 的延迟异步任务里
+  （window.rs:610-631），执行时 HWND 已销毁必然失败 → 资源不被释放。
+- **规避办法**：本仓把设置窗改为「**关闭 = 程序化销毁**」（Zed 主窗同款姿势）：
+  `on_window_should_close` 里返回 `false` 吞掉 WM_CLOSE，改用
+  `window.remove_window()` 让 gpui 自己走「trail 同步摘除 → Drop 任务在 HWND
+  存活期内 `RevokeDragDrop` + `DestroyWindow`」，26.5MB 全回收（详见
+  [`HISTORY.md`](HISTORY.md) 第 6 节与 `settings.rs` 里注册处的长注释）。
 - **是否计划修**：**否（不修上游）**。用户明确拒绝 vendor / patch 上游。已知会向
   上游提交 issue 文稿（最小复现 + 根因 + 建议修法：把 `RevokeDragDrop` 提前到 `DestroyWindow`
   前同步执行）。

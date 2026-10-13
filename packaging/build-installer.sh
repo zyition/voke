@@ -8,6 +8,13 @@
 #   3) 调 Windows 侧 ISCC.exe 编译 packaging/voke.iss（产物落 packaging/dist/）
 #   4) 打印产物路径与 sha256
 #
+# 可选环境变量：
+#   VOKE_LOG_MAX_LINES  日志行数上限（默认 9999，语义见 voke-sys/src/logcap.rs：
+#                       跨启动追加 + 超限从头部删一批最旧的行）。环境变量由 cargo
+#                       子进程自动继承，这里只做回显；如
+#                       VOKE_LOG_MAX_LINES=20000 bash packaging/build-installer.sh
+#   ISCC                ISCC.exe 路径（找不到时指定）
+#
 # 幂等：可重复执行（cargo 走增量、ISCC 覆盖旧产物、dist 目录按需创建）。
 # 前置：Windows 侧已装 Inno Setup 7（winget install --id JRSoftware.InnoSetup.7 -e）。
 #       找不到 ISCC 时可用环境变量指定：ISCC=/path/to/ISCC.exe ./build-installer.sh
@@ -42,6 +49,13 @@ export PATH
 # --- 2) 构建 exe ----------------------------------------------------------
 echo "== [1/3] 构建 voke.exe（cargo xwin release, $TARGET）=="
 echo "   clang-cl = $(command -v clang-cl || echo '(未找到!)')"
+# 日志行数上限透传：VOKE_LOG_MAX_LINES 由 cargo 子进程自动继承给 build.rs，
+# 未设时用默认 9999（行为不变）。这里只做回显，避免打包参数不可见。
+if [ -n "${VOKE_LOG_MAX_LINES:-}" ]; then
+  echo "   VOKE_LOG_MAX_LINES = $VOKE_LOG_MAX_LINES（日志行数上限，来自环境变量）"
+else
+  echo "   VOKE_LOG_MAX_LINES 未设，用默认 9999（日志行数上限）"
+fi
 cargo xwin build --release --target "$TARGET" -p voke-app
 
 if [ ! -f "$EXE" ]; then

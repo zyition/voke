@@ -34,11 +34,41 @@
 //! `cargo check --target x86_64-pc-windows-gnu` 之外的场景（Linux 上跑
 //! `voke-core` 测试等）不走这条路径：CARGO_CFG_TARGET_OS 不是 windows 就直接返回。
 
+//! ## 日志行数上限（VOKE_LOG_MAX_LINES）
+//!
+//! 打包时可用环境变量控制日志最多记多少行（语义见 `voke-sys/src/logcap.rs`：
+//! 跨启动追加 + 超限从头部删一批最旧的行）。例如
+//! `VOKE_LOG_MAX_LINES=20000 bash packaging/build-installer.sh`。
+//! 未设 / 非法 / 为 0 时默认 **9999**（Info 级一天通常几百行，9999 行约
+//! 0.6–1 MB，留足一次 debug 排查量又不至于 MB 级）。值与
+//! `voke-sys::logcap::DEFAULT_MAX_LINES`、`main.rs` 的解析兜底三处一致。
+//! 运行期不可改——上限随 exe 固化，排查时以实际构建参数为准。
+
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
+    // 日志行数上限：与目标平台无关（Linux native check 也走这里，option_env!
+    // 拿不到时由 main.rs 兜底），故放在 Windows 门控之前。
+    println!("cargo:rerun-if-env-changed=VOKE_LOG_MAX_LINES");
+    let raw = env::var("VOKE_LOG_MAX_LINES").ok();
+    let parsed = raw
+        .as_deref()
+        .map(str::trim)
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0);
+    let log_max_lines = match (raw.as_deref(), parsed) {
+        (Some(s), None) if !s.trim().is_empty() => {
+            // 设了但非法（非数字 / 为 0 / 负数）：不静默，打包时能看见。
+            println!("cargo:warning=VOKE_LOG_MAX_LINES={s:?} 非法，已用默认 9999");
+            9999
+        }
+        (_, Some(n)) => n,
+        _ => 9999,
+    };
+    println!("cargo:rustc-env=VOKE_LOG_MAX_LINES={log_max_lines}");
+
     // 只在 Windows 目标上做（Linux 上跑 core 测试时不该要求 windres 存在）。
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;

@@ -52,7 +52,7 @@ use windows::core::{HSTRING, Interface};
 /// 解析一个快捷方式 / Store 应用得到的应用条目。
 ///
 /// 字段与 `voke_core::AppEntry` 完全一致（名字/类型逐字对齐），app 层直接构造
-/// `voke_core::AppEntry { name, path, icon, args, app_id }`，无需转换函数。
+/// `voke_core::AppEntry { name, path, icon, args, working_dir, app_id }`，无需转换函数。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AppEntry {
     /// 显示名。
@@ -81,24 +81,44 @@ pub struct AppEntry {
     /// 注意它**可能带未展开的环境变量**（实测 `%windir%\explorer.exe`），
     /// 展开交给 [`expand_environment`] 在解析期做掉。
     pub path: String,
-    /// 图标来源路径，可为空。
-    ///
-    /// **解析期的语义是"图标来源规格"**，取值优先级：
-    /// 1. `.lnk` 自带图标（`GetIconLocation`，如 `%windir%\explorer.exe`）——最准；
-    /// 2. 目标文件本身（`C:\...\vlc.exe`）；
-    /// 3. 无扩展名的外壳项（`shell:::{GUID}`）——此时为空，由 app 层用
-    ///    [`crate::icon::extract_icon_png`] 走 `IShellItemImageFactory` 兜底。
+    /// 图标来源路径，可为空。**解析期的语义是"图标来源规格"**，取值优先级：
+    /// 1. `.lnk` 自带图标（`GetIconLocation`）——最准。**保留 `路径,索引` 逗号形态**
+    ///    （如 `C:\Windows\system32\miguiresource.dll,-202`）：索引是资源坐标的一部分，
+    ///    开始菜单/资源管理器显示的正是该坐标处的图标（负索引 = 资源 ID，正索引 =
+    ///    图标序号，由 `SHDefExtractIconW` 提取，见 [`crate::icon`]）；
+    /// 2. 目标文件本身（`C:\...\vlc.exe`）；`.msc` 目标例外——文件自身无图标资源
+    ///    （`HKCR\MSCFile\DefaultIcon = %1`），会退到 `mmc.exe`；
+    /// 3. `shell:::{GUID}` 时为空。
     ///
     /// app 层把它变成真正的图片文件路径后写回此字段（见 `voke-app/src/main.rs`）。
     pub icon: String,
-    /// 命令行参数，已按 Windows 规则拆好（`CommandLineToArgvW`）。
+    /// 命令行参数，已按 Windows 规则拆好（`CommandLineToArgvW`），
+    /// 且**已做环境变量展开**（真机实测 `Alacritty.lnk` 存的是
+    /// `--working-directory "%USERPROFILE%"`：shell 双击启动时由 shell 展开，
+    /// voke 直启 exe 就必须自己展开，否则字面量直达子进程）。
     pub args: Vec<String>,
+    /// `.lnk` 的"起始位置"（`GetWorkingDirectory`），**解析期已做环境变量展开**；
+    /// 非 `.lnk` 条目或未声明时为空串。
+    ///
+    /// 真机实测 `Command Prompt.lnk` 的起始位置是 `%HOMEDRIVE%%HOMEPATH%`。
+    /// 注意：这里只做展开，**不做存在性校验**——校验在启动侧统一做
+    /// （`crate::env::prepare_working_dir`：展开后不存在就不设 cwd），
+    /// 因为"目录现在存不存在"只有启动那一刻的答案。
+    pub working_dir: String,
     /// MSIX 应用的 Application User Model ID（AUMID），非 MSIX 时为空。
     ///
     /// 与 `path` 里 `msix://` 前缀后的内容是同一个字符串；单独留一个字段是为了
     /// **可观测性**（lnk_probe 直接打印、日志里能看出这是 Store 应用），
     /// 而不是让调用方去切字符串。
     pub app_id: String,
+    /// 该条目来自哪个 `.lnk`（**快捷方式本体路径**；非 lnk 条目为空串）。
+    ///
+    /// 主流启动器（PowerToys Run / Flow）把 `.lnk` 本体交 shell 执行（双击同款：
+    /// shell 链接处理器负责目标解析 / 参数 / 起始位置 / 环境变量展开）。非空时
+    /// dispatcher 以它为 `ShellExecuteExW` 的 `lpFile`，忽略 `path`/`args`/
+    /// `working_dir`（那些是解析期展开值，只供副标题 / 图标 / 日志用）。
+    /// 与 `voke_core::AppEntry::lnk_path` 逐字对齐。
+    pub lnk_path: String,
 }
 
 /// 启动目标的形态。dispatcher 按这个分派启动方式。
@@ -373,27 +393,28 @@ pub fn is_launchable_target(target: &str, shell_target: Option<&str>, exists_dir
 /// 从条目里挑出"最可能给出正确图标"的来源规格，喂给
 /// [`crate::icon::extract_icon_png`]（或等价 API）。
 ///
-/// 返回值是 `IShellItemImageFactory` 能解析的字符串；`None` 表示没有任何可用来源
-/// （调用方应把 `icon` 清空，让 UI 回退占位图标）。
+/// 返回值是 `IShellItemImageFactory` 或 [`crate::icon`] 的 DLL 资源分支能解析的
+/// 字符串；`None` 表示没有任何可用来源（调用方应把 `icon` 清空，让 UI 回退占位图标）。
 ///
 /// 优先级（每条都有实机实测依据，见 docs/HISTORY.md）：
 ///
-/// 1. **`.lnk` 自带的图标且指向 `.exe`/`.ico`** —— 最准。实测
-///    `File Explorer.lnk` 虽然 `GetPath` 永远为空，但 `GetIconLocation` 写着
-///    `%windir%\explorer.exe`，靠它才能画出资源管理器图标。
+/// 1. **`.lnk` 自带的精确图标规格**：`.exe` / `.ico`，或带 `,索引` 的资源 DLL
+///    （如 `miguiresource.dll,-202`）——实测"管理工具"目录的 `.lnk` 全部是后者，
+///    它就是开始菜单里显示的图标本身。无索引的裸 DLL **不在此级**（只能拿到
+///    DLL 的通用图标，见优先级 3）。
 /// 2. **启动目标**。MSIX 必须转成 `shell:AppsFolder\<AUMID>` 形态：
 ///    实测**裸 AUMID 会被拒绝**（`SHCreateItemFromParsingName` 报
 ///    `0x80070002` ERROR_FILE_NOT_FOUND），加 `shell:AppsFolder\` 前缀就能拿到图标。
 ///    巧合但省事：这与 dispatcher 的启动命令是同一个字符串。
-///    `shell:::{GUID}` 则原样可用。
-/// 3. **兜底：图标规格原样**。有些 `.lnk` 把图标写成 `shell32.dll` 这类 DLL
-///    （实测 "Windows 工具" 是 `shell32.dll,-22579`），直接喂进去只能拿到
-///    **该 DLL 的通用图标**，所以它排在第 2 条之后；但比什么都没有强。
+///    `shell:::{GUID}` 则原样可用。`.msc` 目标退到 `mmc.exe`
+///    （[`console_host_for_target`]）。
+/// 3. **兜底：图标规格原样**。有些 `.lnk` 把图标写成 `shell32.dll` 这类无索引 DLL
+///    （实测 "Windows 工具" 是 `shell32.dll,-22579`，带索引的已在优先级 1 收编），
+///    直接喂进去只能拿到 **该 DLL 的通用图标**，所以它排在第 2 条之后；但比什么都没有强。
 pub fn pick_icon_spec(entry: &AppEntry) -> Option<String> {
     let icon = entry.icon.trim();
-    // 1. `.lnk` 自带且指向具体可执行文件/图标文件。
-    let lower = icon.to_lowercase();
-    if !icon.is_empty() && (lower.ends_with(".exe") || lower.ends_with(".ico")) {
+    // 1. `.lnk` 自带且指向可精确提取的来源（exe / ico / 带索引的资源 DLL）。
+    if !icon.is_empty() && is_precise_icon_spec(icon) {
         return Some(icon.to_string());
     }
     // 2. 启动目标。
@@ -402,6 +423,8 @@ pub fn pick_icon_spec(entry: &AppEntry) -> Option<String> {
             if !aumid.is_empty() {
                 return Some(format!("shell:AppsFolder\\{aumid}"));
             }
+        } else if let Some(host) = console_host_for_target(&entry.path) {
+            return Some(host);
         } else {
             return Some(entry.path.clone());
         }
@@ -413,15 +436,117 @@ pub fn pick_icon_spec(entry: &AppEntry) -> Option<String> {
     None
 }
 
+/// 可被**精确提取**的图标规格：`.exe` / `.ico`（文件自身即图标源），
+/// 或带 `,索引` 的资源容器（[`parse_indexed_icon_spec`] 能拆出整数索引）。
+///
+/// 判据来自实测（Win11 2026-10）：开始菜单"管理工具"的 `.lnk` 的
+/// `GetIconLocation` 全是 `miguiresource.dll,-202` 这类带负资源号的 DLL——
+/// 这正是系统显示给用户的图标坐标。无索引的裸 DLL 故意排除：喂给
+/// `IShellItemImageFactory` 只会拿到该 DLL 的通用图标。
+fn is_precise_icon_spec(spec: &str) -> bool {
+    let lower = spec.to_lowercase();
+    if lower.ends_with(".exe") || lower.ends_with(".ico") {
+        return true;
+    }
+    // `路径,索引` 形态：逗号后必须是整数索引，且路径部分是资源容器扩展名。
+    if let Some((path, _)) = parse_indexed_icon_spec(spec) {
+        return matches!(
+            target_extension(path).as_deref(),
+            Some("dll" | "exe" | "ico" | "ocx")
+        );
+    }
+    false
+}
+
+/// `.msc` 目标 → `mmc.exe` 图标（`%SystemRoot%\System32\mmc.exe`，环境变量展开，
+/// 不硬编码盘符）。
+///
+/// 实测（Win11 2026-10，注册表实查）：`HKCR\MSCFile\DefaultIcon = %1`，而 `.msc`
+/// 是 XML 控制台文档、**自身不含图标资源**——任何"从文件自身取图标"的路
+/// （`GetImage` / `SHGetFileInfoW`）都只能退化到通用文档占位图（白纸）。
+/// `.lnk` 没有 IconLocation 时退到此映射：至少拿到红色 mmc 工具箱图标而不是白纸。
+///
+/// 非 `.msc` 目标返回 `None`（走原路，行为不变）。
+fn console_host_for_target(target: &str) -> Option<String> {
+    if target_extension(target).as_deref() == Some("msc") {
+        let mmc = expand_environment(r"%SystemRoot%\System32\mmc.exe");
+        if !mmc.trim().is_empty() {
+            return Some(mmc);
+        }
+    }
+    None
+}
+
+/// 拆分 `路径,索引` 形态的图标来源规格（`.lnk` 的 `GetIconLocation` 产出）。
+///
+/// - `C:\...\miguiresource.dll,-202` → `("C:\...\miguiresource.dll", -202)`
+///   （负索引 = 资源 ID，正索引 = 图标序号）；
+/// - 无逗号、逗号后不是整数、路径部分为空 ⇒ `None`（调用方走原路）。
+///
+/// 用 `rsplit_once` 取**最后一个**逗号：路径本身可能含逗号
+/// （`C:\My, Folder\app.dll` 不应被误拆）。
+pub fn parse_indexed_icon_spec(spec: &str) -> Option<(&str, i32)> {
+    let (path, index) = spec.rsplit_once(',')?;
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let index = index.trim().parse::<i32>().ok()?;
+    Some((path, index))
+}
+
+/// `.lnk` 的图标来源归一化（纯逻辑，任意平台可测；由 `resolve_lnk` 调用）。
+///
+/// - `GetIconLocation` 有值时整理成完整 `路径,索引` 逗号形态：索引是资源坐标的
+///   一部分——开始菜单/资源管理器显示的正是该坐标处的图标。索引有两个来源
+///   （Windows 各版本行为不一，都覆盖）：缓冲区已带 `,索引`
+///   （[`parse_indexed_icon_spec`] 认得），或由 `icon_index` 出参单独给出。
+///   **索引 0 对资源容器（dll/ocx）同样要补上**：真机实测（Win11 2026-10）
+///   `services.lnk` / `Component Services.lnk` / `Event Viewer.lnk` 的
+///   `GetIconLocation` 出参就是 0——Explorer 按 `dll,0` 提取文件内第 0 枚
+///   图标（已用 `SHGetFileInfoW`(.lnk) 与 `SHDefExtractIconW`(dll, 0) 双重
+///   比对，逐像素一致）。早前「0 不补」把索引吞掉，裸 DLL 路径过不了
+///   [`is_precise_icon_spec`]，跌到目标兜底（`.msc` → `mmc.exe` 红色工具箱），
+///   用户实测这三个条目图标错误。
+///   `.exe` / `.ico` 例外：裸路径本身就是精确规格，补 `,0` 只会把提取从
+///   `GetImage` 无谓地改到 `SHDefExtractIconW`。
+/// - 无值时用目标本身；`shell:::{GUID}` 不是图片，留空交给 app 层。
+pub fn lnk_icon_location(icon_spec: &str, icon_index: i32, launch_target: &str) -> String {
+    let icon_spec = icon_spec.trim();
+    if icon_spec.is_empty() {
+        return if launch_target.starts_with(SHELL_ITEM_PREFIX) {
+            String::new()
+        } else {
+            launch_target.to_string()
+        };
+    }
+    // 缓冲区已含 `,索引`：原样保留。
+    if parse_indexed_icon_spec(icon_spec).is_some() {
+        return icon_spec.to_string();
+    }
+    // 只有路径：把出参索引补成 `路径,索引`。
+    // `0` 对 dll/ocx 是有效坐标（文件内第 0 枚图标，Explorer 正是按它提取），
+    // 必须补；对 .exe/.ico 则是"无索引"（裸路径已是精确规格），不补。
+    let is_resource_container =
+        matches!(target_extension(icon_spec).as_deref(), Some("dll" | "ocx"));
+    if icon_index != 0 || is_resource_container {
+        return format!("{icon_spec},{icon_index}");
+    }
+    icon_spec.to_string()
+}
+
 /// 图标缓存文件名里应用名部分的最大长度（避免超出 Windows MAX_PATH）。
 const MAX_ICON_NAME_CHARS: usize = 40;
 
-/// 生成图标缓存文件名（不含扩展名）：`<安全名字>-<路径哈希>`。
+/// 生成图标缓存文件名（不含扩展名）：`<安全名字>-<路径哈希><spec 哈希>`。
 ///
 /// - 名字部分让人一眼能看出这是哪个应用（排查时直接看 `icons/` 目录）；
 /// - 路径哈希保证不同条目不会撞名（同名不同路径的应用确实存在，
-///   例如两个版本的 "Visual Studio Code"）。
-pub fn icon_cache_key(name: &str, path: &str) -> String {
+///   例如两个版本的 "Visual Studio Code"）；
+/// - **spec 哈希让缓存键包含图标来源**：改提取逻辑（如 `.lnk` 的 `dll,-索引`
+///   从"丢索引进通用图"变成"按索引提取"）后，历史错图自动失效、一次性重建，
+///   不会继续命中旧 PNG。
+pub fn icon_cache_key(name: &str, path: &str, spec: &str) -> String {
     let mut safe = String::with_capacity(MAX_ICON_NAME_CHARS);
     for c in name.chars() {
         if safe.chars().count() >= MAX_ICON_NAME_CHARS {
@@ -435,7 +560,7 @@ pub fn icon_cache_key(name: &str, path: &str) -> String {
     }
     let safe = safe.trim_matches('_');
     let safe = if safe.is_empty() { "app" } else { safe };
-    format!("{safe}-{:08x}", fnv1a(path))
+    format!("{safe}-{:08x}{:08x}", fnv1a(path), fnv1a(spec))
 }
 
 /// FNV-1a 32 位哈希（不引入依赖，足够做文件名去重）。
@@ -669,34 +794,41 @@ pub unsafe fn resolve_lnk(path: &Path) -> windows::core::Result<AppEntry> {
 
         // 图标来源：`.lnk` 自带图标最准（`File Explorer.lnk` 虽无目标，但图标写着
         // `%windir%\explorer.exe`，足以画出资源管理器图标）；没有则回退到目标。
+        // 归一化（保留 `路径,索引` 逗号形态）见 [`lnk_icon_location`]。
         let mut icon_index = 0i32;
         let icon_spec =
             read_into_buffer(|buf| link.GetIconLocation(buf, &mut icon_index)).unwrap_or_default();
-        let icon = if icon_spec.trim().is_empty() {
-            // 目标本身（`C:\...\vlc.exe`）。`shell:::{GUID}` 不是图片，留空交给 app 层。
-            if launch_target.starts_with("shell:") {
-                String::new()
-            } else {
-                launch_target.clone()
-            }
-        } else if icon_spec.contains(',') {
-            // `GetIconLocation` 返回 `路径,索引` 的合并形态（实测 `io.github...` 没有，
-            // 但 shell32.dll,-22579 这类是 `dll,负数资源号`）。取逗号前的路径。
-            icon_spec.split(',').next().unwrap_or("").trim().to_string()
-        } else {
-            icon_spec
-        };
-        let icon = expand_environment(&icon);
+        let icon = expand_environment(&lnk_icon_location(&icon_spec, icon_index, &launch_target));
 
         let raw_args = read_into_buffer(|buf| link.GetArguments(buf)).unwrap_or_default();
+        // 参数里的 %VAR% 必须在解析期展开（shell 双击 .lnk 时本来会由 shell 展开；
+        // voke 绕过 shell 直启 exe，这步就得自己做）。真机实证：Alacritty.lnk
+        // 的参数是 `--working-directory "%USERPROFILE%"`，不展开的话 alacritty
+        // 直接报 `Invalid working directory: "%USERPROFILE%"`。
+        let expanded_args = expand_environment(&raw_args);
+        if expanded_args != raw_args {
+            log::debug!("lnk 参数已展开: {raw_args:?} -> {expanded_args:?}");
+        }
+
+        // 起始位置（GetWorkingDirectory）：shell 语义允许存 %VAR%（实测
+        // Command Prompt.lnk 是 %HOMEDRIVE%%HOMEPATH%），解析期展开；
+        // 存在性校验交给启动侧（env::prepare_working_dir）。
+        let raw_working_dir =
+            read_into_buffer(|buf| link.GetWorkingDirectory(buf)).unwrap_or_default();
+        let working_dir = expand_environment(raw_working_dir.trim());
 
         Ok(AppEntry {
             name,
             path: launch_target,
             icon,
-            args: split_arguments(&raw_args),
+            args: split_arguments(&expanded_args),
+            working_dir,
             // 开始菜单快捷方式不是 MSIX：AUMID 由 AppsFolder 那条路径负责。
             app_id: String::new(),
+            // lnk 本体路径：dispatcher 据此把快捷方式交 shell 执行（双击同款），
+            // 不再用下面解析出的 target/args 直启。上面的展开值仍然保留——
+            // 副标题、图标与日志要用。
+            lnk_path: path.to_string_lossy().into_owned(),
         })
     }
 }
@@ -766,37 +898,12 @@ pub fn expand_environment(raw: &str) -> String {
     expand_environment_impl(raw)
 }
 
-/// 非 Windows：环境变量展开用最朴素的 `%VAR%` 替换（仅供 Linux 单测跑逻辑，
-/// 真实调用只在 Windows 上）。
+/// 非 Windows：环境变量展开复用 [`crate::env::expand_env_with`]（注入进程环境），
+/// 与 Windows 的 ExpandEnvironmentStringsW 语义一致（未知变量原样保留），
+/// Linux 单测跑的就是这套纯逻辑。
 #[cfg(not(windows))]
 fn expand_environment_impl(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut rest = raw;
-    while let Some(start) = rest.find('%') {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + 1..];
-        match after.find('%') {
-            Some(end) => {
-                let key = &after[..end];
-                match std::env::var(key) {
-                    Ok(val) => out.push_str(&val),
-                    // 未知变量：原样保留，便于排查。
-                    Err(_) => {
-                        out.push('%');
-                        out.push_str(key);
-                        out.push('%');
-                    }
-                }
-                rest = &after[end + 1..];
-            }
-            None => {
-                out.push_str(&rest[start..]);
-                return out;
-            }
-        }
-    }
-    out.push_str(rest);
-    out
+    crate::env::expand_env_with(raw, |key| std::env::var(key).ok())
 }
 
 #[cfg(windows)]
@@ -1086,7 +1193,11 @@ unsafe fn store_entry_from_item(item: &IShellItem) -> Option<AppEntry> {
             // 由 app 层用 IShellItemImageFactory 按 AUMID 取（见 voke-sys::icon）。
             icon: String::new(),
             args: Vec::new(),
+            // MSIX 由 shell 激活，没有用户声明的起始位置。
+            working_dir: String::new(),
             app_id: parsing,
+            // Store 应用不是 .lnk 条目：没有快捷方式本体可交 shell。
+            lnk_path: String::new(),
         })
     }
 }
@@ -1466,7 +1577,9 @@ mod tests {
             path: path.to_string(),
             icon: icon.to_string(),
             args: Vec::new(),
+            working_dir: String::new(),
             app_id: String::new(),
+            lnk_path: String::new(),
         }
     }
 
@@ -1484,7 +1597,24 @@ mod tests {
         );
     }
 
-    /// 图标是 `.dll` 资源号形态时，改用启动目标（避免拿到 DLL 的通用图标）。
+    /// 带 `,索引` 的资源 DLL 规格是**精确坐标**（开始菜单同款图标），
+    /// 优先级 1 必须收编——早期版本把它按逗号切分后落选，`.msc` 条目
+    /// 因此只能拿到通用占位图（白纸）。
+    #[test]
+    fn indexed_dll_icon_spec_wins() {
+        let e = icon_entry(
+            "Task Scheduler",
+            r"C:\Windows\system32\taskschd.msc",
+            r"C:\Windows\system32\miguiresource.dll,-202",
+        );
+        assert_eq!(
+            pick_icon_spec(&e).as_deref(),
+            Some(r"C:\Windows\system32\miguiresource.dll,-202")
+        );
+    }
+
+    /// 无索引的裸 DLL 只能拿到该 DLL 的通用图标：不进优先级 1，
+    /// 继续按"启动目标 → 原样兜底"的旧序走。
     #[test]
     fn dll_icon_spec_falls_back_to_target() {
         let e = icon_entry(
@@ -1496,6 +1626,94 @@ mod tests {
             pick_icon_spec(&e).as_deref(),
             Some(r"C:\Windows\system32\control.exe")
         );
+    }
+
+    /// `pick_icon_spec` 表驱动覆盖：exe / ico / dll 带索引 / dll 无索引 /
+    /// `.msc` 目标（mmc.exe 兜底）/ `.msc` 目标且自带 exe 图标 / shell GUID /
+    /// MSIX / 空。
+    #[test]
+    fn pick_icon_spec_table() {
+        let cases: &[(&str, AppEntry, Option<&str>)] = &[
+            (
+                "icon=exe",
+                icon_entry("VLC", r"C:\Program Files\VLC\vlc.exe", r"C:\VLC\vlc.exe"),
+                Some(r"C:\VLC\vlc.exe"),
+            ),
+            (
+                "icon=ico",
+                icon_entry("App", r"C:\app\main.exe", r"C:\app\logo.ico"),
+                Some(r"C:\app\logo.ico"),
+            ),
+            (
+                "icon=dll 带索引",
+                icon_entry(
+                    "Event Viewer",
+                    r"C:\Windows\system32\eventvwr.msc",
+                    r"C:\Windows\system32\miguiresource.dll,-102",
+                ),
+                Some(r"C:\Windows\system32\miguiresource.dll,-102"),
+            ),
+            (
+                "icon=dll 带正索引",
+                icon_entry("App", r"C:\app\main.exe", r"C:\app\res.dll,5"),
+                Some(r"C:\app\res.dll,5"),
+            ),
+            (
+                "icon=dll 无索引",
+                icon_entry(
+                    "Tool",
+                    r"C:\Windows\system32\control.exe",
+                    r"C:\Windows\system32\shell32.dll",
+                ),
+                Some(r"C:\Windows\system32\control.exe"),
+            ),
+            (
+                "msc 目标 + exe 图标规格",
+                icon_entry(
+                    "Disk Cleanup",
+                    r"C:\Windows\system32\cleanmgr.exe",
+                    r"C:\Windows\system32\Shell32.dll,-22538",
+                ),
+                Some(r"C:\Windows\system32\Shell32.dll,-22538"),
+            ),
+            (
+                "shell GUID 目标",
+                icon_entry(
+                    "Control Panel",
+                    "shell:::{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}",
+                    "",
+                ),
+                Some("shell:::{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}"),
+            ),
+            (
+                "MSIX",
+                icon_entry(
+                    "终端",
+                    "msix://Microsoft.WindowsTerminal_8wekyb3d8bbwe!App",
+                    "",
+                ),
+                Some(r"shell:AppsFolder\Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"),
+            ),
+        ];
+        for (label, entry, expected) in cases {
+            assert_eq!(pick_icon_spec(entry).as_deref(), *expected, "{label}");
+        }
+        // `.msc` 目标无 IconLocation：退到 mmc.exe（环境变量展开结果随平台而异，
+        // 只断言结尾——Windows 上展开成 `C:\Windows\System32\mmc.exe`，
+        // Linux 测试环境保留字面量 `%SystemRoot%\System32\mmc.exe`）。
+        let msc = icon_entry("Task Scheduler", r"C:\Windows\system32\taskschd.msc", "");
+        let spec = pick_icon_spec(&msc).expect("msc 目标应有兜底 spec");
+        assert!(
+            spec.to_lowercase().ends_with("mmc.exe"),
+            "msc 目标应退到 mmc.exe，实际: {spec}"
+        );
+        // 非 msc 目标不受映射影响。
+        assert_eq!(
+            console_host_for_target(r"C:\Windows\system32\control.exe"),
+            None
+        );
+        // 空规格 + 空目标 => None（UI 占位图标）。
+        assert_eq!(pick_icon_spec(&icon_entry("x", "", "")), None);
     }
 
     /// 没有图标规格时用目标；MSIX 必须转成 `shell:AppsFolder\<AUMID>`
@@ -1525,29 +1743,125 @@ mod tests {
         assert_eq!(pick_icon_spec(&icon_entry("x", "", "")), None);
     }
 
+    /// `路径,索引` 拆分：负索引（资源 ID）/ 正索引（序号）/ 尾随逗号的垃圾 /
+    /// 路径自身带逗号（不能误拆）。
+    #[test]
+    fn parse_indexed_icon_spec_splits_on_last_comma() {
+        assert_eq!(
+            parse_indexed_icon_spec(r"C:\Windows\system32\miguiresource.dll,-202"),
+            Some((r"C:\Windows\system32\miguiresource.dll", -202))
+        );
+        assert_eq!(
+            parse_indexed_icon_spec(r"C:\app\res.dll,5"),
+            Some((r"C:\app\res.dll", 5))
+        );
+        assert_eq!(
+            parse_indexed_icon_spec(r"C:\app\res.dll, 5 "),
+            Some((r"C:\app\res.dll", 5))
+        );
+        // 无逗号 / 索引不是整数 / 路径为空 => None（调用方走原路）。
+        assert_eq!(parse_indexed_icon_spec(r"C:\app\res.dll"), None);
+        assert_eq!(parse_indexed_icon_spec(r"C:\app\res.dll,abc"), None);
+        assert_eq!(parse_indexed_icon_spec(",-5"), None);
+        // 路径自身含逗号：只有最后一个逗号后是整数才拆。
+        assert_eq!(parse_indexed_icon_spec(r"C:\My, Folder\app.dll"), None);
+        assert_eq!(
+            parse_indexed_icon_spec(r"C:\My, Folder\app.dll,-7"),
+            Some((r"C:\My, Folder\app.dll", -7))
+        );
+    }
+
+    /// `.lnk` 图标来源归一化：保留 `路径,索引` 逗号形态（索引不再被切丢），
+    /// 无 IconLocation 时退到目标（shell 项留空）。
+    #[test]
+    fn lnk_icon_location_keeps_index() {
+        // 缓冲区已带 `,索引`（实测 Windows 形态）：原样保留。
+        assert_eq!(
+            lnk_icon_location(
+                r"C:\Windows\system32\miguiresource.dll,-202",
+                -202,
+                r"C:\x.msc"
+            ),
+            r"C:\Windows\system32\miguiresource.dll,-202"
+        );
+        // 缓冲区只有路径、索引在出参：补齐逗号形态。
+        assert_eq!(
+            lnk_icon_location(r"C:\Windows\system32\miguiresource.dll", -202, r"C:\x.msc"),
+            r"C:\Windows\system32\miguiresource.dll,-202"
+        );
+        // 索引 0 + 资源容器（dll/ocx）：**也要补** `,0`——0 = 文件内第 0 枚
+        // 图标，Explorer 正是按它提取（实测 services.lnk 的 GetIconLocation
+        // 出参就是 0，开始菜单显示 filemgmt.dll 第 0 枚齿轮图标）。
+        assert_eq!(
+            lnk_icon_location(r"%windir%\system32\filemgmt.dll", 0, r"C:\services.msc"),
+            r"%windir%\system32\filemgmt.dll,0"
+        );
+        assert_eq!(
+            lnk_icon_location(r"%windir%\system32\some.ocx", 0, r"C:\x.exe"),
+            r"%windir%\system32\some.ocx,0"
+        );
+        // 索引 0 + .exe：裸路径已是精确规格（is_precise_icon_spec 认 .exe），
+        // 不补——行为与修复前一致。
+        assert_eq!(
+            lnk_icon_location(r"%windir%\explorer.exe", 0, ""),
+            r"%windir%\explorer.exe"
+        );
+        // 无 IconLocation：退到目标；shell 项留空。
+        assert_eq!(
+            lnk_icon_location("", 0, r"C:\app\vlc.exe"),
+            r"C:\app\vlc.exe"
+        );
+        assert_eq!(
+            lnk_icon_location("", 0, "shell:::{52205FD8-5DFB-447D-801A-D0B52F2E83E1}"),
+            ""
+        );
+    }
+
     /// 缓存文件名：可读 + 唯一 + 文件系统安全（无路径分隔符与非法字符）。
     #[test]
     fn icon_cache_key_is_safe_and_unique() {
-        let a = icon_cache_key("Visual Studio Code", r"C:\a\Code.exe");
-        let b = icon_cache_key("Visual Studio Code", r"C:\b\Code.exe");
+        let a = icon_cache_key("Visual Studio Code", r"C:\a\Code.exe", r"C:\a\Code.exe");
+        let b = icon_cache_key("Visual Studio Code", r"C:\b\Code.exe", r"C:\b\Code.exe");
         assert_ne!(a, b, "同名不同路径不能撞名");
         assert!(!a.contains(['\\', '/', ':', '*', '?', '"', '<', '>', '|']));
         assert!(a.starts_with("Visual_Studio_Code-"), "{a}");
 
         // 中文名字也要安全
-        let c = icon_cache_key("微信", r"C:\WeChat.exe");
+        let c = icon_cache_key("微信", r"C:\WeChat.exe", r"C:\WeChat.exe");
         assert!(!c.contains(['\\', '/', ':']));
         assert!(c.starts_with("微信-"), "{c}");
 
         // 名字过长要截断（避免 MAX_PATH）
-        let long = icon_cache_key(&"A".repeat(300), r"C:\a.exe");
+        let long = icon_cache_key(&"A".repeat(300), r"C:\a.exe", r"C:\a.exe");
         assert!(long.len() < 80, "{} 太长", long.len());
 
         // 名字全是非法字符时仍有可用前缀
-        let d = icon_cache_key("///", r"C:\a.exe");
+        let d = icon_cache_key("///", r"C:\a.exe", r"C:\a.exe");
         assert!(d.starts_with("app-"), "{d}");
 
         // 稳定性：同输入同输出（缓存才能命中）
-        assert_eq!(icon_cache_key("A", "B"), icon_cache_key("A", "B"));
+        assert_eq!(icon_cache_key("A", "B", "C"), icon_cache_key("A", "B", "C"));
+    }
+
+    /// 缓存键必须含 spec：同 name+path 但 spec 不同（如 `.msc` 条目从
+    /// "目标路径"换成 "mmc.exe"）时键必须变——否则历史错图会继续命中。
+    #[test]
+    fn icon_cache_key_includes_spec() {
+        let old = icon_cache_key(
+            "Task Scheduler",
+            r"C:\Windows\system32\taskschd.msc",
+            r"C:\Windows\system32\taskschd.msc",
+        );
+        let new = icon_cache_key(
+            "Task Scheduler",
+            r"C:\Windows\system32\taskschd.msc",
+            r"%SystemRoot%\System32\mmc.exe",
+        );
+        assert_ne!(old, new, "spec 变化必须换键（旧错图一次性失效）");
+        // name+path+spec 全同则稳定
+        assert_eq!(
+            icon_cache_key("X", r"C:\x.msc", "spec-a"),
+            icon_cache_key("X", r"C:\x.msc", "spec-a")
+        );
     }
 }

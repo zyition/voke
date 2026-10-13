@@ -1,20 +1,23 @@
-//! terminal provider：Windows Terminal profiles（对齐 PowerToys Run 的 Terminal 插件）。
+//! terminal provider：Windows Terminal profiles（对齐 PowerToys CmdPal 的
+//! Windows Terminal 扩展）。
 //!
 //! ## 数据流
 //!
 //! ```text
 //! voke-sys 读两个 settings.json（stable + Preview 的 LocalState）
-//!         │  Vec<String>（文件原文，stable 在前；不存在的文件不进列表）
+//!         │  Vec<SettingsSource>（文件原文 + 所属 WT 包的 AUMID；
+//!         │  stable 在前；不存在的文件不进列表）
 //!         ▼
 //! profiles_from_settings（纯函数）：JSONC 容错解析 → hidden 过滤 →
-//!         │  同名去重（stable 优先）→ defaultProfile 置顶
+//!         │  同名去重（stable 优先）→ defaultProfile 置顶，
+//!         │  每个 profile 盖上来源文件的 AUMID
 //!         ▼
 //! app 层注入闭包：Fn() -> Vec<TerminalProfile>   ← 每次查询重读文件
 //!         ▼
 //! TerminalProvider::query(ctx)
 //!         │  name / commandline 各建一份 SearchKeys（与 windows provider 同款）
 //!         ▼
-//! nucleo 打分 → Vec<Match>（Action::Launch { path: wt.exe, args: ["-p", name] }）
+//! nucleo 打分 → Vec<Match>（Action::LaunchTerminalProfile { aumid, profile: guid }）
 //! ```
 //!
 //! ## 分层
@@ -32,9 +35,27 @@
 //!
 //! ## 启动动作
 //!
-//! `wt.exe -p "<name>"`：wt.exe 是 App Execution Alias，路径由 app 层注入
-//! （生产是 `%LOCALAPPDATA%\Microsoft\WindowsApps\wt.exe`）。
-//! core 不假设路径怎么来，只把它拼进 [`Action::Launch`]。
+//! [`Action::LaunchTerminalProfile`]：App Activation 激活 WT 包的 AUMID，
+//! 参数 `--profile "<guid>"`——对齐 PowerToys CmdPal 的 Windows Terminal 扩展
+//! （microsoft/PowerToys@b76d14e3，`Commands/LaunchProfileCommand.cs`：
+//! `IApplicationActivationManager.ActivateApplication(aumid, "--profile \"…\"",
+//! ActivateOptions.None, out pid)`）。
+//!
+//! **为什么用 guid 而不是显示名**：显示名会本地化、会重复、会由 `source`
+//! 动态生成（实测真机的 pwsh profile 就是 `Windows.Terminal.PowershellCore`
+//! 生成的，名字 "PowerShell" 与 guid 都不由用户填写）。WT 的 `--profile`
+//! 两者都收，但只有 guid 是稳定标识。guid 缺失的老条目退化为显示名
+//! （[`profile_activation_arguments`]）。
+//!
+//! **为什么不 `CreateProcess` 直启 wt.exe 别名**：真机实测（2026-10-13
+//! `voke.log`）经 voke 直启别名启动 pwsh profile 时，pwsh 的 `$PROFILE`
+//! 调 scoop shim 起 mise.exe 失败；同一 profile 经 shell 激活
+//! （`explorer.exe shell:AppsFolder\…`）正常。App Activation 是 WT 的官方
+//! 启动路径，顺带把 WT 的父进程从启动器换成激活服务。详见
+//! [`Action::LaunchTerminalProfile`] 的文档。
+//!
+//! wt.exe 别名路径（兜底直启用）由 app 层注入（生产是
+//! `%LOCALAPPDATA%\Microsoft\WindowsApps\wt.exe`）；core 不假设路径怎么来。
 
 use std::sync::Arc;
 
@@ -52,10 +73,26 @@ pub struct TerminalProfile {
     pub name: String,
     /// 启动命令行（副标题 + 搜索键的一部分；WT 允许缺省，缺省时为空串）。
     pub commandline: String,
-    /// profile 的 guid（`defaultProfile` 匹配用；动态生成的 profile 也有）。
+    /// profile 的 guid（`defaultProfile` 匹配与 `--profile` 启动都用它；
+    /// 动态生成的 profile 也有）。
     pub guid: String,
     /// 是否命中所在文件的顶层 `defaultProfile`。
     pub is_default: bool,
+    /// 该 profile 所属 WT 包的 AUMID（App Activation 的 `appUserModelId`），
+    /// 由来源文件盖上（stable 与 Preview 是不同包）。
+    pub aumid: String,
+}
+
+/// 一份 WT settings.json 原文 + 它所属 WT 包的 AUMID。
+///
+/// AUMID 必须**跟着文件走**：stable 与 Preview 是两个不同的 MSIX 包，
+/// App Activation 要激活对的那个（[`profiles_from_settings`] 负责盖章）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SettingsSource {
+    /// settings.json 原文（JSONC，允许注释）。
+    pub contents: String,
+    /// 来源包的 AUMID，例如 `Microsoft.WindowsTerminal_8wekyb3d8bbwe!App`。
+    pub aumid: String,
 }
 
 /// profile 数据源：每次调用都应当返回**当前**的合并后列表。
@@ -184,23 +221,30 @@ fn parse_settings(raw: &str) -> Vec<TerminalProfile> {
                 commandline,
                 guid,
                 is_default,
+                // AUMID 由 profiles_from_settings 按来源文件盖（解析期不知道）。
+                aumid: String::new(),
             })
         })
         .collect()
 }
 
-/// 把若干份 settings.json 原文（**stable 在前、Preview 在后**）合并成一份列表。
+/// 把若干份 WT 设置（**stable 在前、Preview 在后**）合并成一份列表。
 ///
 /// - 同名（`name` 完全相同）去重，**先出现的文件优先**（stable > Preview）；
+///   存活条目保留自己的 guid/aumid——启动按 guid 走，同名去重只是展示层的
+///   "别出现两行一样的"，不会造成 `--profile` 歧义（CmdPal 不去重、按名启动，
+///   反而有同名歧义隐患）；
 /// - 命中各自文件 `defaultProfile` 的条目提到最前（多份文件各有 default 时，
-///   stable 的 default 更靠前——它先被解析）。
+///   stable 的 default 更靠前——它先被解析）；
+/// - 每个条目盖上来源文件的 [`SettingsSource::aumid`]（App Activation 用）。
 ///
 /// 这是"给定 settings.json 内容列表 → 合并去重"的纯函数出口，
 /// 路径解析与读文件在 voke-sys。
-pub fn profiles_from_settings(contents: &[String]) -> Vec<TerminalProfile> {
+pub fn profiles_from_settings(sources: &[SettingsSource]) -> Vec<TerminalProfile> {
     let mut merged: Vec<TerminalProfile> = Vec::new();
-    for raw in contents {
-        for profile in parse_settings(raw) {
+    for source in sources {
+        for mut profile in parse_settings(&source.contents) {
+            profile.aumid = source.aumid.clone();
             if merged.iter().any(|p| p.name == profile.name) {
                 continue;
             }
@@ -210,6 +254,19 @@ pub fn profiles_from_settings(contents: &[String]) -> Vec<TerminalProfile> {
     // default 置顶（stable 排序，非 default 的相对顺序不变）。
     merged.sort_by_key(|p| !p.is_default);
     merged
+}
+
+/// WT profile 的 App Activation 参数字串（对齐 CmdPal `TerminalHelper.GetArguments`
+/// 的默认分支——不带 `--window` 前缀时就是 `--profile "<name>"`）：
+///
+/// ```text
+/// --profile "<profile>"
+/// ```
+///
+/// `profile` 传 guid（`{574e775e-…}`）或退化的显示名；引号保留 CmdPal 的拼法
+/// （显示名可能含空格；guid 带引号也无害，WT 的参数解析会剥掉）。
+pub fn profile_activation_arguments(profile: &str) -> String {
+    format!("--profile \"{profile}\"")
 }
 
 /// 带搜索键的 profile（条目每次查询重建，搜索键走 [`SearchKeysCache`]
@@ -226,6 +283,7 @@ pub struct TerminalProvider {
     /// 数据源。provider 不假设它在哪个线程跑（调用方保证后台线程）。
     fetch: ProfileFetcher,
     /// wt.exe 的路径（App Execution Alias；app 层注入，见模块文档）。
+    /// **只用于 App Activation 失败时的兜底直启**（见 [`Action::LaunchTerminalProfile::fallback_path`]）。
     wt_path: String,
     /// 搜索键记忆化（容量有上限，见类型文档）。
     keys: SearchKeysCache,
@@ -258,16 +316,26 @@ impl TerminalProvider {
     }
 
     /// 把一条 profile 变成 [`Match`]：动作在 query 阶段确定为
-    /// `wt.exe -p "<name>"`（§3 的 Launch 变体，复用 apps 的启动路径）。
+    /// [`Action::LaunchTerminalProfile`]（App Activation + `--profile "<guid>"`，
+    /// 对齐 CmdPal，见模块文档）。
     fn to_match(&self, profile: &IndexedProfile, score: f32) -> Match {
+        // guid 优先：显示名会本地化 / 重复 / 由 source 动态生成（实测 pwsh
+        // profile 即 `Windows.Terminal.PowershellCore` 生成，见模块文档）。
+        // guid 缺失的老条目退化为显示名（WT 的 `--profile` 两者都收）。
+        let profile_id = if profile.entry.guid.is_empty() {
+            profile.entry.name.clone()
+        } else {
+            profile.entry.guid.clone()
+        };
         let mut m = Match::execute(
             Self::ID,
             profile.entry.name.clone(),
             profile.entry.commandline.clone(),
-            Action::launch_with(
-                self.wt_path.clone(),
-                vec!["-p".to_string(), profile.entry.name.clone()],
-            ),
+            Action::LaunchTerminalProfile {
+                aumid: profile.entry.aumid.clone(),
+                profile: profile_id,
+                fallback_path: self.wt_path.clone(),
+            },
             score,
         );
         if profile.entry.commandline.is_empty() {
@@ -444,13 +512,25 @@ mod tests {
         }
     }
 
+    // 测试用 AUMID（与 voke-sys 的 STABLE_PACKAGE / PREVIEW_PACKAGE 对应；
+    // core 测试不依赖 sys 常量，只验证"按来源盖章"的逻辑）。
+    const STABLE_AUMID: &str = "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App";
+    const PREVIEW_AUMID: &str = "Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe!App";
+
+    fn source(contents: &str, aumid: &str) -> SettingsSource {
+        SettingsSource {
+            contents: contents.to_string(),
+            aumid: aumid.to_string(),
+        }
+    }
+
     fn provider_with(entries: Vec<TerminalProfile>) -> TerminalProvider {
         TerminalProvider::new(Arc::new(move || entries.clone()), r"C:\wt\wt.exe")
     }
 
     fn merged_provider() -> TerminalProvider {
-        let stable = STABLE.to_string();
-        let preview = PREVIEW.to_string();
+        let stable = source(STABLE, STABLE_AUMID);
+        let preview = source(PREVIEW, PREVIEW_AUMID);
         provider_with(profiles_from_settings(&[stable, preview]))
     }
 
@@ -491,7 +571,7 @@ mod tests {
 
     #[test]
     fn parses_normal_profiles() {
-        let profiles = profiles_from_settings(&[STABLE.to_string()]);
+        let profiles = profiles_from_settings(&[source(STABLE, STABLE_AUMID)]);
         let names: Vec<&str> = profiles.iter().map(|p| p.name.as_str()).collect();
         assert!(names.contains(&"Windows PowerShell"));
         assert!(names.contains(&"命令提示符"));
@@ -500,7 +580,7 @@ mod tests {
 
     #[test]
     fn hidden_and_nameless_entries_are_filtered() {
-        let profiles = profiles_from_settings(&[STABLE.to_string()]);
+        let profiles = profiles_from_settings(&[source(STABLE, STABLE_AUMID)]);
         let names: Vec<&str> = profiles.iter().map(|p| p.name.as_str()).collect();
         assert!(!names.contains(&"Azure Cloud Shell"), "hidden 的必须过滤");
         // 无 name 的条目被跳过，不会变成空名行。
@@ -510,14 +590,17 @@ mod tests {
 
     #[test]
     fn missing_profiles_field_gives_empty_list() {
-        assert!(profiles_from_settings(&["{}".to_string()]).is_empty());
-        assert!(profiles_from_settings(&[r#"{"defaultProfile": "{x}"}"#.to_string()]).is_empty());
+        assert!(profiles_from_settings(&[source("{}", STABLE_AUMID)]).is_empty());
+        assert!(
+            profiles_from_settings(&[source(r#"{"defaultProfile": "{x}"}"#, STABLE_AUMID)])
+                .is_empty()
+        );
     }
 
     #[test]
     fn broken_json_does_not_panic() {
-        assert!(profiles_from_settings(&["{ not json".to_string()]).is_empty());
-        assert!(profiles_from_settings(&[String::new()]).is_empty());
+        assert!(profiles_from_settings(&[source("{ not json", STABLE_AUMID)]).is_empty());
+        assert!(profiles_from_settings(&[source("", STABLE_AUMID)]).is_empty());
         assert!(profiles_from_settings(&[]).is_empty());
     }
 
@@ -532,14 +615,37 @@ mod tests {
                 ]
             }
         }"#;
-        let profiles = profiles_from_settings(&[jsonc.to_string()]);
+        let profiles = profiles_from_settings(&[source(jsonc, STABLE_AUMID)]);
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].name, "pwsh");
     }
 
+    /// AUMID 跟着来源文件走：stable 的条目盖 stable 的 AUMID，
+    /// Preview 独有的条目盖 Preview 的——App Activation 要激活对的那个包。
+    #[test]
+    fn aumid_is_stamped_from_the_source_file() {
+        let merged =
+            profiles_from_settings(&[source(STABLE, STABLE_AUMID), source(PREVIEW, PREVIEW_AUMID)]);
+        let ubuntu = merged.iter().find(|p| p.name == "Ubuntu").unwrap();
+        assert_eq!(ubuntu.aumid, STABLE_AUMID, "同名去重后保留 stable 的来源");
+        let preview = merged
+            .iter()
+            .find(|p| p.name == "PowerShell Preview")
+            .unwrap();
+        assert_eq!(
+            preview.aumid, PREVIEW_AUMID,
+            "Preview 独有条目盖 Preview AUMID"
+        );
+        assert!(
+            merged.iter().all(|p| !p.aumid.is_empty()),
+            "每个 profile 都必须有 AUMID"
+        );
+    }
+
     #[test]
     fn merge_dedupes_by_name_stable_first() {
-        let merged = profiles_from_settings(&[STABLE.to_string(), PREVIEW.to_string()]);
+        let merged =
+            profiles_from_settings(&[source(STABLE, STABLE_AUMID), source(PREVIEW, PREVIEW_AUMID)]);
         let names: Vec<&str> = merged.iter().map(|p| p.name.as_str()).collect();
         // stable 3 条 + preview 独有的 1 条（Ubuntu 同名去重）。
         assert_eq!(names.len(), 4, "{names:?}");
@@ -557,7 +663,8 @@ mod tests {
 
     #[test]
     fn default_profile_is_pinned_first() {
-        let merged = profiles_from_settings(&[STABLE.to_string(), PREVIEW.to_string()]);
+        let merged =
+            profiles_from_settings(&[source(STABLE, STABLE_AUMID), source(PREVIEW, PREVIEW_AUMID)]);
         assert_eq!(
             merged[0].name, "Windows PowerShell",
             "defaultProfile 必须置顶"
@@ -571,7 +678,7 @@ mod tests {
 
     #[test]
     fn preview_only_also_works() {
-        let merged = profiles_from_settings(&[PREVIEW.to_string()]);
+        let merged = profiles_from_settings(&[source(PREVIEW, PREVIEW_AUMID)]);
         assert_eq!(merged.len(), 2);
         assert!(merged.iter().all(|p| !p.is_default));
     }
@@ -605,22 +712,59 @@ mod tests {
         assert!(hits.iter().all(|m| m.score == 1.0));
     }
 
+    /// WT profile 的启动动作：App Activation + `--profile "<guid>"`（CmdPal 同款），
+    /// **guid 而不是显示名**——显示名会本地化/重复/由 source 动态生成。
     #[test]
-    fn action_is_wt_launch_with_profile_name() {
+    fn action_is_wt_app_activation_with_profile_guid() {
         let p = merged_provider();
         let hits = query(&p, "ubuntu");
         assert_eq!(hits.len(), 1);
         assert_eq!(
             hits[0].action,
-            Action::Launch {
-                path: r"C:\wt\wt.exe".to_string(),
-                args: vec!["-p".to_string(), "Ubuntu".to_string()],
-                elevated: false,
-                // 终端 profile 启动的是用户要的终端窗口，**不能**隐藏。
-                no_console: false,
+            Action::LaunchTerminalProfile {
+                aumid: "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App".to_string(),
+                // fixture 里 Ubuntu 的 guid（stable 那条）
+                profile: "{2c4de342-38b7-51cf-b940-2309a097f518}".to_string(),
+                fallback_path: r"C:\wt\wt.exe".to_string(),
             }
         );
         assert_eq!(hits[0].interact, crate::Interact::Execute);
+    }
+
+    /// guid 缺失的老条目退化为显示名（WT 的 `--profile` 两者都收）。
+    #[test]
+    fn action_falls_back_to_name_when_guid_missing() {
+        let p = provider_with(vec![TerminalProfile {
+            name: "老配置".into(),
+            commandline: "cmd.exe".into(),
+            guid: String::new(),
+            is_default: false,
+            aumid: "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App".into(),
+        }]);
+        let hits = query(&p, "老配置");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0].action,
+            Action::LaunchTerminalProfile {
+                aumid: "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App".to_string(),
+                profile: "老配置".to_string(),
+                fallback_path: r"C:\wt\wt.exe".to_string(),
+            }
+        );
+    }
+
+    /// App Activation 参数字串：CmdPal `GetArguments` 的默认分支形态
+    /// （`--profile "<profile>"`，引号保留——显示名可能含空格）。
+    #[test]
+    fn activation_arguments_match_cmdpal_form() {
+        assert_eq!(
+            profile_activation_arguments("{574e775e-4f2a-5b96-ac1e-a2962a402336}"),
+            r#"--profile "{574e775e-4f2a-5b96-ac1e-a2962a402336}""#
+        );
+        assert_eq!(
+            profile_activation_arguments("PowerShell 7"),
+            r#"--profile "PowerShell 7""#
+        );
     }
 
     #[test]
@@ -706,6 +850,7 @@ mod tests {
                 commandline: "cmd.exe".into(),
                 guid: String::new(),
                 is_default: false,
+                aumid: "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App".into(),
             })
             .collect();
         let p = provider_with(entries);

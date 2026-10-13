@@ -12,6 +12,17 @@
 
 pub mod apps;
 
+// 环境变量路径展开（%VAR% / ~）与子进程工作目录判定（展开→校验→不合法不设）。
+// 纯函数主体任何平台编译并测试（Linux 上 `cargo test -p voke-sys` 真跑），
+// 见模块文档：这是"解析直启 exe"路线必须自己复刻的 shell 展开语义。
+pub mod env;
+
+// 文件关联启动（ShellExecuteW）：CreateProcessW 跑不了的非 PE 镜像目标
+// （.msc / .cpl / .bat / .ps1 …）的官方出路。Windows 实现是 #[cfg(windows)]，
+// 非 Windows 是"记日志 + 返回 false"的占位，所以模块本身不挂 cfg——
+// `cargo test -p voke-sys`（Linux native）照常编译。
+pub mod shell;
+
 // voke 自己的落盘位置（配置 / 日志 / 图标缓存）。纯路径拼装，任何平台都编译；
 // 只有读 %APPDATA% 的入口是 #[cfg(windows)]（见模块内部）。
 pub mod paths;
@@ -34,9 +45,16 @@ pub mod single_instance;
 // 漏掉一个真实的大小写 bug。
 pub mod windows;
 
-// WT profiles（terminal provider 的 sys 半边）：路径拼接是纯函数（任何平台可测），
-// 只有读文件是 #[cfg(windows)]（见模块内部）。解析/合并在 voke-core。
+// WT profiles（terminal provider 的 sys 半边）：路径拼接与 AUMID 推导是纯函数
+// （任何平台可测），只有读文件是 #[cfg(windows)]（见模块内部）。解析/合并在
+// voke-core。
 pub mod terminal;
+
+// MSIX/Store 应用的 App Activation（IApplicationActivationManager）：WT profile
+// 的官方启动路径（对齐 PowerToys CmdPal 的 Windows Terminal 扩展）。Windows
+// 实现是 #[cfg(windows)] 的 COM，非 Windows 是"记日志 + 返回 None"的占位——
+// `cargo test -p voke-sys`（Linux native）照常编译。
+pub mod appactivate;
 
 // workspaces provider 的 sys 半边：**编辑器历史的只读 SQLite 读取**（Zed 的
 // db.sqlite、VSCode 的 state.vscdb）。路径拼接与读库都不挂 cfg(windows)
@@ -44,6 +62,22 @@ pub mod terminal;
 // %USERPROFILE% / %APPDATA% 的包装函数是 #[cfg(windows)]。
 // 解析/过滤/排序去重在 voke-core。
 pub mod workspace;
+
+// 日志行数上限（max lines 容量控制）：纯 std::io 逻辑，任何平台都编译并测试
+// （Linux 上 `cargo test -p voke-sys` 真跑删批/计数用例）——消费方 voke-app 的
+// 测试在 Linux 因缺 fontconfig 跑不了，放这里才能被覆盖，详见模块文档。
+pub mod logcap;
+
+// 窗口「程序化关闭」的一次性闸门（重入守卫）：纯 Cell<bool> 状态机，任何平台
+// 都编译并测试——同 logcap 的理由，消费方 voke-app 的测试在 Linux 跑不了，
+// 放这里才能被覆盖，详见模块文档。
+pub mod close_guard;
+
+// 启动早期纠正 voke 自身工作目录（开机自启继承到 System32 的修复）。
+// 判定是纯函数，任何平台编译并测试（Linux 上 `cargo test -p voke-sys` 真跑
+// 表驱动单测）；真正改目录用 std::env::set_current_dir（跨平台，不引
+// windows crate / cfg 分支），详见模块文档。
+pub mod cwd;
 
 #[cfg(windows)]
 pub mod hotkey;
@@ -100,13 +134,22 @@ pub use awake::{AwakeRequest, AwakeState, cancel_awake, current as current_awake
 #[cfg(windows)]
 pub use awake::local_offset_seconds;
 
-// WT settings 读取 / wt.exe 路径（纯函数部分任何平台可用）。
+// WT settings 读取 / wt.exe 路径 / WT 包 AUMID（纯函数部分任何平台可用）。
+pub use terminal::{package_aumid, settings_path, settings_paths, wt_exe_path};
 #[cfg(windows)]
-pub use terminal::{read_settings_contents, wt_exe};
-pub use terminal::{settings_paths, wt_exe_path};
+pub use terminal::{read_settings_sources, wt_exe};
+
+// MSIX/Store 应用的 App Activation（WT profile 启动走这条，对齐 CmdPal）：
+// Windows 实现是 #[cfg(windows)] 的 COM，非 Windows 是占位实现——
+// 与 shell_open 同风格，调用点不需要额外 cfg。
+pub use appactivate::activate_app;
 
 // 内存快照：路径都平铺在根上，app 层直接 `voke_sys::log_snapshot(...)`。
 pub use mem::{log_snapshot, process_memory};
+
+// 文件关联启动：app 层直接 `voke_sys::shell_open(...)`（与 awake/theme 同风格，
+// 非 Windows 上是占位实现，调用点不需要额外 cfg）。
+pub use shell::shell_open;
 
 // 单实例保护：app 层直接 `voke_sys::single_instance_guard()` +
 // `SingleInstance::Primary(signal) => signal.spawn_waiter(...)`。
@@ -120,6 +163,19 @@ pub use workspace::{
 };
 #[cfg(windows)]
 pub use workspace::{vscode_command, vscode_workspaces, zed_command, zed_workspaces};
+
+// 日志行数上限：app 层就是 `RollingLogWriter::new(file, max)` 包住日志文件 +
+// `DEFAULT_MAX_LINES` 兜底（与 awake/theme 同风格，平铺在根上）。
+pub use logcap::{DEFAULT_MAX_LINES, RollingLogWriter};
+
+// 窗口关闭重入守卫：app 层就是 `CloseGuard::new()` + 关闭回调里 `enter()`
+// 一次性放行（与 awake/theme 同风格，平铺在根上）。
+pub use close_guard::CloseGuard;
+
+// 启动早期纠正自身工作目录：app 层直接 `voke_sys::fix_own_cwd()`（与
+// awake/theme 同风格，平铺在根上）。判定函数 `should_fix_own_cwd` /
+// `is_system_dir` 同样平铺导出供测试与复用。
+pub use cwd::{fix_own_cwd, is_system_dir, should_fix_own_cwd};
 
 /// 占位：M0 仅用于确认 crate 能被交叉编译到 windows-gnu。
 #[cfg(windows)]

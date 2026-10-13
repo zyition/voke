@@ -1676,9 +1676,11 @@ mod tests {
                     "--folder-uri".into(),
                     "file:///C:/Users/testuser/code/beta".into(),
                 ],
+                working_dir: String::new(),
                 elevated: false,
                 // VSCode 经 `cmd.exe /c code.cmd` 启动 → 隐藏控制台
                 no_console: true,
+                lnk_path: String::new(),
             }
         );
         let zed = hits.iter().find(|m| m.title == "remote").unwrap();
@@ -1687,9 +1689,11 @@ mod tests {
             Action::Launch {
                 path: "zed".into(),
                 args: vec!["ssh://me@box/home/me/remote".into()],
+                working_dir: String::new(),
                 elevated: false,
                 // Zed 起的是控制台子系统的 `bin\Zed.exe` CLI → 一样要隐藏
                 no_console: true,
+                lnk_path: String::new(),
             }
         );
     }
@@ -1708,8 +1712,10 @@ mod tests {
             Action::Launch {
                 path: "/home/testuser/alpha".into(),
                 args: Vec::new(),
+                working_dir: String::new(),
                 elevated: false,
                 no_console: false,
+                lnk_path: String::new(),
             },
             "编辑器不可用时 Launch 路径本身（dispatcher 转交 explorer）"
         );
@@ -1731,8 +1737,10 @@ mod tests {
             Action::Launch {
                 path: "/work/src".into(),
                 args: Vec::new(),
+                working_dir: String::new(),
                 elevated: false,
                 no_console: false,
+                lnk_path: String::new(),
             }
         );
     }

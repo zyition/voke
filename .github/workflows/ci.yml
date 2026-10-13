@@ -69,7 +69,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo test
-        # 285（voke-core）+ 61（voke-sys）
+        # 295（voke-core）+ 67（voke-sys）
         run: cargo test -p voke-core -p voke-sys --all-targets
 
       - name: cargo clippy

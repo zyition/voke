@@ -3,7 +3,9 @@
 //! 窗口行为（M0 PoC 已验证 + 实测踩坑结论，见 docs/HISTORY.md）：
 //! - 创建即隐藏（`show: false`），只有热键才唤起
 //! - 唤起 = 显式 `ShowWindow(SW_SHOW)` + gpui `activate_window()` 抢前台
-//!   （`activate_window` 的一次性 placement 被 take 后就不能再靠它显示窗口）
+//!   （`activate_window` 的一次性 placement 被 take 后就不能再靠它显示窗口）。
+//!   **ShowWindow 必须在不持 gpui App 借用时调用**（会同步泵消息，持借用时
+//!   gpui 帧回调 re-enter 全部失败刷 ERROR，见 [`panel_toggle_win32`] 文档）
 //! - 失焦 / Esc = `voke_sys::hide_window`（gpui 的 `App::hide()` 是空实现）
 //!
 //! 启动顺序：先把窗口建出来（UI 立刻可用），同时在后台线程枚举并解析开始菜单
@@ -45,8 +47,8 @@ pub struct ShellState {
     /// 已启动的热键线程句柄；设置页改键时用它当场重注册。
     #[cfg(windows)]
     pub hotkey: Option<voke_sys::HotkeyHandle>,
-    /// 最近一次打开的设置窗口。设置窗口「关闭 = 隐藏、复用」（见
-    /// `settings::open`），不会真正销毁，所以这个句柄一直有效。
+    /// 最近一次打开的设置窗口。设置窗口「关闭 = 程序化销毁」（见
+    /// `settings::open`），关闭时立即置 `None`；这个句柄只在窗口存活期间有效。
     pub settings_window: Option<AnyWindowHandle>,
 }
 
@@ -159,6 +161,10 @@ impl Shell {
     }
 
     /// 强制重跑当前查询（应用列表热更新后调用，让面板立刻反映新数据）。
+    ///
+    /// 只在**数据真变了**时由索引线程的消费循环触发；面板重新显示（热键唤起）
+    /// 不走这里——那件事不等于"用户修改了输入"（见 `search::SearchView::refresh`
+    /// 的护栏：重掷类插件在热更新时也不重跑）。
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.view.update(cx, |view, cx| view.refresh(cx));
     }
@@ -208,39 +214,47 @@ impl Render for Shell {
     }
 }
 
-/// 切换搜索面板的显隐（热键与托盘「显示面板」共用）。
+/// TogglePanel 的 **Win32 半段**：决策显隐并执行 `ShowWindow` / `HideWindow`。
 ///
-/// 可见且在前台 → 隐藏；否则 → 唤起。
+/// 必须在**不持有 gpui App 借用**的上下文里调用（命令消费循环的 `cx.update`
+/// 之外）：ShowWindow/HideWindow 是同步调用，会立刻泵一串窗口消息
+/// （WM_SHOWWINDOW / WM_SIZE / WM_PAINT …），gpui-pre 的帧回调与尺寸回调就在
+/// 这个泵里 re-enter，并经 `AsyncApp` 走 `AppCell::try_borrow_mut` 取 App——
+/// 若此刻 App 的可变借用还在（旧实现把整段唤起塞在 `cx.update` 里），这些
+/// 更新全部失败，每次唤起刷 4~6 条 ERROR「RefCell already borrowed」（来源：
+/// gpui-pre `window.rs` 的 `on_request_frame` / `on_resize` 等 `.log_err()`）。
+/// 提前到无借用处执行后，泵进来的 WM_PAINT 由 gpui 正常取到借用、正常画帧。
 ///
-/// **唤起必须两步**（详见模块头部的踩坑结论）：先显式 `ShowWindow(SW_SHOW)`——
-/// `Window::activate_window()` 内部那个补 placement 的流程是一次性的，窗口被
-/// `SW_HIDE` 之后它不会再显示窗口——再 `activate_window()` 抢前台。
-fn toggle_panel(cx: &mut App, hwnd: Option<isize>, handle: AnyWindowHandle) {
-    let Some(hwnd) = hwnd else {
-        log::error!("无 HWND，无法切换面板");
-        return;
-    };
+/// 返回 `true` 表示刚执行了唤起（显示），调用方需再跑 gpui 半段
+/// [`show_panel`] 激活窗口；`false` 表示已隐藏或无需后续。
+fn panel_toggle_win32(hwnd: isize) -> bool {
     if voke_sys::is_window_visible(hwnd) && voke_sys::is_foreground_window(hwnd) {
         log::info!("切换面板 -> 窗口在前台，隐藏");
         voke_sys::hide_window(hwnd);
-        return;
+        return false;
     }
     log::info!("切换面板 -> 唤起窗口");
-    show_panel(cx, hwnd, handle);
+    voke_sys::show_window(hwnd);
+    true
 }
 
-/// **无条件**唤起面板（显示 + 抢前台 + 触发扫描），不做 toggle 判断。
+/// **gpui 半段**唤起面板（抢前台 + 触发扫描），不做 toggle 判断。
 ///
-/// 托盘「保持唤醒」条目要的是"保证面板可见再进插件"——若走 [`toggle_panel`]，
-/// 面板恰好在前台时会被隐藏，插件就进不去了。其余路径（热键 / 托盘「显示面板」）
-/// 仍需 toggle，故各自保留判断、只共用这一段"唤起"动作。
-fn show_panel(cx: &mut App, hwnd: isize, handle: AnyWindowHandle) {
+/// 前置条件：Win32 侧的 `ShowWindow(SW_SHOW)` 已由 [`panel_toggle_win32`]（或
+/// 消费循环的等价代码）在**不持 App 借用**时执行完毕。显式 ShowWindow 这一步
+/// 不能省——`Window::activate_window()` 内部那个补 placement 的流程是一次性的，
+/// 窗口被 `SW_HIDE` 之后它不会再显示窗口（详见模块头部踩坑结论与
+/// docs/HISTORY.md）——只是挪到了消费循环的无借用阶段，原因见
+/// [`panel_toggle_win32`] 的文档。
+///
+/// 托盘「保持唤醒」条目要的是"保证面板可见再进插件"——若走 toggle，面板恰好
+/// 在前台时会被隐藏，插件就进不去了。故 Win32 显示对这条路径是**无条件**的。
+fn show_panel(cx: &mut App, handle: AnyWindowHandle) {
     // 首次唤起时打一条内存快照（后续唤起不再刷屏）：用于区分「面板首次渲染
     // 带来的常驻增量」与「启动即常驻」。
     if !PANEL_SHOWN_ONCE.swap(true, Ordering::Relaxed) {
         voke_sys::log_snapshot("面板首次唤起");
     }
-    voke_sys::show_window(hwnd);
     if let Err(err) = handle.update(cx, |_root, window, _cx| window.activate_window()) {
         log::error!("唤起窗口失败: {err}");
     }
@@ -394,6 +408,13 @@ fn main() {
     // Windows GUI 子系统下 stderr 不可见，日志写文件便于事后查看。
     init_logging();
     log::info!("voke 启动，PID={}", std::process::id());
+
+    // 启动早期纠正自身工作目录：开机自启（`HKCU\…\Run`）不指定工作目录，进程会
+    // 继承到 `C:\Windows\System32`；任何继承 cwd 启动的子进程都会把它当起始目录，
+    // 语义不合理，也曾是排查终端 profile 启动异常时的可疑变量。必须在日志初始化
+    // 之后（本函数打的 info 才进日志）、且在任何相对路径被解析之前调用；用户从
+    // 终端 / 资源管理器显式启动时的 cwd 是本人意图，这里不会动它。
+    voke_sys::fix_own_cwd();
     // 第一基线：日志系统之外几乎还没分配任何东西。
     voke_sys::log_snapshot("进程启动");
 
@@ -436,12 +457,37 @@ fn main() {
 
             // 全局 window-closed 观察者，保留用于诊断（7899651 加的内存快照）。
             //
-            // 注意：设置窗口已改成「关闭 = 隐藏、复用」（见 `settings::open`），
-            // 不再走真正的销毁路径，所以这条日志正常不会再触发；留着是为了万一
-            // 将来又有窗口被真正关闭时仍能打出一条内存快照，且无副作用。
+            // 设置窗口已改成「关闭 = 程序化销毁」（见 `settings::open`），所以
+            // 每关一次设置窗口这里都会触发一次、打出一条「窗口已关闭」内存快照
+            // ——正好用来验证关闭后常驻内存回落到面板基线（真机 20 轮验证清单的
+            // 依据之一）。搜索面板窗只隐藏不销毁，不会触发本条。
             // `Subscription` 必须留着才持续有效——detach 让它存活到进程结束。
-            cx.on_window_closed(|_cx, _id| voke_sys::log_snapshot("窗口已关闭"))
-                .detach();
+            //
+            // **注意时序**：本回调在 gpui `update_window_erased` 的 trail 摘除
+            // （app.rs:3055）里同步触发，此刻平台窗的 `Drop` 任务（RevokeDragDrop
+            // → DestroyWindow → DirectXRenderer/纹理随 WindowsWindowInner 释放，
+            // gpui-pre-windows window.rs:610-631）**尚未执行**，快照里还含着整套
+            // renderer（约 26.5MB）——这条曲线「不降」不代表泄漏。所以下面再补
+            // +2s / +10s 两个延迟快照：renderer 释放走的是主线程执行器的异步任务，
+            // 毫秒级完成后 +2s 必然已落下，回落应在这两条里显形。
+            cx.on_window_closed(|cx, _id| {
+                voke_sys::log_snapshot("窗口已关闭");
+                let executor = cx.background_executor().clone();
+                let timer_executor = executor.clone();
+                executor
+                    .spawn(async move {
+                        timer_executor
+                            .timer(std::time::Duration::from_secs(2))
+                            .await;
+                        voke_sys::log_snapshot("窗口已关闭 +2s（renderer 应已随 Drop 任务释放）");
+                        timer_executor
+                            .timer(std::time::Duration::from_secs(8))
+                            .await;
+                        voke_sys::log_snapshot("窗口已关闭 +10s（观察残余是否继续回落）");
+                    })
+                    .detach();
+            })
+            .detach();
 
             let hwnd: Option<isize> = shell.read(cx).hwnd;
             let shell_handle = shell.clone();
@@ -483,21 +529,53 @@ fn main() {
                 let cx = cx.clone();
                 async move {
                     while let Ok(command) = cmd_rx.recv().await {
-                        // UI 操作必须回主线程：`ShellCommand` 是从热键线程 / 托盘
-                        // 线程 / 主题监听线程投过来的。
-                        cx.update(|cx: &mut App| match command {
-                            ShellCommand::TogglePanel => toggle_panel(cx, hwnd, handle),
-                            ShellCommand::ShowPanel => match hwnd {
-                                // 二次启动激活：固定显示 + 抢前台，不做 toggle。
-                                Some(hwnd) => show_panel(cx, hwnd, handle),
-                                None => log::error!("无 HWND，无法响应二次启动激活"),
+                        // ── 阶段一：Win32 显隐（**必须在不持 App 借用时执行**）──
+                        // ShowWindow/HideWindow 同步泵窗口消息，gpui 的帧/尺寸回调
+                        // 在泵里 re-enter 并经 AsyncApp `try_borrow_mut` 取 App；若
+                        // 持着 `cx.update` 的可变借用，这些更新必然失败，每次唤起刷
+                        // 4~6 条 ERROR「RefCell already borrowed」（详见
+                        // [`panel_toggle_win32`] 文档）。显隐动作故此提到 `cx.update`
+                        // 外面做：泵消息时 App 无借用，re-enter 的帧回调正常完成。
+                        let wake_hwnd = match command {
+                            ShellCommand::TogglePanel => match hwnd {
+                                Some(h) => panel_toggle_win32(h).then_some(h),
+                                None => {
+                                    log::error!("无 HWND，无法切换面板");
+                                    None
+                                }
                             },
+                            // 二次启动激活 / 托盘直达保持唤醒：固定显示，不做 toggle。
+                            ShellCommand::ShowPanel | ShellCommand::OpenAwake => match hwnd {
+                                Some(h) => {
+                                    voke_sys::show_window(h);
+                                    Some(h)
+                                }
+                                None => {
+                                    if matches!(command, ShellCommand::ShowPanel) {
+                                        log::error!("无 HWND，无法响应二次启动激活");
+                                    } else {
+                                        log::error!("无 HWND，无法直达保持唤醒插件");
+                                    }
+                                    None
+                                }
+                            },
+                            _ => None,
+                        };
+
+                        // ── 阶段二：gpui 侧操作（UI 操作必须回主线程）──
+                        // `ShellCommand` 是从热键线程 / 托盘线程 / 主题监听线程投过来的。
+                        cx.update(|cx: &mut App| match command {
+                            ShellCommand::TogglePanel | ShellCommand::ShowPanel => {
+                                if wake_hwnd.is_some() {
+                                    show_panel(cx, handle);
+                                }
+                            }
                             ShellCommand::OpenAwake => {
-                                // 先显示面板（不做 toggle，保证可见），再激活插件：
-                                // 激活路径依赖面板可见时机，与热键唤起后重查同一套时序。
-                                match hwnd {
-                                    Some(hwnd) => show_panel(cx, hwnd, handle),
-                                    None => log::error!("无 HWND，无法直达保持唤醒插件"),
+                                // 先显示面板（不做 toggle，保证可见，阶段一已完成
+                                // Win32 显示），再激活插件：激活路径依赖面板可见时机，
+                                // 与热键唤起后重查同一套时序。
+                                if wake_hwnd.is_some() {
+                                    show_panel(cx, handle);
                                 }
                                 // `handle.update` 的根是类型擦除的 `AnyView`，拿不到
                                 // Shell 的方法；用留存的实体句柄再 update 一层拿到 `Shell`，
@@ -525,7 +603,8 @@ fn main() {
             // **触发模型：启动即索引一次 + 面板唤起时触发重扫 + 扫描线程内 60s 防抖**
             // （用户拍板，替代原 30s 周期轮询）：
             // - voke 启动后在后台索引一次（不等第一次拉起面板），建好初始缓存；
-            // - 之后**没有后台定时器**：只有面板被唤起（热键/托盘走 [`toggle_panel`]、
+            // - 之后**没有后台定时器**：只有面板被唤起（热键/托盘走
+            //   [`panel_toggle_win32`] + [`show_panel`]、
             //   点击任务栏图标走 `search` 的窗口激活观察者）时才经 [`request_apps_scan`]
             //   投一个请求；
             // - 扫描线程记「上次完成时刻」，[`APPS_SCAN_DEBOUNCE`] 内的重复请求直接
@@ -886,6 +965,13 @@ fn awake_selftest(cx: &mut App) -> usize {
 /// 进程工作目录：开机自启动时工作目录由系统决定（常见 `C:\Windows\system32`），
 /// 那里既不该写也没权限写——以前是直接 `File::create("voke.log").expect(...)`，
 /// 自启动场景下必然 panic。拿不到专用目录时降级回工作目录而不是让进程起不来。
+///
+/// **跨启动追加 + 行数上限滚动删除**：文件以追加模式打开（`create + append
+/// + read`，不再每次启动 `File::create` 截断清空——`.read(true)` 是删头批
+/// 读回全文所需，纯 append 是 O_WRONLY），历史日志跨重启保留；总行数受
+/// `VOKE_LOG_MAX_LINES`（构建期注入，默认 9999，见 `build.rs`）控制，超限时
+/// 从头部删一批最旧的行（`max(1, N/10)`）并落一行中文标记，详见
+/// `voke_sys::logcap`。RUST_LOG 优先、缺省 Info 的逻辑不变。
 fn init_logging() {
     // env_logger 未设 RUST_LOG 时默认 Error，会吞掉 info 级日志
     // （且 log 宏惰性求值，连日志文件都不会被创建），故显式设默认级别 Info。
@@ -906,19 +992,52 @@ fn init_logging() {
         }
     }
     // 专用目录写不了（权限/环境变量缺失）时退回工作目录，再不行就没有文件日志。
-    let file = voke_sys::paths::log_path()
-        .and_then(|path| std::fs::File::create(&path).ok())
-        .or_else(|| std::fs::File::create("voke.log").ok());
-    match file {
-        Some(file) => {
+    //
+    // 追加模式打开（**不是 File::create**）：日志跨启动保留，总量交给
+    // RollingLogWriter 按行数上限从头部滚动删除。打不开 / 数既有行数失败才
+    // 退化成 stderr（Windows GUI 子系统下不可见），但进程必须继续启动——
+    // 日志不是核心功能，不该拖垮 launcher。
+    let file = open_log_file_append();
+    let max_lines = log_max_lines();
+    match file.map(|f| voke_sys::RollingLogWriter::new(f, max_lines)) {
+        Some(Ok(writer)) => {
             let _ = builder
-                .target(env_logger::Target::Pipe(Box::new(file)))
+                .target(env_logger::Target::Pipe(Box::new(writer)))
                 .try_init();
         }
-        None => {
-            // 两个位置都写不了：日志退化成 stderr（Windows GUI 子系统下不可见），
-            // 但进程必须继续启动——日志不是核心功能，不该拖垮 launcher。
+        _ => {
+            // 两个位置都写不了（或数行失败）：日志退化成 stderr，进程继续启动。
             let _ = builder.try_init();
         }
     }
+}
+
+/// 以**追加模式**打开日志文件：先试专用目录（`%APPDATA%\voke\`），再退工作目录。
+///
+/// `.read(true)` 不可省：超限删头批要读回全文数行，而纯 append 打开是
+/// O_WRONLY、读会 EBADF；O_APPEND 的「写永远追加到末尾」语义不受影响。
+fn open_log_file_append() -> Option<std::fs::File> {
+    use std::fs::OpenOptions;
+    let open = |path: &std::path::Path| {
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .read(true)
+            .open(path)
+            .ok()
+    };
+    voke_sys::paths::log_path()
+        .as_deref()
+        .and_then(open)
+        .or_else(|| open(std::path::Path::new("voke.log")))
+}
+
+/// 日志行数上限：构建期由 `build.rs` 从 `VOKE_LOG_MAX_LINES` 注入
+/// （未设/非法/为 0 默认 9999）；这里解析失败同样兜底
+/// [`voke_sys::DEFAULT_MAX_LINES`]，两处数字必须一致。
+fn log_max_lines() -> usize {
+    option_env!("VOKE_LOG_MAX_LINES")
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(voke_sys::DEFAULT_MAX_LINES)
 }

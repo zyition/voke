@@ -230,6 +230,13 @@ impl Provider for TimestampProvider {
         "输入时间戳（如 1700000000）、now 或日期（2026-10-10 12:30）"
     }
 
+    /// `now` / 日期行每次 query 都按**当前时间**换算：面板重新显示 / 热更新等
+    /// "输入没变却重跑"的路径必须跳过，否则用户刚要复制的值会被换成新的
+    /// （见 [`crate::provider::Provider::regenerates_on_query`]）。
+    fn regenerates_on_query(&self) -> bool {
+        true
+    }
+
     fn query(&self, ctx: &QueryCtx) -> BoxFuture<'static, Vec<Match>> {
         let now = self.clock.now_secs();
         let offset = (self.offset)();

@@ -281,6 +281,22 @@ pub trait Provider: Send + Sync {
         "输入查询词"
     }
 
+    /// 该插件的 query 是否**每次执行都产出新值**——同一条查询重跑一次，
+    /// 用户看到的可复制内容就被换掉（random 重掷一批新值 / uuid 生成新 v4 /
+    /// timestamp 按"现在"换算）。
+    ///
+    /// **为什么需要这个判据**（用户实测 UX）：面板重新显示 ≠ 用户修改了输入。
+    /// 对这类插件，任何"输入没变却重跑查询"的路径（窗口重新唤起、应用列表
+    /// 热更新）都会把用户刚复制/正要复制的值悄悄换掉。app 层据此在这些路径上
+    /// 跳过重跑；用户主动改输入、或显式点「重新生成」（[`crate::Action::Refresh`]）
+    /// 仍照常重算。
+    ///
+    /// 默认 `false`：确定性插件（apps / windows / base64 / calculator …）
+    /// 同输入同输出，重跑无害。会重掷的插件各自覆盖为 `true`。
+    fn regenerates_on_query(&self) -> bool {
+        false
+    }
+
     /// 异步查询。慢 provider（窗口枚举）不阻塞快 provider 的渲染。
     fn query(&self, ctx: &QueryCtx) -> BoxFuture<'static, Vec<Match>>;
 }

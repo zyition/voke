@@ -71,7 +71,7 @@ pub fn prepare_icons(entries: &mut [AppEntry]) {
                 failed += 1;
                 continue;
             };
-            let key = voke_sys::apps::icon_cache_key(&entry.name, &entry.path);
+            let key = voke_sys::apps::icon_cache_key(&entry.name, &entry.path, &spec);
             // SAFETY: 外层 with_com 已建立 COM 作用域。
             match unsafe { voke_sys::icon::extract_icon_png(&spec, &dir, &key) } {
                 Some(path) => {
@@ -133,7 +133,12 @@ pub fn prepare_window_icons(entries: &mut [voke_sys::WindowEntry]) {
             continue;
         }
         // 缓存键用进程名（而非窗口标题）：同一程序的所有窗口共享一张图标。
-        let key = voke_sys::apps::icon_cache_key(&entry.process_name, &entry.process_path);
+        // spec 就是进程 exe 路径本身（窗口图标的唯一来源）。
+        let key = voke_sys::apps::icon_cache_key(
+            &entry.process_name,
+            &entry.process_path,
+            &entry.process_path,
+        );
         let path = voke_sys::icon::icon_cache_path(&dir, &key);
         if path.is_file() {
             // 纯文件系统检查，不碰 COM。

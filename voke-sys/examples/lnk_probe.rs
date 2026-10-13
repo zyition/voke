@@ -101,7 +101,7 @@ fn main() {
             None => continue,
         };
         stats[slot].1 += 1;
-        let key = voke_sys::apps::icon_cache_key(&app.name, &app.path);
+        let key = voke_sys::apps::icon_cache_key(&app.name, &app.path, &spec);
         // SAFETY: 探针是单线程程序，with_com 提供 COM 作用域。
         let got = voke_sys::with_com(|| unsafe {
             voke_sys::icon::extract_icon_png(&spec, &icon_dir, &key)
@@ -155,6 +155,12 @@ fn print_entry(app: &voke_sys::AppEntry) {
     }
     if !app.args.is_empty() {
         println!("  args = {:?}", app.args);
+    }
+    if !app.working_dir.is_empty() {
+        println!(
+            "  cwd = {}（解析期已展开，未做存在性校验）",
+            app.working_dir
+        );
     }
 }
 

@@ -33,7 +33,7 @@ use crate::search_key::SearchKeys;
 
 /// 从系统层拿到的应用条目。
 ///
-/// 字段与 `voke_sys::AppEntry` 逐字对齐（同样 4 个字段、同样类型、同样顺序），
+/// 字段与 `voke_sys::AppEntry` 逐字对齐（同样 7 个字段、同样类型、同样顺序），
 /// 但**故意不共享类型**：core 不能依赖 sys（sys 只在 windows target 下存在，
 /// 且带 unsafe/COM）。app 层的转换是一行结构体字面量。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -47,13 +47,24 @@ pub struct AppEntry {
     /// sys 层解析期这里是"图标来源规格"；app 层把它落成 PNG 后**写回真实文件路径**
     /// （见 `voke-app/src/main.rs` 的 `prepare_icons`），此后它才对 UI 有意义。
     pub icon: String,
-    /// 命令行参数。
+    /// 命令行参数（sys 层解析期已做环境变量展开）。
     pub args: Vec<String>,
+    /// 子进程工作目录（`.lnk` 的"起始位置"，sys 层解析期已展开，未校验存在）。
+    /// 空串 = 未声明，启动时继承默认。与 `Action::Launch::working_dir` 同语义。
+    pub working_dir: String,
     /// MSIX/Store 应用的 AUMID（非 MSIX 条目为空串）。
     ///
     /// 与 `voke_sys::AppEntry::app_id` 逐字对齐；`path` 会带 `msix://` 前缀，
     /// 这个字段留的是裸值，便于日志与去重规则（"是否真 MSIX 包"看它有没有 `!`）。
     pub app_id: String,
+    /// 该条目来自哪个 `.lnk`（**快捷方式本体路径**；非 lnk 条目为空串）。
+    ///
+    /// 主流启动器（PowerToys Run / Flow）把 `.lnk` 本体交 shell 执行（双击同款：
+    /// shell 链接处理器负责目标解析 / 参数 / 起始位置 / 环境变量展开）。非空时
+    /// dispatcher 以它为 `ShellExecuteExW` 的 `lpFile`，忽略 `path`/`args`/
+    /// `working_dir`（那些是解析期展开值，只供副标题 / 图标 / 日志用）。
+    /// 详见 [`crate::action::Action::Launch::lnk_path`]。
+    pub lnk_path: String,
 }
 
 /// 带搜索键的条目：索引期一次生成，查询期只读。
@@ -126,10 +137,13 @@ impl AppsProvider {
 
     /// 把一条索引条目变成 [`Match`]。
     ///
-    /// 动作在 query 阶段就定死为 `Launch { path, args, elevated: false }`
+    /// 动作在 query 阶段就定死为 `Launch { path, args, lnk_path, elevated: false }`
     /// （§3 的"provider 在查询期确定动作"）。`elevated` 恒为 false ——
     /// Ctrl+Shift+Enter 的管理员启动由 app 层在执行时改写这个字段，
     /// 不需要 provider 感知修饰键（provider 拿不到键盘状态）。
+    ///
+    /// `.lnk` 条目带 `lnk_path`：dispatcher 据此把快捷方式本体交 shell 执行
+    /// （双击同款），不再解析直启——见 [`crate::action::Action::launch_lnk`]。
     fn to_match(&self, app: &IndexedApp, score: f32) -> Match {
         Match {
             provider_id: Self::ID.to_string(),
@@ -143,10 +157,15 @@ impl AppsProvider {
             action: Action::Launch {
                 path: app.entry.path.clone(),
                 args: app.entry.args.clone(),
+                // 起始位置原样透传（解析期已展开）；展开后是否真实存在由
+                // dispatcher 在启动那一刻校验（不存在则不设 cwd）。
+                working_dir: app.entry.working_dir.clone(),
                 elevated: false,
                 // apps 插件启动的是应用自身（含命令提示符/PowerShell/终端），
                 // 窗口该有就有，**不能**隐藏。
                 no_console: false,
+                // `.lnk` 条目：本体路径随动作带下去，dispatcher 走 shell 执行。
+                lnk_path: app.entry.lnk_path.clone(),
             },
             score,
             // 应用行：Enter / 点击都是启动。
@@ -248,7 +267,9 @@ mod tests {
             path: path.to_string(),
             icon: String::new(),
             args: Vec::new(),
+            working_dir: String::new(),
             app_id: String::new(),
+            lnk_path: String::new(),
         }
     }
 
@@ -269,7 +290,9 @@ mod tests {
                 path: r"C:\Program Files\WindowsApps\wt.exe".into(),
                 icon: String::new(),
                 args: vec!["-p".into(), "Ubuntu".into()],
+                working_dir: String::new(),
                 app_id: String::new(),
+                lnk_path: String::new(),
             },
         ])
     }
@@ -395,8 +418,10 @@ mod tests {
             Action::Launch {
                 path: r"C:\Program Files\WindowsApps\wt.exe".to_string(),
                 args: vec!["-p".to_string(), "Ubuntu".to_string()],
+                working_dir: String::new(),
                 elevated: false,
                 no_console: false,
+                lnk_path: String::new(),
             }
         );
     }
@@ -410,8 +435,40 @@ mod tests {
             Action::Launch {
                 path: r"C:\Program Files\Tencent\WeChat\WeChat.exe".to_string(),
                 args: vec![],
+                working_dir: String::new(),
                 elevated: false,
                 no_console: false,
+                lnk_path: String::new(),
+            }
+        );
+    }
+
+    /// `.lnk` 条目：动作带上 lnk 本体路径，dispatcher 据此走 shell 执行
+    /// （解析出的 target/args 仍保留在动作里，供副标题与日志用）。
+    #[test]
+    fn lnk_entries_carry_the_shortcut_path_in_the_action() {
+        let p = AppsProvider::new(vec![AppEntry {
+            name: "Alacritty".into(),
+            path: r"C:\Users\x\scoop\apps\alacritty\0.17.0\alacritty.exe".into(),
+            icon: String::new(),
+            args: vec!["--working-directory".into(), r"C:\Users\x".into()],
+            working_dir: r"C:\Users\x\scoop\apps\alacritty\0.17.0".into(),
+            app_id: String::new(),
+            lnk_path: r"C:\Users\x\AppData\Roaming\Microsoft\Windows\Start Menu\Alacritty.lnk"
+                .into(),
+        }]);
+        let hits = query(&p, "alacritty");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0].action,
+            Action::Launch {
+                path: r"C:\Users\x\scoop\apps\alacritty\0.17.0\alacritty.exe".to_string(),
+                args: vec!["--working-directory".into(), r"C:\Users\x".into()],
+                working_dir: r"C:\Users\x\scoop\apps\alacritty\0.17.0".to_string(),
+                elevated: false,
+                no_console: false,
+                lnk_path: r"C:\Users\x\AppData\Roaming\Microsoft\Windows\Start Menu\Alacritty.lnk"
+                    .to_string(),
             }
         );
     }
@@ -470,7 +527,9 @@ mod tests {
                 path: r"C:\a.exe".into(),
                 icon: r"C:\cache\icons\a.png".into(),
                 args: vec![],
+                working_dir: String::new(),
                 app_id: String::new(),
+                lnk_path: String::new(),
             },
             entry("无图标", r"C:\b.exe"),
         ]);
@@ -493,7 +552,9 @@ mod tests {
             path: "msix://Microsoft.WindowsTerminal_8wekyb3d8bbwe!App".into(),
             icon: r"C:\cache\icons\wt.png".into(),
             args: vec![],
+            working_dir: String::new(),
             app_id: "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App".into(),
+            lnk_path: String::new(),
         }]);
         let hits = query(&p, "终端");
         assert_eq!(hits.len(), 1);
@@ -502,8 +563,10 @@ mod tests {
             Action::Launch {
                 path: "msix://Microsoft.WindowsTerminal_8wekyb3d8bbwe!App".to_string(),
                 args: vec![],
+                working_dir: String::new(),
                 elevated: false,
                 no_console: false,
+                lnk_path: String::new(),
             },
             "dispatcher 要靠 msix:// 识别并走 shell:AppsFolder 启动"
         );

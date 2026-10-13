@@ -69,8 +69,13 @@ cargo clippy -p voke-core -p voke-sys -p voke-app --all-targets        # 新代�
   （`voke-sys/src/single_instance.rs`）。
 - 热键线程：Request/Reply 协议，改键不重启线程（`voke-sys/src/hotkey.rs`）。
 - 托盘：子类化 `WM_INITMENUPOPUP`，在菜单弹出前刷新 awake 条目（`voke-sys/src/tray.rs`）。
-- 设置窗「关闭 = 隐藏、复用」，规避 gpui 拖放目标泄漏（`voke-app/src/settings.rs`）。
+- 设置窗「关闭 = 程序化销毁」（Zed 主窗同款姿势），回收 ~26.5MB；gpui 契约与源码位置见 `voke-app/src/settings.rs` 注册处长注释与 `docs/HISTORY.md` 第 6 节。
 - 应用列表：唤起触发扫描 + 60s 防抖；窗口列表每次查询实时枚举（`voke-app/src/main.rs`）。
+- 日志容量：跨启动**追加**不清空；行数达上限时从**头部删一批**最旧的行
+  （`max(1, N/10)`，默认 N=9999 → 100 行）并落一行中文标记行（计入行数）。
+  上限由 `VOKE_LOG_MAX_LINES` 构建期注入（`VOKE_LOG_MAX_LINES=20000 bash
+  packaging/build-installer.sh` 覆盖），逻辑与单测在 `voke-sys/src/logcap.rs`
+  （放 voke-sys 是因为 voke-app 测试在 Linux 跑不了）。
 
 ## AI skill 约定（面向 AI agent）
 
@@ -80,7 +85,7 @@ cargo clippy -p voke-core -p voke-sys -p voke-app --all-targets        # 新代�
 
 ## 当前遗留 / 已知问题（详见 `docs/KNOWN-ISSUES.md` 与 `docs/BACKLOG.md`）
 
-- gpui-pre-windows 拖放目标泄漏：上游 issue 文稿待写；本仓用「设置窗隐藏复用」止血，
+- gpui-pre-windows 拖放目标泄漏：上游 issue 文稿待写；本仓用「设置窗程序化销毁」绕开（HWND 存活期内完成 RevokeDragDrop），上游 bug 仍在。
   用户**拒绝** vendor/patch 上游。
 - 设置页 Group / Page 标题层级受 gpui-component 限制，无法自定义（未决策）。
 - 默认热键 `alt+space` 仅对**全新配置**生效，不迁移老配置（预期行为，非 bug）。

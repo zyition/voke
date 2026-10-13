@@ -722,7 +722,9 @@ mod tests {
             path: r"C:\WeChat.exe".into(),
             icon: String::new(),
             args: Vec::new(),
+            working_dir: String::new(),
             app_id: String::new(),
+            lnk_path: String::new(),
         }]);
         let engine = QueryEngine::new(vec![Box::new(apps), CalculatorProvider::boxed()]);
 

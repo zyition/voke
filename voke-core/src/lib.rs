@@ -50,7 +50,9 @@ pub use matcher::{MatchScore, score_entries, score_entry};
 pub use provider::{Interact, Match, Provider, ProviderConfig, QueryCtx};
 pub use random::RandomProvider;
 pub use search_key::SearchKeys;
-pub use terminal::{ProfileFetcher, TerminalProfile, TerminalProvider, profiles_from_settings};
+pub use terminal::{
+    ProfileFetcher, SettingsSource, TerminalProfile, TerminalProvider, profiles_from_settings,
+};
 pub use timestamp::TimestampProvider;
 pub use uuid::UuidProvider;
 pub use windows::{WindowEntry, WindowFetcher, WindowsProvider};

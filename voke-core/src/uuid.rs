@@ -101,6 +101,12 @@ impl Provider for UuidProvider {
         "生成 UUID，输入个数可批量如 3"
     }
 
+    /// 每次 query 都生成新 v4：面板重新显示 / 热更新等"输入没变却重跑"的
+    /// 路径必须跳过（见 [`crate::provider::Provider::regenerates_on_query`]）。
+    fn regenerates_on_query(&self) -> bool {
+        true
+    }
+
     fn query(&self, ctx: &QueryCtx) -> BoxFuture<'static, Vec<Match>> {
         let query = ctx.query.trim();
         let count = requested_count(query);

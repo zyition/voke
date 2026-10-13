@@ -31,6 +31,14 @@
 //!
 //! 所有字段都是**受控值**（get 闭包读的还是那份全局配置），所以"不写入"就等价于
 //! "界面回弹"——不需要在 UI 里额外做撤销。
+//!
+//! ## 窗口生命周期：关闭 = 程序化销毁
+//!
+//! 设置窗**关闭即程序化销毁**（Zed 主窗同款姿势），不复用、不常驻：关闭时回收
+//! 整套 gpui 窗口资源（880×600 逻辑像素 @125% 缩放下 8 纹理 ≈ 26.4MB + 图集，
+//! 实测 26.5MB）。为什么必须走这条路、为什么必须 `return false` +
+//! `remove_window()`，见 [`open`] 里 `on_window_should_close` 注册处的长注释
+//! （含 gpui 源码逐行位置）。
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::kbd::Kbd;
@@ -301,20 +309,24 @@ impl Render for SettingsView {
 
 /// 打开设置窗口；已经开着就把它显示并唤到前台（幂等）。
 ///
-/// 托盘菜单、`Ctrl+,`、以及将来的其它入口都走这一个函数，所以"只开一个设置
+/// 托盘菜单、`Ctrl+,`、以及将来的其它入口都走这一个函数，所以"同时只开一个设置
 /// 窗口"这条约束只在这里实现一次。
 ///
-/// 设置窗口**关闭即隐藏、复用**（见下面 `open_window` 构建闭包里注册的
-/// `on_window_should_close`），所以窗口句柄会一直有效；幂等分支只是把它重新显示出来。
+/// 设置窗口**关闭即程序化销毁**（见下面 `open_window` 构建闭包里注册的
+/// `on_window_should_close`），不常驻内存。因此下面的幂等分支只会命中两种
+/// 情况：短时间内二次打开（上一个窗口还没关掉）的竞态，以及句柄意外失效时的
+/// 自愈（`handle.update` 失败 → 走创建分支）。
 pub fn open(cx: &mut App) {
     let existing: Option<AnyWindowHandle> = cx.global::<ShellState>().settings_window;
     if let Some(handle) = existing
         && handle
             .update(cx, |_root, window, _cx| {
-                // 复用隐藏窗口时**不能只** `activate_window()`：它内部那次补
+                // 复用仍活着的窗口时**不能只** `activate_window()`：它内部那次补
                 // `initial_placement`（隐含显示）的流程是一次性 Cell，被 take 过
-                // 就没了，`SW_HIDE` 之后再 activate 救不回隐藏窗口。必须先显式
-                // `ShowWindow(SW_SHOW)`（与 `main.rs` 面板 toggle 同一套做法）。
+                // 就没了，对不可见窗口只剩 SetFocus/SetForegroundWindow、救不回来。
+                // 所以沿用与 `main.rs` 面板 toggle 同一套做法：先显式
+                // `ShowWindow(SW_SHOW)` 再 activate（窗口本就可见时前者是空操作，
+                // 但路径一致、无需分支）。
                 if let Some(hwnd) = crate::Shell::hwnd_of(window) {
                     voke_sys::show_window(hwnd);
                 }
@@ -348,29 +360,57 @@ pub fn open(cx: &mut App) {
     match gpui_kit::open_window(options, cx, |window, cx| {
         let view = cx.new(|cx| SettingsView::new(window, cx));
 
-        // 关闭 = 隐藏、复用（方案 A 止血），不开真正的销毁路径。
+        // 关闭 = 程序化销毁（Zed 主窗同款姿势：`zed.rs:493-500` 拦 WM_CLOSE 返
+        // false → `multi_workspace.rs:555-581` 里 `window.remove_window()`），
+        // 不开「隐藏复用」的倒车。
         //
-        // 根因：gpui-pre-windows 的拖放目标泄漏——`register_drag_drop`
-        // （platform window.rs:1511）把 `Rc<WindowsWindowInner>` 存进 OLE
-        // `IDropTarget`，而 `RevokeDragDrop` 被放在 `Drop for WindowsWindow` 的
-        // 延迟异步任务里（window.rs:625），执行时 HWND 已销毁必然失败，于是每关一次
-        // 设置窗口就永久滞留一整套 `DirectXRenderer`（3 缓冲 swapchain + 4×MSAA
-        // 纹理 + 图集 ≈ 8·W·H·4 + 5MB，实测 50MB+）。
+        // 根因（gpui-pre-windows 拖放目标泄漏）：`register_drag_drop`
+        // （platform window.rs:571 调用、1511 函数体）把 `Rc<WindowsWindowInner>`
+        // 存进 OLE `IDropTarget`，而 `RevokeDragDrop` 被放在 `Drop for
+        // WindowsWindow` 的延迟异步任务里（platform window.rs:610-631），执行时
+        // HWND 已销毁必然失败，于是每关一次设置窗口就永久滞留一整套
+        // `DirectXRenderer`（3 缓冲 swapchain + 4×MSAA 纹理 + 图集 ≈ 8·W·H·4 +
+        // 5MB，880×600 @125% 缩放实测 26.5MB）。程序化销毁让 HWND 在 Drop 任务
+        // 执行时仍然存活，`RevokeDragDrop` 成功，整套资源正常回收。
         //
-        // 返回 `false` 阻止真正关闭（平台侧 `events.rs:336 handle_close_msg` 会把
-        // 返回 false 的 WM_CLOSE 吞掉），改为 `SW_HIDE` 隐藏；下次 `open()` 复用
-        // 同一个窗口，彻底绕开这条销毁路径。
+        // 契约（gpui-pre-0.3.8，本机 registry 源码逐行核实）：
+        // - 本回调**嵌套在 `update_window_erased` 内**运行（app.rs:3020-3078）：
+        //   窗口被 `take` 出 map → 跑闭包 → `trail` 检查 `removed`，为真则同步
+        //   摘除并 drop。所以回调里**不能**调 `cx.update_window(同一 handle)`
+        //   （slot 已 take，嵌套调用拿到 None、静默失败），只能用闭包参数的
+        //   `window.remove_window()`（window.rs:2323-2326，只置 `removed = true`），
+        //   由外层 `trail` 落地。
+        // - **必须返回 false**：平台侧 `handle_close_msg`（gpui-pre-windows
+        //   events.rs:336-341）对 false 吞掉 WM_CLOSE；返 true → DefWindowProc
+        //   **同步** DestroyWindow → Drop 任务后跑 → RevokeDragDrop 拿到死
+        //   HWND → 重演泄漏。false 把 HWND 留给 Drop 任务，在存活期内完成
+        //   RevokeDragDrop + DestroyWindow。
         //
-        // 若此刻正在录制热键，先退出录制并恢复原热键——否则窗口一关，旧热键就
-        // 永久停在注销态了。
-        let hwnd = crate::Shell::hwnd_of(window);
-        let view_for_close = view.clone();
-        window.on_window_should_close(cx, move |_window, cx| {
-            view_for_close.update(cx, |view, cx| view.abort_recording(cx));
-            if let Some(hwnd) = hwnd {
-                log::info!("设置窗口 -> 隐藏复用（阻止 WM_CLOSE 销毁）");
-                voke_sys::hide_window(hwnd);
+        // 重入守卫：从闭包返回到 Drop 任务真正销毁 HWND 有毫秒级间隙，期间第二个
+        // WM_CLOSE 一律吞掉返 false——绝不放行 DefWindowProc（会抢在 Drop 任务前
+        // 销毁 HWND）。
+        //
+        // 捕获用弱引用：窗口既然真的销毁，没必要让平台回调盒强持根视图；
+        // upgrade 失败（视图已不在）就跳过 abort_recording。Esc / Alt+F4 同样
+        // 产生 WM_CLOSE，走同一回调，行为一致。
+        let closing = voke_sys::CloseGuard::new();
+        let view_for_close = view.downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            if !closing.enter() {
+                return false;
             }
+
+            // 录制中的热键先退出并恢复原热键——必须赶在 remove_window 之前，
+            // 否则窗口一关，旧热键就永久停在注销态、用户再也唤不出面板。
+            if let Some(view) = view_for_close.upgrade() {
+                view.update(cx, |view, cx| view.abort_recording(cx));
+            }
+
+            window.remove_window();
+            // 句柄立即置空，下次 open() 走创建分支；即使漏了这步，复用分支的
+            // `handle.update` 也会因窗口已被 trail 摘除而失败自愈（双保险）。
+            cx.global_mut::<ShellState>().settings_window = None;
+            log::info!("设置窗口 -> 程序化销毁（HWND 存活期内 RevokeDragDrop）");
             false
         });
 
@@ -379,8 +419,10 @@ pub fn open(cx: &mut App) {
         Ok((handle, _view)) => {
             cx.global_mut::<ShellState>().settings_window = Some(handle);
             log::info!("设置窗口已打开");
-            // 量化「多一个 gpui 窗口」带来的常驻增量。窗口现在「关闭 = 隐藏、复用」，
-            // 不会再销毁，所以这条快照只会出现一次（首次打开）。
+            // 量化「多一个 gpui 窗口」带来的常驻增量。窗口现在「关闭 = 程序化
+            // 销毁」、每次开关都重建，所以这条快照**每轮开关都应出现一次**
+            // （真机 20 轮验证清单的依据）；关闭后的回落由 main.rs 的
+            // `on_window_closed` 快照「窗口已关闭」捕捉。
             voke_sys::log_snapshot("设置窗口已打开");
         }
         Err(err) => log::error!("打开设置窗口失败：{err}"),

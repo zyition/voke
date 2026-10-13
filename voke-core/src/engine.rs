@@ -362,6 +362,18 @@ impl QueryEngine {
         self.enabled_providers().find(|p| p.id() == id)
     }
 
+    /// 该插件（按 id）的查询是否**每次执行都产出新值**（random / uuid /
+    /// timestamp，见 [`Provider::regenerates_on_query`]）。
+    ///
+    /// app 层在"输入没变却想重跑查询"的路径（应用列表热更新）上用它决定要不要
+    /// 跳过：重掷类插件一跳，用户已复制/正要复制的值才不会被悄悄换掉。
+    ///
+    /// 插件不存在或已禁用时返回 `false`——那种情况下根本没有可被换掉的值，
+    /// 按"可以重跑"处理。
+    pub fn plugin_regenerates_on_query(&self, id: &str) -> bool {
+        self.provider(id).is_some_and(|p| p.regenerates_on_query())
+    }
+
     /// 第一个专属前缀命中 `query` 的启用 provider，与 [`QueryEngine::route`] 同一判据。
     ///
     /// app 层用它把"用户直接打了前缀"翻译成"现在在哪个插件里"。
@@ -1401,6 +1413,63 @@ mod tests {
                 p.id()
             );
         }
+    }
+
+    /// 「唤起不重算」判据表（用户实测 UX）：10 个真实 provider 里哪些"同一条
+    /// 查询重跑一次就把用户可复制的内容换掉"。random / uuid / timestamp 为
+    /// true，其余（含确定性的 base64 / calculator）为 false。app 层靠它在
+    /// 应用列表热更新等"输入没变却重跑"的路径上跳过重掷类插件；规则漂移
+    /// （新增插件忘了表态）立刻在这里红。
+    #[test]
+    fn plugin_regenerates_on_query_covers_all_builtin_providers() {
+        use crate::apps::AppsProvider;
+        use crate::awake::AwakeProvider;
+        use crate::base64::Base64Provider;
+        use crate::calculator::CalculatorProvider;
+        use crate::random::RandomProvider;
+        use crate::terminal::TerminalProvider;
+        use crate::timestamp::TimestampProvider;
+        use crate::uuid::UuidProvider;
+        use crate::windows::WindowsProvider;
+        use crate::workspace::WorkspaceProvider;
+        use std::sync::Arc;
+
+        let providers: Vec<Box<dyn Provider>> = vec![
+            Box::new(AppsProvider::new(vec![])),
+            Box::new(WindowsProvider::new(Arc::new(Vec::new))),
+            Box::new(AwakeProvider::new(Arc::new(|| None))),
+            Box::new(TerminalProvider::new(Arc::new(Vec::new), "")),
+            Box::new(WorkspaceProvider::new(Arc::new(Vec::new), None, None)),
+            Box::new(CalculatorProvider::new()),
+            Box::new(TimestampProvider::new()),
+            Box::new(Base64Provider::new()),
+            Box::new(UuidProvider::new()),
+            Box::new(RandomProvider::new()),
+        ];
+        let engine = QueryEngine::new(providers);
+
+        // (provider id, 该插件的查询是否每次执行都产出新值)
+        let cases: &[(&str, bool)] = &[
+            ("apps", false),
+            ("windows", false),
+            ("awake", false),
+            ("terminal", false),
+            ("workspaces", false),
+            ("calculator", false),
+            ("base64", false),
+            ("timestamp", true),
+            ("uuid", true),
+            ("random", true),
+        ];
+        for (id, expected) in cases {
+            assert_eq!(
+                engine.plugin_regenerates_on_query(id),
+                *expected,
+                "规则漂移：{id} 的重掷分类变了"
+            );
+        }
+        // 不存在的插件：没有值可被换掉，按"可以重跑"处理。
+        assert!(!engine.plugin_regenerates_on_query("nonexistent"));
     }
 
     /// 热更新用：`replace_provider` 命中同 id 时就地换、保留注册位置，数据也真的换了。

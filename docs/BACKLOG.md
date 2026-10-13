@@ -39,6 +39,16 @@
   但需 vendor / `[patch.crates-io]` 或接受「每次开设置重渲染」。*为什么*：收益需用户接受上游改动。
   *来源*：杠杆 2/3/4a。`[需用户同意]`
 
+## 性能 / 电源
+
+- **Headless 方案（gpui VSync 线程空转）——已挂起**：gpui 的 `VSyncProvider` 线程 60–120Hz
+  永久空转（`DwmFlush` 阻塞等 vsync），切 `WindowingRequest::Headless` 可连 D3D11 设备 /
+  DirectWrite / VSync 线程一起释放；但 Windows 上 headless 是单向门、切换要求零窗口（要销毁
+  面板窗，触发拖放泄漏 ~50MB/轮），净账可能为负。*为什么*：与「拒绝 vendor/patch 上游、
+  拖放泄漏只藏不毁」的立场冲突，暂不实施；其余稳态空转线程（主题轮询 / awake 等待 /
+  搜索键记忆化）均已落地，现只剩这一条。*来源*：完整评估见
+  [`notes/headless-evaluation.md`](notes/headless-evaluation.md)，重评条件见该文档 §1。`[已挂起]`
+
 ## 功能想法 / 远期
 
 - **托盘图标状态变色**（awake 激活时变色）。*为什么*：视觉反馈。*来源*：设置页设计文档已知取舍。
