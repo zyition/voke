@@ -72,14 +72,6 @@ jobs:
         # 295（voke-core）+ 67（voke-sys）
         run: cargo test -p voke-core -p voke-sys --all-targets
 
-      - name: cargo clippy
-        # 注意：**没有**加 `-D warnings`。截至落地时 HEAD 上还有 6 条存量告警
-        # （voke-core 3 条：derivable_impls / type_complexity /
-        # needless_character_iteration；voke-sys 3 条：manual char comparison /
-        # too_many_arguments / dead_code APP_DIR），加了就会让 CI 永远红。
-        # 等这 6 条清掉后，在这里补上 `-- -D warnings` 即可。
-        run: cargo clippy -p voke-core -p voke-sys --all-targets
-
   # ---------------------------------------------------------------------
   # windows：voke-app 只在 Windows 上构建，这里是唯一的编译验证点。
   # 只出 exe 并上传供人工验证，不做安装包（安装包在 release.yml 里做）。
@@ -95,6 +87,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
 
@@ -150,6 +144,14 @@ jobs:
           Write-Host "llvm-rc: $rc"
           # 把 llvm-rc 所在目录写进 GITHUB_PATH，后续构建步骤才能看见它 + 同目录的 clang。
           Split-Path $rc -Parent | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: cargo clippy（全 workspace，含 voke-app）
+        shell: pwsh
+        # 把 clippy 移进 windows build job：voke-app 只在 Windows 上构建，
+        # 之前 ubuntu 的 core/sys-only clippy 扫不到它。这里用 --workspace 覆盖
+        # 全部 crate，并用 -D warnings 让告警阻断构建（存量 6 条告警已在分支里清掉）。
+        # 与下方的 cargo build 共用同一 toolchain/target，不破坏 windows 构建。
+        run: cargo clippy --target x86_64-pc-windows-msvc --workspace --all-targets -- -D warnings
 
       - name: cargo build --release
         shell: pwsh
