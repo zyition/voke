@@ -2009,6 +2009,7 @@ pub fn routing_selftest() -> usize {
 
     // ── 2. 交互类型（方案 A 的核心不变式）──
     {
+        #[allow(clippy::type_complexity)]
         let checks: &[(&str, Option<&str>, Option<&str>, usize, usize)] = &[
             // (raw, active, sub, 期望 Execute 条数, 期望 Hint 条数)
             //

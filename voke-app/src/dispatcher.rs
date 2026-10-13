@@ -234,7 +234,7 @@ fn log_child_env_snapshot() {
     let path_has = |suffix: &str| {
         entries.iter().any(|e| {
             e.trim()
-                .trim_end_matches(|c| c == '\\' || c == '/')
+                .trim_end_matches(['\\', '/'])
                 .to_ascii_lowercase()
                 .ends_with(&suffix.to_ascii_lowercase())
         })

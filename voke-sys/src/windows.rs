@@ -116,6 +116,8 @@ pub fn is_excluded_class(class: &str) -> bool {
 ///
 /// 每一项的理由见模块文档的过滤链表格。`tool_window` / `app_window` 分别是
 /// `WS_EX_TOOLWINDOW` / `WS_EX_APPWINDOW` 是否置位。
+// 过滤判定天然就是多字段组合，拆结构体要改测试签名，故显式允许（最小改动）。
+#[allow(clippy::too_many_arguments)]
 pub fn should_include_window(
     visible: bool,
     cloaked: bool,

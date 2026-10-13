@@ -177,19 +177,6 @@ impl Shell {
         self.view
             .update(cx, |view, cx| view.activate_plugin("awake", window, cx));
     }
-
-    /// 热键唤起窗口后：确保搜索视图的输入框拿到焦点（否则用户打的第一个字会丢）。
-    ///
-    /// 拿 `Window` 只能走 `update`（见 `main` 里的热键回调），所以那个回调直接
-    /// 热键唤起窗口后：确保输入框拿到焦点（否则用户打的第一个字会丢）。
-    ///
-    /// 为什么聚焦的是**输入框自己的 focus handle**（而不是本 view 的）：
-    /// `window.handle_input(...)` 只在 `InputBaseState::focus_handle` 已聚焦时
-    /// 才注册文本输入处理器（`gpui-base` 的 `base/element.rs`），所以打字能进去
-    /// 的前提就是它是焦点。
-    fn search_input_handle(&self, cx: &App) -> gpui_kit::FocusHandle {
-        self.view.read(cx).query_input_focus_handle(cx)
-    }
 }
 
 impl Render for Shell {

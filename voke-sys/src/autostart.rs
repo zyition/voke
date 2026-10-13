@@ -122,12 +122,12 @@ fn read_value(key: HKEY) -> Option<String> {
 
 /// 把 UTF-16LE 字节（可能带结尾 NUL）解成 `String`。
 fn decode_utf16(bytes: &[u8]) -> String {
-    // `as_chunks` 直接切出 `[u8; 2]`，尾部不成对的字节被丢进 `_tail`
-    // （注册表长度算错时才会有，丢弃好过 panic）。
-    let (units, _tail) = bytes.as_chunks::<2>();
-    let units: Vec<u16> = units
-        .iter()
-        .map(|chunk| u16::from_ne_bytes(*chunk))
+    // `chunks_exact(2)` 切出成对的字节（尾部不成对的字节被丢弃，注册表长度
+    // 算错时才会有，丢弃好过 panic）。`as_chunks` 要 1.88，这里 MSRV 是 1.87，
+    // 故用更老的 `chunks_exact`。
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|chunk| u16::from_ne_bytes([chunk[0], chunk[1]]))
         .collect();
     let end = units
         .iter()
