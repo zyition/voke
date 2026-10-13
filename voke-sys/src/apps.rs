@@ -942,9 +942,9 @@ fn read_into_buffer(f: impl FnOnce(&mut [u16]) -> windows::core::Result<()>) -> 
 /// 实测（Win11）description 有两类不可信来源：
 /// - 营销文案（“轻松发现、直观显示和共享数据中的见解。”）
 /// - 本地化描述短语（Chrome 的 “访问互联网”、Edge 的 “浏览 Web”）
-/// 它们的共同特征：**和文件名/目标路径毫无字符重叠**。正常写 description 的
-/// 快捷方式（“Windows Terminal” ↔ WindowsTerminal.lnk、“Clash Party”），
-/// description 必然与文件名有词重叠。
+///   它们的共同特征：**和文件名/目标路径毫无字符重叠**。正常写 description 的
+///   快捷方式（"Windows Terminal" ↔ WindowsTerminal.lnk、"Clash Party"），
+///   description 必然与文件名有词重叠。
 ///
 /// 因此规则只有一条：description 与文件名的词（字母数字段，小写）有交集才可信，
 /// 否则一律用文件名。不设“短语可信”特例——中文无空格短语（“访问互联网”）
