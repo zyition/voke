@@ -3,6 +3,11 @@
 > 本文件由 [git-cliff](https://git-cliff.org/) 依据 Conventional Commits 自动生成
 > （分组规则见 `cliff.toml`，发版流程见 `AGENTS.md`），**请勿手工编辑**。
 
+## [0.1.3] - 2026-10-14
+
+### 缺陷修复
+
+- 安装器「立即运行」改经 explorer.exe 代启动
 ## [0.1.2] - 2026-10-13
 
 ### 缺陷修复
