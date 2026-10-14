@@ -3,11 +3,24 @@ name: ci
 on:
   push:
     branches: [main, master]
-    # release.yml 发版后会往默认分支回推一条 "docs: changelog for vX.Y.Z"，
-    # 只改 CHANGELOG.md。为这种纯文档提交重跑一遍构建是纯粹的浪费。
+    # 纯文档变更不跑 CI：release.yml 发版后会往默认分支回推一条
+    # "docs: changelog for vX.Y.Z"（只改 CHANGELOG.md），为这种提交重跑一遍
+    # 构建是纯粹的浪费；顶层 markdown（README / AGENTS / SECURITY 等）与
+    # docs/ 下的 markdown 同理。
+    # 刻意**不用** `**/*.md`：代码层的 md 后续可能用于静态模板之类的资源，
+    # 那种变更必须照常过 CI。
+    # 注意：paths-ignore 是「本次推送所有变更文件都命中忽略列表才跳过」，
+    # 代码 + 文档混改仍会正常触发。
     paths-ignore:
-      - 'CHANGELOG.md'
+      - '*.md'          # 顶层 markdown
+      - 'docs/*.md'     # docs/ 直接子级
+      - 'docs/**/*.md'  # docs/ 更深层级（与上一条合起来覆盖 docs/ 全树）
   pull_request:
+    # 只改文档的 PR 同样不需要跑构建（语义同 push）。
+    paths-ignore:
+      - '*.md'
+      - 'docs/*.md'
+      - 'docs/**/*.md'
 
 # 同一个分支 / PR 上连续推送时，掐掉还在跑的旧任务。
 concurrency:
