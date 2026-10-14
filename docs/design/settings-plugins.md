@@ -131,7 +131,8 @@ match event.keystroke.key.as_str() { "tab" => …, "up" => …, … }
 
 ## 4. 配置模型
 
-落盘：`%APPDATA%\voke\config.toml`（**必须绝对路径**——自启动时 CWD 不确定，见 §5.0）。
+落盘：`%APPDATA%\voke\config.toml`（**必须绝对路径**；启动早期 `fix_own_cwd` 已把
+System32 类异常 cwd 修正到 `%USERPROFILE%`，绝对路径为防御性兜底，见 §5.0）。
 
 ```toml
 hotkey = "ctrl+alt+space"
@@ -193,6 +194,8 @@ prefix = "="
 
 已落地：`voke-sys/src/paths.rs`（`app_dir` / `config_path` / `log_path` / `icon_dir`）、
 `main.rs init_logging()` 三级降级、`icons.rs icon_cache_dir()` 改绝对路径。
+（注：启动早期 `fix_own_cwd` 现已把 System32 类异常 cwd 在进程层面修正到
+`%USERPROFILE%`，绝对路径是防御性兜底。）
 
 **验收（已过）**：`cargo check --target x86_64-pc-windows-gnu -p voke-app --all-targets` 通过；
 `cargo test -p voke-sys` 58 绿。

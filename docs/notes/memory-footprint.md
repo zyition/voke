@@ -313,7 +313,7 @@ shader + gpui 运行时」这一整块。**建议下一步先加 3 个中间快�
 
 回归底线：`cargo test -p voke-core`、`cargo test -p voke-sys`、
 `cargo check --target x86_64-pc-windows-gnu -p voke-app --all-targets` 全绿；
-**不跑 `cargo fmt --all`**（本仓库 HEAD 非 rustfmt-clean，见 HANDOFF）。
+必须跑 `cargo fmt --all`（`-- --check` 验收；仓库已统一 rustfmt 且保持 rustfmt-clean，CI 强制，见 AGENTS.md）。
 
 ---
 
