@@ -132,11 +132,13 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 ;   * 与上面 RestartApplications=no 不矛盾：后者管的是"Setup 为替换文件而关掉的进程
 ;     是否被自动拉起"（这里保持关闭，不越俎代庖）；本段的启动是用户在完成页显式勾选的
 ;     一次性动作，两码事。
-;   * WorkingDir: 让 voke 从合理 cwd 启动（用户主目录 = Inno Setup 内建环境变量常量
-;     {%USERPROFILE}，安装时解析为目标机的 C:\Users\<name>），而非安装程序目录。
-;     否则 voke 继承安装程序 cwd，后续兜底直启 wt.exe 时会把该目录泄漏给
-;     pwsh profile（mise/scoop shim 会报错）。自启动/菜单启动无此问题。
-Filename: "{app}\voke.exe"; Description: "{cm:LaunchProgram,Voke}"; WorkingDir: "{%USERPROFILE}"; Flags: nowait postinstall skipifsilent
+; 「立即运行」经 explorer.exe 代启动：运行中的 explorer 会把请求转交给登录时
+; 创建的干净 shell 实例，由它启动 voke——父进程/令牌/job/环境与快捷方式启动
+; 同款。安装器直接拉起的子进程会继承安装器进程上下文，其后代（WT profile →
+; pwsh → scoop shim）会 junction 遍历失败（mise 起不来），故绕开直启。
+; 转义规则：Inno 的 """ 产出字面引号，故 Parameters 实际传给 explorer 的是
+; 带引号的 "{app}\voke.exe"（explorer 命令行需带引号路径才认）。
+Filename: "{win}\explorer.exe"; Parameters: """{app}\voke.exe"""; Description: "{cm:LaunchProgram,Voke}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 ; 卸载的**第一步**执行（官方 [Run] & [UninstallRun] 帮助：「the [UninstallRun] section
