@@ -1,0 +1,77 @@
+# Go 版 Voke 的 CI：只在改动 Go PoC（poc/voke-go/**）时跑，避免与 Rust CI 互相拖累。
+# 合并进主线后可直接把 jobs 并入 ci.yml（或保留本文件做路径过滤），门禁内容不变：
+# gofmt / go mod tidy 自检 / go vet / race 测试 / Windows 交叉 vet + 构建。
+name: go-ci
+
+on:
+  push:
+    paths:
+      - 'poc/voke-go/**'
+      - '.github/workflows/go-ci.yml'
+      - '.github/actions/**'
+  pull_request:
+    paths:
+      - 'poc/voke-go/**'
+      - '.github/workflows/go-ci.yml'
+      - '.github/actions/**'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: poc/voke-go
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: poc/voke-go/go.mod
+          cache-dependency-path: poc/voke-go/go.sum
+
+      - name: go mod tidy 自检（go.mod/go.sum 必须与源码同步）
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "$out"; exit 1; fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test（race + shuffle）
+        env:
+          CGO_ENABLED: '1'
+        run: go test -race -count=1 -shuffle=on ./...
+
+      - name: Windows 目标 go vet
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: go vet ./...
+
+      # 交付构建命令（与 PoC 文档 §2.1 一致）：三个 flag 缺一不可——
+      # 裸 go build 会丢 GUI 子系统（弹黑框）。syso（exe 图标）按文件名
+      # rsrc_windows_amd64.syso 自动只在 windows/amd64 目标参与链接。
+      - name: Windows 交叉构建（GUI）
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: go build -tags mygo_noinspector -ldflags="-s -w -H windowsgui" -o voke.exe .
+
+      - name: Upload voke.exe
+        uses: actions/upload-artifact@v7
+        with:
+          name: voke-go-windows-amd64
+          path: poc/voke-go/voke.exe
+          if-no-files-found: error
