@@ -104,6 +104,9 @@ type appState struct {
 	list           ui.ListState          // 列表状态（选中/Key/滚动）
 	input          ui.Handle             // 搜索框句柄，唤出时抢焦点
 	icons          map[string]*ui.Bitmap // 图标位图缓存（按 app.Path，官方 launcher 同款）
+	// trayLastClick 是托盘左键上一次点击的时刻：mygo 原生只上报单击（wmLButtonUp），
+	// 双击表现为两次 Clicked；据此在系统双击时间窗内识别双击并唤出面板。只主线程读写。
+	trayLastClick time.Time
 	// shownOnce 保证「面板首次唤起」只打一次（诊断脚手架，2026-10-16
 	// 内存增长定因加）：首帧会真正构建 view 树、解码可见行图标，是内存
 	// 从地板往上跳的第一个可归因点，之后的唤起不再重复打点。
@@ -254,7 +257,7 @@ func (st *appState) ready() {
 		st.refreshGlobalAgg() // apps 首次加载完成后，用最新 Results 重算全局合并行
 	})
 	platform.SnapshotMem("启动")
-	log.Printf("voke 就绪（热键 %s）", showHotkey)
+	log.Printf("voke 就绪（版本 %s，热键 %s）", aboutVersion(), showHotkey)
 	// 启动自检（对照生产 WhenReady 里的 VOKe_SELFTEST 分支）：env=1 时跑一轮进程内关键
 	// 链路自检、失败项计数落日志。放最末——此时 provider / 热键 / 托盘 / apps 接缝均已就位。
 	if selftestRequested() {
@@ -429,7 +432,35 @@ func (st *appState) setupTray() {
 		return
 	}
 	st.tray = tray
+	tray.OnClick(st.onTrayClick)
 	st.refreshTrayMenu()
+}
+
+// trayDoubleClickWindow 是托盘双击识别窗口：mygo 原生没有 OnDoubleClick，双击在
+// Windows 回调里就是两次 wmLButtonUp → 两次 Clicked。取系统默认双击时间 500ms
+// （用户可在系统设置里调整；这里不为此单独起 syscall，500ms 覆盖默认与常见档位）。
+const trayDoubleClickWindow = 500 * time.Millisecond
+
+// onTrayClick 处理托盘左键单击：第一次只记时刻，500ms 内的第二次判定为双击并
+// 唤出面板（不是 toggle——用户要的是「双击显示」；面板已显示时 showPanel 会重置
+// 会话并重新聚焦，行为可预期）。识别到双击后清空时刻，避免第三次点击续判。
+func (st *appState) onTrayClick() {
+	now := time.Now()
+	if isTrayDoubleClick(st.trayLastClick, now) {
+		st.trayLastClick = time.Time{}
+		st.showPanel()
+		return
+	}
+	st.trayLastClick = now
+}
+
+// isTrayDoubleClick 是双击判定的纯函数（时钟注入，便于单测）。
+func isTrayDoubleClick(prev, now time.Time) bool {
+	if prev.IsZero() {
+		return false
+	}
+	d := now.Sub(prev)
+	return d >= 0 && d <= trayDoubleClickWindow
 }
 
 // trayMenuItems 依当下 awake 状态产出托盘菜单项。

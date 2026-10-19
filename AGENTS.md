@@ -70,9 +70,11 @@ cargo clippy -p voke-core -p voke-sys -p voke-app --all-targets        # 新代�
 用 git-cliff 生成 `CHANGELOG.md` 并回推默认分支，建 GitHub Release 挂上两个产物。
 Rust 的 `ci.yml` 与旧 Rust 发版流水线已退役（Rust 代码暂留作参考）。
 
-版本号以 **tag 为唯一事实来源**：Go exe 尚未注入 VERSIONINFO（已知差距），ISCC 用
-`-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名（不 sed 改 `voke.iss`），本地不用
-手动改版本文件。手动 `workflow_dispatch` 只出 artifacts、不建 Release，用于验证打包链路。
+版本号以 **tag 为唯一事实来源**：release 构建用
+`-ldflags -X github.com/zyition/voke/poc/voke-go/internal/app.buildVersion=<ver>` 把版本注入
+设置页「关于」（本地未注入显示「开发版」）；Go exe 的 VERSIONINFO 仍未注入（已知差距）。
+ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名（不 sed 改 `voke.iss`），本地
+不用手动改版本文件。手动 `workflow_dispatch` 只出 artifacts、不建 Release，用于验证打包链路。
 
 ## 项目特有机制（一句话 + 指向文件）
 
