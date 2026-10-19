@@ -40,6 +40,7 @@ import (
 	"github.com/zyition/voke/poc/voke-go/internal/logic/testutil"
 	"github.com/zyition/voke/poc/voke-go/internal/platform"
 	"github.com/zyition/voke/poc/voke-go/internal/providers"
+	"github.com/zyition/voke/poc/voke-go/internal/providers/base64"
 	appui "github.com/zyition/voke/poc/voke-go/internal/ui"
 )
 
@@ -185,6 +186,115 @@ func TestProviderRegenerateGuardSkipsSameInput(t *testing.T) {
 	if got := titlesOf(st.provRows); got == before {
 		t.Errorf("换了查询词应重跑（护栏只在同输入跳过）：%s", got)
 	}
+}
+
+// countingProvider 包一层真实 provider 数 Query 次数，用来锁「唤回是否重跑」。
+type countingProvider struct {
+	providers.Provider
+	calls *int
+}
+
+func (p *countingProvider) Query(ctx providers.QueryCtx) []providers.Match {
+	*p.calls++
+	return p.Provider.Query(ctx)
+}
+
+// TestRefreshOnShowRerunsDeterministicProvider 锁「显隐保留会话 + 唤回重跑」：
+// 确定性 provider（base64）在面板重新显示时必须用**同一输入**再跑一遍——窗口 /
+// awake 这类数据只有到唤回才更新（对照 Rust 激活观察者的 refresh）；同时模式与
+// 输入一个字都不变（唤回不是换会话，不走 reset）。
+func TestRefreshOnShowRerunsDeterministicProvider(t *testing.T) {
+	st := newWiredState(t, "Chrome")
+	calls := 0
+	st.pluginReg = providers.NewRegistry(&countingProvider{Provider: base64.New(), calls: &calls})
+	typeInto(st, "@b ") // 进 Plugin(base64)，空查询
+	if !st.providerActive() || st.engineState.PluginID() != "base64" {
+		t.Fatalf("应进 base64 插件态，实得 %+v", st.engineState)
+	}
+	if calls != 1 {
+		t.Fatalf("进入插件时应查询 1 次，实得 %d", calls)
+	}
+
+	st.refreshOnShow()
+
+	if calls != 2 {
+		t.Errorf("唤回应重跑确定性 provider（累计 2 次），实得 %d", calls)
+	}
+	wantState(t, st, "唤回后", engine.Plugin, "base64", "", "")
+}
+
+// TestRefreshOnShowSkipsRegeneratingProvider 锁唤回的**重掷护栏**（对照 Rust
+// refresh 入口的同款判断）：random / uuid / timestamp 同输入重跑会换值，唤回必须
+// 连选中行与结果一起原样保留，否则用户刚复制、正要复制的值会被悄悄换掉。
+func TestRefreshOnShowSkipsRegeneratingProvider(t *testing.T) {
+	st := newWiredState(t, "Chrome")
+	st.pluginReg = builtinProviders()
+	typeInto(st, "@r ") // 进 Plugin(random)
+	st.open()           // 选首条「随机整数」→ SubMode(random/int)
+	if st.engineState.SubMode() != "int" || len(st.provRows) < 3 {
+		t.Fatalf("应进 SubMode(int) 并出 [重新生成 + 整数]，实得 %+v", st.provRows)
+	}
+	before := titlesOf(st.provRows)
+	st.provChosen = 2
+
+	st.refreshOnShow()
+
+	if after := titlesOf(st.provRows); after != before {
+		t.Errorf("重掷类 provider 唤回不得换值\n前：%s\n后：%s", before, after)
+	}
+	if st.provChosen != 2 {
+		t.Errorf("重掷类 provider 唤回应原样保留选中行，实得 %d", st.provChosen)
+	}
+	if st.engineState.SubMode() != "int" {
+		t.Errorf("唤回不该改变子模式，实得 %q", st.engineState.SubMode())
+	}
+	wantState(t, st, "唤回后", engine.SubMode, "random", "", "")
+}
+
+// TestRefreshOnShowPickerRebuilds 锁 picker 模式唤回重出列表并把选中复位回第 0 行
+// （对照 Rust set_outcome 的 selected=0 + 回顶）；过滤词与模式保留。
+func TestRefreshOnShowPickerRebuilds(t *testing.T) {
+	st := newWiredState(t, "Chrome")
+	typeInto(st, "#")
+	if len(st.pickerRows) < 2 {
+		t.Fatalf("picker 应至少 2 条，实得 %d", len(st.pickerRows))
+	}
+	want := rowIDs(st.pickerRows)
+	st.pickerChosen = 1
+
+	st.refreshOnShow()
+
+	if got := rowIDs(st.pickerRows); got != want {
+		t.Errorf("唤回应重出同一份 picker 列表：%q ≠ %q", got, want)
+	}
+	if st.pickerChosen != 0 {
+		t.Errorf("唤回后 picker 选中应回第 0 行，实得 %d", st.pickerChosen)
+	}
+	wantState(t, st, "唤回后", engine.PluginPicker, "", "", "")
+}
+
+// TestRefreshOnShowGlobalRefiltersSameQuery 锁 Global 唤回：用保留的查询词重过滤，
+// 隐藏期间灌进来的新应用立刻可见，选中复位第 0 行（Rust set_outcome 语义）。
+// 这里直接改 model.Apps 模拟「后台枚举在隐藏期间完成、但唤回前还没人重过滤」。
+func TestRefreshOnShowGlobalRefiltersSameQuery(t *testing.T) {
+	st := newWiredState(t, "Chrome")
+	typeInto(st, "chr")
+	if got := resultNames(st); got != "Chrome" {
+		t.Fatalf("初始过滤应只有 Chrome，实得 %q", got)
+	}
+	st.model.Apps = testutil.MkApps("Chrome", "Chronicle")
+	st.model.Chosen = 1
+
+	st.refreshOnShow()
+
+	got := resultNames(st)
+	if got != "Chrome,Chronicle" && got != "Chronicle,Chrome" {
+		t.Errorf("唤回应按同一查询词重新过滤出两条，实得 %q", got)
+	}
+	if st.model.Chosen != 0 {
+		t.Errorf("唤回后选中应回第 0 行，实得 %d", st.model.Chosen)
+	}
+	wantState(t, st, "唤回后", engine.Global, "", "chr", "chr")
 }
 
 // titlesOf 把 provRows 标题拼成串，便于比较整批是否逐字一致。
@@ -810,7 +920,7 @@ func TestQueryChangeResetsListScrollToTop(t *testing.T) {
 		t.Errorf("查询变化后列表仍在 first=%d last=%d，期望回到顶部", first, last)
 	}
 
-	// 会话重置（面板隐藏/再过一次 showPanel 的路径）同样回顶。
+	// 离开动作后的会话复位（resetAfterAction 内的 resetSession）同样回顶。
 	st.list.ScrollTo(10, ui.Start)
 	tt.Frame()
 	tt.Frame()
@@ -1071,8 +1181,9 @@ func TestAwakeProviderReflectsPlatformState(t *testing.T) {
 	}
 }
 
-// TestResetSessionClearsModes 直测会话边界函数（调用点是 showPanel 与
-// hidePanel，两处都要建窗 / 走 onMain，无主循环不可跑）。
+// TestResetSessionClearsModes 直测会话复位函数。调用点是 resetAfterAction
+// （离开动作成功、窗口隐藏后）与 enterPlugin（程序化换会话），两处都不经过
+// 建窗/主循环；这里直接调 resetSession 验它的职责边界。
 func TestResetSessionClearsModes(t *testing.T) {
 	st := newWiredState(t, "Chrome", "Firefox", "VLC")
 	typeInto(st, "chr")
@@ -1085,9 +1196,33 @@ func TestResetSessionClearsModes(t *testing.T) {
 	if st.pickerRows != nil || st.pickerChosen != 0 {
 		t.Errorf("resetSession 后 picker 状态 = %+v / %d，想要 nil / 0", st.pickerRows, st.pickerChosen)
 	}
-	// resetSession 只清模式，不动 apps 的结果（清空输入框由 showPanel 那行负责）。
+	// resetSession 只清模式与列表状态，不动 apps 结果、也不碰输入框文本：
+	// 清空输入与顶层预热由 resetAfterAction 负责。
 	if got := resultNames(st); got != "Chrome" {
 		t.Errorf("resetSession 不该动 apps 结果，实得 %q", got)
+	}
+	if st.model.Query != "" {
+		t.Errorf("resetSession 不该动输入框，实得 %q", st.model.Query)
+	}
+}
+
+// TestResetAfterActionClearsSessionAndPrewarms 锁 Rust reset_after_action 的语义：
+// 离开面板的动作（启动 / 切窗 / 保持唤醒）成功后、窗口已隐藏，清空输入与插件页，
+// 并用**空查询**把顶层结果预热好——下次唤起首帧就是干净的全局列表。
+func TestResetAfterActionClearsSessionAndPrewarms(t *testing.T) {
+	st := newWiredState(t, "Chrome", "Firefox", "VLC")
+	st.pluginReg = builtinProviders()
+	typeInto(st, "@r ")   // 进 Plugin(random)
+	st.model.Query = "8f" // 模拟在插件里打了过滤词
+	st.onQueryChanged()   // → Plugin(random, query="8f")
+	st.resetAfterAction()
+	wantState(t, st, "resetAfterAction", engine.Global, "", "", "")
+	if st.engineState.Mode() != engine.Global || st.providerActive() || st.pluginPending() {
+		t.Errorf("resetAfterAction 后应回到 Global，实得 %+v", st.engineState)
+	}
+	// 空查询预热：apps 全量结果已就位（不受 reset 前的插件查询影响）。
+	if got := resultNames(st); got != wantAll {
+		t.Errorf("resetAfterAction 后顶层结果 = %q，想要全量 %q", got, wantAll)
 	}
 }
 
@@ -1137,7 +1272,7 @@ func TestGlobalFrameHasNoTokenAndKeepsAppsRows(t *testing.T) {
 	if !tt.HasText("Chrome") {
 		t.Error("Chrome 行不可见")
 	}
-	if !tt.HasText("↑↓ 选择  单击/↵ 启动  esc 清空/隐藏") {
+	if !tt.HasText("↑↓ 选择  单击/↵ 启动  esc 隐藏") {
 		t.Error("底部提示行文案变了")
 	}
 }
@@ -1189,14 +1324,17 @@ func TestTypingPrefixClearsInputBoxInRealFrame(t *testing.T) {
 
 // TestModeCopyBranchesAreExact 把 view.go 里「按模式现取现算的文案」四个函数的每条
 // 分支钉成**直接断言**（精确字符串相等）。此前只有部分分支被真机式帧测扫到过：
-//   - hintLine 的 PluginPicker 分支（「…单击/↵ 进入  esc 返回全局」）**从没被任何
-//     断言覆盖**（帧测只查了 Global 那条的「清空/隐藏」）；
+//   - hintLine 的 PluginPicker 分支（「…单击/↵ 进入  esc 隐藏」）**从没被任何
+//     断言覆盖**（帧测只查了 Global 那条的「隐藏」）；
 //   - pickerHint 的空查询分支（「没有已启用的插件」）**从没被覆盖**（:624 只查了
 //     有词不中的「没有匹配的插件」）。
 //
 // 这两条文案或分支条件被改坏时，整套用例一个都不红。这里用最小程序的 appState
 // 直接调方法补齐：四个函数只读 st.engineState（纯数据、零 mygo、不碰窗口/主循环），
 // 无需起帧测。placeholder / hintLine 两条已覆盖的分支也一并钉住，防将来改串漏网。
+//
+// Esc 语义（用户拍板）：任何模式下都只隐藏、不清空；所以两处提示都写「esc 隐藏」，
+// 不再有「清空/隐藏」「返回全局」这类与实际行为不符的文案。
 func TestModeCopyBranchesAreExact(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -1205,9 +1343,9 @@ func TestModeCopyBranchesAreExact(t *testing.T) {
 		want string
 	}{
 		{"提示行/Global", &appState{engineState: engine.State{}},
-			(*appState).hintLine, "↑↓ 选择  单击/↵ 启动  esc 清空/隐藏"},
+			(*appState).hintLine, "↑↓ 选择  单击/↵ 启动  esc 隐藏"},
 		{"提示行/PluginPicker", &appState{engineState: engine.NewState(engine.PluginPicker, "", "", "")},
-			(*appState).hintLine, "↑↓ 选择  单击/↵ 进入  esc 返回全局"},
+			(*appState).hintLine, "↑↓ 选择  单击/↵ 进入  esc 隐藏"},
 		{"占位/Global", &appState{engineState: engine.State{}},
 			(*appState).placeholder, "搜索应用"},
 		{"占位/PluginPicker", &appState{engineState: engine.NewState(engine.PluginPicker, "", "", "")},
@@ -1362,11 +1500,24 @@ func TestAppsFreqKeyPrefixConsistent(t *testing.T) {
 // ("awake")`。enterPlugin 应把模式原子切到 awake 第一级、providerActive 为真、并即时
 // 刷出 queryLevel1 空输入的产物（未激活态 → 仅系统唤醒 / 连屏幕一起保持 两条方向候选）。
 // id 写死 "awake"（纪律②：不从 awake.ID 反推，Descriptor 改坏时这里必须红）。
+//
+// 前半段刻意先造一个更深的旧会话（random 的 hex 子模式，栈 [Global, random, hex]），
+// 再点 awake：程序化激活必须**换会话**（对照 Rust activate_plugin 的关 picker /
+// 替换 active_plugin / 清空输入），落点是干净的 [Global, awake]；若有人把
+// enterPlugin 改回直接压栈，这里会看到 4 层、旧插件仍垫在 awake 下面。
 func TestEnterPluginRoutesToAwakeFirstLevel(t *testing.T) {
 	st := newWiredState(t)
 	st.pluginReg = builtinProviders()
+	st.enterPlugin("random")
+	st.applyEngineState(engine.EnterSubMode(st.engineState, "random", "hex"))
+	if len(st.engineState.Scopes()) != 3 {
+		t.Fatalf("前置条件：random/hex 会话应为 3 层，实得 %d", len(st.engineState.Scopes()))
+	}
 	st.enterPlugin("awake")
 	wantState(t, st, "直达 awake", engine.Plugin, "awake", "", "")
+	if scopes := st.engineState.Scopes(); len(scopes) != 2 || scopes[1].PluginID != "awake" {
+		t.Errorf("程序化激活应换会话成 [Global, awake]，实得 %+v", scopes)
+	}
 	if !st.providerActive() {
 		t.Fatal("enterPlugin(awake) 后 providerActive 应为真（awake 已注册进 pluginReg）")
 	}

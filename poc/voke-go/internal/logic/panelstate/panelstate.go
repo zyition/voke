@@ -13,7 +13,9 @@
 //
 // 行为等价（E-1）要求时机与顺序逐字不变，尤其：
 //   - 懒加载只在「查询非空（TrimSpace 后）且未 loaded 且未 loading」时触发；
-//   - 启动**成功**才清空查询 + 重新过滤 + 隐藏面板；失败保留面板（见 LaunchSucceeded）；
+//   - ClickRow / Open 只产出启动意图，不自己清空或隐藏；启动**成功**后的
+//     「先隐藏、再复位」由 app 层执行器负责（对照 Rust dispatcher +
+//     reset_after_action），失败保留面板；
 //   - choose/filter 复位选中的连锁（filter → choose(0)）保持不变。
 //
 // 时间基准可注入：OnQueryChanged / EmptyHint 都收一个 now 参数，本包内部
@@ -41,11 +43,8 @@ const (
 	// 对应原 choose 末尾的 st.list.ScrollIntoView(st.chosen)。
 	ActionScrollTo
 	// ActionLaunch：启动 Results[Index]（main 里 launchApp）。对应原 clickRow
-	// 里的 launchApp(app)。启动结果决定是否继续执行后续动作，见 LaunchSucceeded。
+	// 里的 launchApp(app)。启动成功后的隐藏/复位由 main 侧在副作用成功后提交。
 	ActionLaunch
-	// ActionHide：隐藏面板（main 里 st.hidePanel()）。对应原 clickRow 成功后
-	// 与 Esc 二级里的 st.hidePanel()。
-	ActionHide
 )
 
 // Action 是一条待执行的意图。Index 携带 ScrollTo / Launch 需要的行下标。
@@ -110,7 +109,7 @@ func (m *Model) OnQueryChanged(now time.Time) []Action {
 
 // ClickRow 处理「单击某行 i」：越界直接返回 nil（什么都不做，与原实现一致）；
 // 否则设 Chosen=i 并返回启动意图 [ActionLaunch(i)]。**不自己启动、不清空、不隐藏**
-// ——清空/过滤/隐藏只在启动成功后由 LaunchSucceeded 决定（保持原时序）。
+// ——启动成功后的隐藏与复位由 main 侧在副作用成功后按 Rust 动作分类提交。
 func (m *Model) ClickRow(i int) []Action {
 	if i < 0 || i >= len(m.Results) {
 		return nil
@@ -126,15 +125,6 @@ func (m *Model) Open() []Action {
 		return nil
 	}
 	return m.ClickRow(m.Chosen)
-}
-
-// LaunchSucceeded 是「启动确认成功」后的收尾：清空查询、重新过滤（复位选中并
-// 可能产出 ScrollTo 意图）、最后隐藏面板。对应原 clickRow 里 launchApp 成功后的
-// `st.query=""; st.filter(); st.hidePanel()` 三连，顺序保持：先滚后隐。
-// 启动失败时 main 不会调到这里，面板得以保留。
-func (m *Model) LaunchSucceeded() []Action {
-	m.Query = ""
-	return append(m.Filter(), Action{Kind: ActionHide})
 }
 
 // EmptyHint 是结果为空时的占位文案（四态，逐字搬自原 appState.emptyHint）：

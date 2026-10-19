@@ -113,8 +113,9 @@ func (st *appState) providerActive() bool {
 
 // placeholder / hintLine 是输入框占位与底部提示的按模式文案。
 //
-// Global 分支返回的字符串与接线前**逐字相同**（"搜索应用" /
-// "↑↓ 选择  单击/↵ 启动  esc 清空/隐藏"）；只有命中过前缀的帧才会换文案。
+// Global 分支返回的字符串与接线前一致（"搜索应用" / "↑↓ 选择  单击/↵ 启动  esc 隐藏"）；
+// 只有命中过前缀的帧才会换文案。Esc 在任何模式下都只隐藏、不清空（复位只属于
+// 离开面板的动作），所以两处提示都写「esc 隐藏」。
 func (st *appState) placeholder() string {
 	switch st.engineState.Mode() {
 	case engine.PluginPicker:
@@ -135,9 +136,9 @@ func (st *appState) placeholder() string {
 
 func (st *appState) hintLine() string {
 	if st.engineState.Mode() == engine.PluginPicker {
-		return "↑↓ 选择  单击/↵ 进入  esc 返回全局"
+		return "↑↓ 选择  单击/↵ 进入  esc 隐藏"
 	}
-	return "↑↓ 选择  单击/↵ 启动  esc 清空/隐藏"
+	return "↑↓ 选择  单击/↵ 启动  esc 隐藏"
 }
 
 // pluginPending 报告当前是否落在「表里有、但既非 apps 也未落地实现（不在 pluginReg）」
@@ -241,6 +242,30 @@ func (st *appState) applyEngineState(next engine.State) {
 	st.refreshGlobalAgg() // apps 结果更新后重算合并行（有全局插件命中才走合并渲染，否则 apps-only）
 }
 
+// refreshOnShow 在面板重新显示后按当前模式重跑一次查询，让隐藏期间变化的数据
+// （窗口列表、awake 状态、插件过滤词命中的列表等）在用户敲第一个键之前就是新的。
+// 对照 Rust 窗口激活观察者里的 `this.refresh(cx)`（search.rs:513-537）：唤回保留
+// 会话，但结果要跟着世界走。
+//
+// 重掷护栏与 Rust refresh 同源且同样在调用侧先挡一次：当前插件会因查询重掷值
+// （random / uuid / timestamp）且输入没变时，**整个刷新都不做**——刚复制、
+// 正要复制的值不能被唤回重跑换掉，选中行与滚动位置也原样保留（Rust 在 refresh
+// 入口直接 return）。`refreshProviderResults` 内部的同 key 护栏是第二道防线。
+//
+// 其余分支（picker / 全局 / apps 插件 / 确定性 provider）走与输入变化完全相同的
+// applyEngineState 派发，不另抄判定；末尾把列表钉回顶部、选中复位到第 0 行，
+// 对照 Rust set_outcome（search.rs:739-751）。
+func (st *appState) refreshOnShow() {
+	if st.providerActive() {
+		p, _ := st.pluginReg.Get(st.engineState.PluginID())
+		if p.RegeneratesOnQuery() && providerQueryKey(st.engineState) == st.provLastKey && len(st.provRows) > 0 {
+			return
+		}
+	}
+	st.applyEngineState(st.engineState)
+	st.resetListScroll()
+}
+
 // refreshProviderResults 用当前 engineState（pluginID + subMode + query）跑一遍
 // providers.RunOne（weight×score×frequency 排序），写 provRows / provHint，选中复位到
 // 第 0 行（与 apps/picker 过滤词一变即回首行同姿势）。
@@ -305,8 +330,9 @@ func providerQueryKey(s engine.State) string {
 
 // onEsc 是 Esc 的唯一入口：**任何模式下 Esc 一律直接隐藏面板**（CmdPal 对齐，用户拍板）。
 // 逐级回退不再由 Esc 承担——那是 Backspace 的职责（见 onQueryChanged 里对
-// engine.BackspaceBack 的调用）。hidePanel 内部 resetSession 会把模式状态清回 Global，
-// 加上 showPanel 会清 Query，故下一次唤起必是干净的 Global 新会话。
+// engine.BackspaceBack 的调用）。隐藏**保留会话**：查询与插件页原样留在下一次唤起
+// （Rust parity——重新显示不等于修改输入）；清空与退出插件只发生在「离开面板」的
+// 动作成功之后（resetAfterAction）。
 func (st *appState) onEsc() {
 	st.hidePanel()
 }
@@ -373,13 +399,19 @@ func (st *appState) confirmPicker() {
 
 // enterPlugin 是「程序化进入某插件第一级」的唯一入口——对照生产
 // main.rs 的 `open_awake → view.activate_plugin("awake")`：不经输入框、不打前缀，
-// 由外部动作（托盘状态条目点击）直接把模式切到指定插件。构造仍只交给
-// engine.SelectPlugin（铁律②：模式构造只留在 engine，app 层不手拼 State）。
+// 由外部动作（托盘状态条目点击）直接把模式切到指定插件。
 //
-// 与 confirmPicker 的区别只是 id 来源：picker 取列表选中行，本函数取调用方给的 id。
-// 落点同样是 applyEngineState，故进 providerActive 的插件会即时刷出该插件的候选
-// （如 awake 一级亮屏方式），与非前缀路径行为一致。
+// 它是**换会话**而不是压栈：对照 Rust activate_plugin_from_picker 的
+// 「关 picker / 替换 active_plugin / 子模式清空 / 输入框清空」。先 resetSession
+// 把栈清回 Global，再由 engine.SelectPlugin 压入目标插件，于是无论从哪个旧会话
+// （Global / 任意插件 / 子模式）点托盘 awake，落点都是干净的 [Global, Plugin]；
+// 若直接压栈，awake 会嵌套在旧插件之下，Backspace 退回去还能看到上一个插件。
+// 构造仍只交给 engine（铁律②：模式构造只留在 engine，app 层不手拼 State）。
+//
+// 与 confirmPicker 的区别因此不只是 id 来源：用户在 `#` 列表里选中插件是
+// **进入路径**，picker 帧要留在栈里供 Backspace 退回；程序化激活没有这条路径。
 func (st *appState) enterPlugin(id string) {
+	st.resetSession()
 	st.applyEngineState(engine.SelectPlugin(st.engineState, id))
 }
 
@@ -442,9 +474,10 @@ func (st *appState) openProvider() {
 }
 
 // runProviderIntent 是 provider 结果行「执行」的唯一实现（IntentFor 分流）：
-// Copy→写剪贴板+记频率+隐藏；EnterSubMode→进子模式并刷新；ActivatePlugin→切插件；
-// PlatformAction→其余副作用（execPlatformAction）。providerID 供频率键（Global 合并列表里
-// 各行 providerID 不同，故参数化；插件态传 engineState.PluginID = 原行为）。
+// Copy→写剪贴板+记频率+隐藏（**不复位**，下次唤回可再复制）；EnterSubMode→进
+// 子模式并刷新；ActivatePlugin→切插件；PlatformAction→其余副作用（execPlatformAction，
+// 成功后隐藏+复位，对照 Rust Action::should_reset_input）。providerID 供频率键（Global
+// 合并列表里各行 providerID 不同，故参数化；插件态传 engineState.PluginID = 原行为）。
 func (st *appState) runProviderIntent(m providers.Match, providerID string) {
 	switch intent := providers.IntentFor(m); intent.Kind {
 	case providers.IntentCopy:
@@ -453,6 +486,8 @@ func (st *appState) runProviderIntent(m providers.Match, providerID string) {
 			st.freq.Record(frequency.Key(providerID, m.Title))
 			saveFrequency(st.freq) // 持久化由 env 路径决定；未设 = no-op
 		}
+		// 对照 Rust Copy：只隐藏、**不 reset_after_action**。输入与结果原样保留，
+		// 用户下次唤回还能看到刚复制的值并再次复制（重跑会把值换掉）。
 		st.hidePanel()
 	case providers.IntentEnterSubMode:
 		st.applyEngineState(engine.EnterSubMode(st.engineState, providerID, intent.Text))
@@ -471,7 +506,10 @@ func (st *appState) runProviderIntent(m providers.Match, providerID string) {
 				st.freq.Record(frequency.Key(providerID, m.Title))
 				saveFrequency(st.freq)
 			}
+			// 保持唤醒 / 取消唤醒 / 切窗口 / 启动（含终端 profile）都属于 Rust
+			// Action::should_reset_input 的「离开面板」类：先隐藏，再复位成干净顶层。
 			st.hidePanel()
+			st.resetAfterAction()
 		}
 		// 返回 false（窗口已消失 / 启动失败 / 未接入）→ 不隐藏，保留面板让用户重试。
 	default: // IntentNothing：提示行，什么都不做
@@ -524,14 +562,15 @@ func (st *appState) execPlatformAction(a providers.Action) bool {
 
 // execLaunch 执行「可能含启动动作」的意图序列，保持原 clickRow/open 的时序：
 //
-//   - 遇到 ActionLaunch：取 Results[Index] 调 platform.LaunchApp；**成功**才调
-//     model.LaunchSucceeded()（清空查询+重新过滤+隐藏），把其返回的意图继续执行；
+//   - 遇到 ActionLaunch：取 Results[Index] 调 platform.LaunchApp；**成功**才
+//     隐藏面板，再复位会话（对照 Rust dispatcher 先隐藏 + search.rs
+//     reset_after_action：清查询 / 退插件 / 顶层列表预热），然后返回；
 //     **失败**只记日志并立即返回——面板得以保留，用户可改查询重试。
 //   - 其余意图（如未来可能出现的非启动前置动作）按序执行。
 //
-// 之所以把「清空/过滤/隐藏」拆到 LaunchSucceeded 而非和 Launch 一次性返回，正是
-// 为了守住「启动失败不清空、不隐藏」这条 E-1 行为：那几步会改状态，必须等
-// platform.LaunchApp 真的成功才提交。
+// 复位必须等 LaunchApp 真的成功之后提交：失败时状态一点都不能动（E-1）。
+// 顺序也固定为「先隐藏、后复位」（Rust 注释明确 reset 的调用时机在窗口已被
+// dispatcher 隐藏之后）：隐藏那一刻用户已看到动作生效，后台再把界面收拾干净。
 //
 // platform.LaunchApp 只在主线程调（背后 onMainValue，见 internal/platform/shell.go
 // 的线程标注）；本函数的调用点（Enter / 单击）本来就在主线程。
@@ -550,7 +589,8 @@ func (st *appState) execLaunch(acts []panelstate.Action) {
 				st.freq.Record(frequency.Key(appsmodel.ProviderID, app.Name))
 				saveFrequency(st.freq)
 			}
-			st.execute(st.model.LaunchSucceeded())
+			st.hidePanel()
+			st.resetAfterAction()
 			return
 		}
 		st.apply(a)
@@ -565,15 +605,14 @@ func (st *appState) execute(acts []panelstate.Action) {
 }
 
 // apply 把单条「意图」翻译成对应的 UI/平台副作用。这是 panelstate 与 mygo 之间
-// 唯一的边界：logic 层只说做什么，副作用在此落地。Show/Hide 的 Show 仍只从
-// showPanel 走（§7.1.4）；这里只会因 LaunchSucceeded / Esc 调 hidePanel。
+// 唯一的边界：logic 层只说做什么，副作用在此落地。隐藏/复位不再经 Model 表达：
+// 隐藏是各动作执行器成功后直接调的（execLaunch / runProviderIntent），
+// show 仍只从 showPanel 走（§7.1.4）。
 func (st *appState) apply(a panelstate.Action) {
 	switch a.Kind {
 	case panelstate.ActionEnsureLoad:
 		appsmodel.EnsureLoaded()
 	case panelstate.ActionScrollTo:
 		st.list.ScrollIntoView(a.Index)
-	case panelstate.ActionHide:
-		st.hidePanel()
 	}
 }

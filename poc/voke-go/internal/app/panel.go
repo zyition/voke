@@ -32,7 +32,8 @@ import (
 // §7.2 步骤5：面板的**纯决策状态**（查询 / 全量应用 / 过滤结果 / 选中行 / 懒加载
 // 标志）连同过滤、选中、启动、空态文案等判断逻辑，已下沉到 internal/logic/panelstate
 // 的 Model。appState 只保留 mygo 句柄，并把 Model 返回的「意图」翻译成本地的
-// UI/平台副作用（见 view.go 的 execute/apply 与 LaunchSucceeded 的启动收尾）。
+// UI/平台副作用（见 view.go 的 execute/apply 与 execLaunch / runProviderIntent
+// 的动作收尾）。
 //
 // §7.3.3 接线（本轮）：appState 另持三份**模式路由**状态——engine.Table（前缀表，
 // 只由 config.BuildTable 产出）、engine.State（显式模式状态，零值即 Global）、
@@ -275,7 +276,13 @@ func (st *appState) ready() {
 
 // showPanel 唤出面板：**按主显示器** WorkArea 水平居中、垂直居中略偏上
 // （系数 geometry.CenterPercent=48，见 geometry.PanelTopLeft 与本文下方算术段），
-// 清空查询与选中，搜索框抢焦点。
+// 搜索框抢焦点。
+//
+// **显隐保留会话**（用户拍板的 Rust parity）：重新显示 ≠ 用户修改输入。本函数
+// 不清查询、不退出插件——热键 / 托盘 / 失焦 / Esc 收起后再唤起，上次的查询与
+// 插件页原样还在。复位只发生在「离开面板」类动作成功且窗口已隐藏之后（见
+// resetAfterAction）。显示后另调 refreshOnShow **重跑当前查询**（不换会话）：
+// 结果跟着隐藏期间变化的世界走，重掷类插件由该方法自行挡掉。
 //
 // 显示器来源（PoC 文档 §11.9 决策④，2026-10-16 落实）：用
 // mygo.Screen.PrimaryDisplay()，**不用** DisplayNearestPoint(CursorScreenPoint())。
@@ -334,8 +341,8 @@ func (st *appState) ready() {
 // Rust 侧也只做 `size.min(&visible_bounds.size)` 的下限保护
 // （geometry.rs:749），语义相同。
 //
-// 防首帧闪烁：窗口 Hidden 创建，本函数在 Show() 之前完成定位/清空/
-// 聚焦请求，首帧即是终态位置与内容；mygo v0.5.5 未见额外的
+// 防首帧闪烁：窗口 Hidden 创建，本函数在 Show() 之前完成定位/聚焦请求，
+// 首帧即是终态位置与内容；mygo v0.5.5 未见额外的
 // 「无闪烁显示」API（如 SWP_NOACTIVATE 暴露），能做到的即此，
 // 实测留 V5。
 func (st *appState) showPanel() {
@@ -344,12 +351,12 @@ func (st *appState) showPanel() {
 	w, h := st.panel.Size()
 	x, y := geometry.PanelTopLeft(d.WorkArea.X, d.WorkArea.Y, d.WorkArea.Width, d.WorkArea.Height, w, h)
 	st.panel.SetPosition(x, y)
-	st.resetSession()
-	st.model.Query = ""
-	st.filter()
-	st.resetListScroll() // filter 的 ScrollIntoView(0) 只保证首行可见；这里钉到真正顶部
 	st.input.Focus()
 	st.panel.Show()
+	// 唤回刷新：保留会话不等于保留过期结果。隐藏期间窗口开/关、awake 状态、
+	// 插件启用集合都可能变；重跑当前查询让用户敲第一个键前看到的就是当下数据
+	// （对照 Rust 窗口激活观察者里的 refresh）。重掷类插件由 refreshOnShow 挡掉。
+	st.refreshOnShow()
 	// 唤起即刷新托盘（awake 剩余时间是随时间变的；此处重建让用户每次看托盘都拿到
 	// 当下倒计时——mygo 无菜单弹出钩子，只能靠这类自然事件，不设定时器）。
 	st.refreshTrayMenu()
@@ -368,31 +375,52 @@ func (st *appState) showPanel() {
 
 // openAwake 是托盘「保持唤醒」状态条目被点的动作：唤出面板 + 直达 awake 插件第一级
 // （对照生产 main.rs `open_awake`：`show_panel` 之后 `activate_plugin("awake")`）。
-// 顺序不可反——showPanel 内 resetSession 把模式清回 Global，若先 enterPlugin 再 showPanel
-// 会被 resetSession 抹掉。showPanel 已在主线程（托盘 Click 回调），enterPlugin 只改
-// appState 并经 applyEngineState→refreshProviderResults 刷出 awake 候选，无跨线程调用。
+// showPanel 只显隐、保留会话；换会话由 enterPlugin 负责——对照 Rust
+// activate_plugin_from_picker 的「关 picker / 替换 active_plugin / 清空输入」，
+// 所以从任意旧插件（含子模式）点进来都落在干净的 awake 第一级，而不是嵌套进去。
+// showPanel 已在主线程（托盘 Click 回调），enterPlugin 只改 appState 并经
+// applyEngineState→refreshProviderResults 刷出 awake 候选，无跨线程调用。
 func (st *appState) openAwake() {
 	st.showPanel()
 	st.enterPlugin(awake.ID)
 }
 
 // resetSession 把**模式路由**状态清回「全新的 Global 会话」：engine.State 归零
-// （零值即 Global）、picker 列表清空、picker 选中复位。
+// （零值即 Global）、picker 列表清空、picker 选中复位、provider / 全局合并行清空、
+// 四个结果列表回顶。
 //
-// 调用点只有两处，都是「一次会话的边界」：
-//   - showPanel：唤起是一次新会话（与它原有的「清空查询」同一时机）；
-//   - hidePanel：隐藏即结束会话。用户可能在 PluginPicker / Plugin 态直接切走
-//     （失焦隐藏），不清的话下一次唤起会带着上一个模式进来（空框 + picker 列表），
-//     正是生产 D5/D0 那类「状态残留」。
+// 调用点只有两处，都是「真的换会话」：
+//   - resetAfterAction：离开面板的动作成功、窗口已隐藏之后（对照 Rust
+//     search.rs reset_after_action）；
+//   - enterPlugin：程序化直达插件前先换一个新会话（托盘 awake），避免插件嵌套。
 //
-// 这里**不碰 model.Query**：清空输入框由 showPanel 原有那行负责（Global 链路逐字不变）。
-// Global 态下本函数等价于「把几个空字段再写一遍空值」，不改变任何可见行为。
+// 这里**不碰 model.Query**：输入框清空与顶层结果预热由 resetAfterAction 负责；
+// enterPlugin 随后经 applyEngineState 把框同步成新层的空查询。
 func (st *appState) resetSession() {
 	st.engineState = engine.State{}
 	st.pickerRows, st.pickerChosen = nil, 0
 	st.provRows, st.provChosen, st.provHint = nil, 0, ""
 	st.provLastKey = ""
 	st.globalRows, st.globalProvRows, st.globalChosen = nil, nil, 0
+	st.resetListScroll()
+}
+
+// resetAfterAction 是「离开面板」类动作成功后的界面复位：退出插件、清空输入、
+// 顶层列表重新预热。调用时机固定在窗口**已被隐藏之后**（对照 Rust
+// search.rs:1128 reset_after_action）——启动应用 / 切换窗口 / 保持唤醒这些
+// 动作的意图都是「离开面板去做别的事」，一次只干一件事，干完就收，下次唤回
+// 不该还留着上次的查询、插件页和旧结果。
+//
+// Copy / Refresh / 进插件等动作**不调用**本函数：输入与结果原样保留，用户
+// 回来还能看到并再次复制（对照 core Action::should_reset_input 的分类）。
+//
+// 末尾的 filter 用空查询重算一次，把顶层结果预置好（对照 Rust reset 后
+// spawn_query("") 的预热）：下次唤起首帧就是干净的全局列表，不会闪一下旧插件
+// 结果。最后再钉一次列表顶部——filter 的 ScrollIntoView(0) 只保证首行可见。
+func (st *appState) resetAfterAction() {
+	st.resetSession()
+	st.model.Query = ""
+	st.filter()
 	st.resetListScroll()
 }
 
@@ -409,9 +437,14 @@ func (st *appState) resetListScroll() {
 	st.globalList.ScrollTo(0, ui.Start)
 }
 
-// hidePanel 隐藏面板（失焦 / 热键 / 托盘菜单 / Esc 二级 / 启动成功都会走到）。
+// hidePanel 隐藏面板（失焦 / 热键 / 托盘菜单 / Esc / 离开动作收尾都会走到）。
 //
-// 这里**只管隐藏，不打点**：「面板隐藏」的打点已收敛到 ready() 里注册的
+// 这里**只管隐藏，不复位会话**：显隐保留查询与插件页（Rust parity——重新显示
+// ≠ 用户修改输入）。离开面板的动作（启动 / 切窗 / 保持唤醒）在隐藏**之后**
+// 另调 resetAfterAction；Copy 只隐藏、保留输入供下次再复制；Esc / 失焦 / 热键
+// 只藏不收。
+//
+// 这里也**不打点**：「面板隐藏」的打点已收敛到 ready() 里注册的
 // st.panel.OnHide（那里有完整的定因注释）。原因是本函数会被 OnBlur 重入
 // ——ShowWindow(SW_HIDE) 让前台窗口同步收到 WM_ACTIVATE(WA_INACTIVE)，
 // mygo 据此 fire onBlur 又调回本函数（链路见 ready() 的注释）。打点写在
@@ -419,13 +452,10 @@ func (st *appState) resetListScroll() {
 // 时 fire 一次，且内层重入的 Hide() 因窗口已不可见而早退、不会 fire。
 //
 // 另外本函数对「已隐藏」是幂等的（mygo Hide 自带 IsVisible 守卫），
-// 因此多条隐藏路径（热键 toggle / Esc / OnClose / open()）重复触发也安全。
-//
-// 末尾的 resetSession 同样幂等（OnBlur 重入时多写一遍空值，无副作用）。
+// 因此多条隐藏路径（热键 toggle / Esc / OnClose / 动作收尾）重复触发也安全。
 func (st *appState) hidePanel() {
 	wasVisible := st.panel.IsVisible()
 	st.panel.Hide()
-	st.resetSession()
 	if wasVisible {
 		st.armIconTrimTimer()
 	}
@@ -520,8 +550,8 @@ func (st *appState) setupTray() {
 const trayDoubleClickWindow = 500 * time.Millisecond
 
 // onTrayClick 处理托盘左键单击：第一次只记时刻，500ms 内的第二次判定为双击并
-// 唤出面板（不是 toggle——用户要的是「双击显示」；面板已显示时 showPanel 会重置
-// 会话并重新聚焦，行为可预期）。识别到双击后清空时刻，避免第三次点击续判。
+// 唤出面板（不是 toggle——用户要的是「双击显示」；面板已显示时 showPanel 会重新
+// 定位并聚焦，查询与插件页保留）。识别到双击后清空时刻，避免第三次点击续判。
 func (st *appState) onTrayClick() {
 	now := time.Now()
 	if isTrayDoubleClick(st.trayLastClick, now) {

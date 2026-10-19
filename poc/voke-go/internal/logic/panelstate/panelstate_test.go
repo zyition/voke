@@ -161,14 +161,15 @@ func TestOnQueryChangedReturnsEnsureLoadOnce(t *testing.T) {
 	}
 }
 
-// TestClickRowLaunchesOnlyAndHidesAfterSuccess 是 E-1 时序的关键靶：
+// TestClickRowLaunchesOnly 是 E-1 时序的关键靶：
 //   - ClickRow 合法 → 只产出 [Launch i]（**绝不**自带 Hide），并把 Chosen 设成 i；
-//   - 越界（i<0 或 i>=len）→ 无任何意图、不碰 Chosen；
-//   - Hide 只在 LaunchSucceeded 里出现（清空查询+过滤后的收尾），失败路径根本不
-//     走到 LaunchSucceeded，面板得以保留。
+//   - 越界（i<0 或 i>=len）→ 无任何意图、不碰 Chosen。
+//
+// 启动成功后的「先隐藏、再复位」归 app 层执行器（对照 Rust dispatcher +
+// reset_after_action）；Model 只表达启动意图，失败时面板状态一点不动。
 //
 // 变异测试「让 ClickRow 也返回 Hide（即启动失败仍隐藏）」会被本例第一断言抓红。
-func TestClickRowLaunchesOnlyAndHidesAfterSuccess(t *testing.T) {
+func TestClickRowLaunchesOnly(t *testing.T) {
 	m := Model{Apps: testutil.MkApps("AA", "BB", "CC")}
 	m.Query = ""
 	m.Filter() // 填 Results（全量 3 条）
@@ -190,17 +191,6 @@ func TestClickRowLaunchesOnlyAndHidesAfterSuccess(t *testing.T) {
 	}
 	if m.Chosen != 0 {
 		t.Errorf("越界 ClickRow 不应改动 Chosen，实际变 %d", m.Chosen)
-	}
-
-	// 启动成功后的收尾：清空查询 → 过滤（复位选中并产出 ScrollTo 0）→ Hide，顺序固定。
-	m.Query = "AA"
-	succ := m.LaunchSucceeded()
-	if m.Query != "" {
-		t.Errorf("LaunchSucceeded 应清空查询，实际 %q", m.Query)
-	}
-	want := []Action{{Kind: ActionScrollTo, Index: 0}, {Kind: ActionHide}}
-	if len(succ) != 2 || succ[0] != want[0] || succ[1] != want[1] {
-		t.Errorf("LaunchSucceeded 意图序列=%v，期望 [ScrollTo 0, Hide]（先滚后隐）", succ)
 	}
 }
 
