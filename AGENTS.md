@@ -84,8 +84,9 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名（不 sed
 - 托盘：子类化 `WM_INITMENUPOPUP`，在菜单弹出前刷新 awake 条目（`voke-sys/src/tray.rs`）。
 - 设置窗「关闭 = 程序化销毁」（Zed 主窗同款姿势），回收 ~26.5MB；gpui 契约与源码位置见 `voke-app/src/settings.rs` 注册处长注释与 `docs/HISTORY.md` 第 6 节。
 - 应用列表：唤起触发扫描 + 60s 防抖；窗口列表每次查询实时枚举（`voke-app/src/main.rs`）。
-  图标两层缓存均有界：解码位图 256 条（`internal/ui/IconCache`）、PNG 字节 256 条
-  （`internal/platform` 的 iconcache），均 FIFO，nil 负缓存保留。
+  图标两层缓存均有界：解码位图 256 条 LRU（`internal/ui/IconCache`）、PNG 字节 256 条
+  FIFO（`internal/platform` 的 iconcache），nil 负缓存保留；面板隐藏 10s 后解码缓存
+  裁到 64 条（Wox 同款，设置窗打开时跳过）。
 - 日志容量：跨启动**追加**不清空；行数达上限时从**头部删一批**最旧的行
   （`max(1, N/10)`，默认 N=9999 → 100 行）并落一行中文标记行（计入行数）。
   上限由 `VOKE_LOG_MAX_LINES` 构建期注入（`VOKE_LOG_MAX_LINES=20000 bash

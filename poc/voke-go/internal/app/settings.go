@@ -199,7 +199,12 @@ func (st *appState) openSettings() {
 	})
 	w.OnClose(func(e *mygo.CloseEvent) {
 		if st.quitting {
-			return // 退出流程：放行真关闭（否则 veto 会让 App.Quit 的关窗循环中止）
+			// 退出流程：放行真关闭（否则 veto 会让 App.Quit 的关窗循环中止）。
+			// 录制定时器仍要停掉并置 nil，且先清 recording，避免已在途的回调
+			// 在退出过程中再执行一次取消/注册热键。
+			s.recording = false
+			stopRecTimer(s)
+			return
 		}
 		e.PreventDefault()
 		st.closeSettings(s)
@@ -236,11 +241,11 @@ func (st *appState) closeSettings(s *settingsWindow) {
 		st.cancelHotkeyRecording(s) // 关窗=放弃录制，恢复旧键（必须赶在销毁前）
 	}
 	stopRecTimer(s)
+	if st.settings == s {
+		st.settings = nil // 立即放掉 appState 对旧窗的引用，销毁回调不再持有它
+	}
 	s.win.Hide()
 	s.win.Update(func() {
-		if st.settings == s {
-			st.settings = nil
-		}
 		s.win.Destroy()
 		log.Printf("设置窗口 -> 程序化销毁（释放渲染资源）")
 	})

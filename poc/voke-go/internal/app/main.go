@@ -55,6 +55,7 @@ func Main() {
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { st.quitting = true })
 	// 退出前销毁托盘图标。
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		st.stopIconTrimTimer()
 		if st.tray != nil {
 			st.tray.Destroy()
 		}

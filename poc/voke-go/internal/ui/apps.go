@@ -232,7 +232,8 @@ func Row(c *goui.Context, m *panelstate.Model, icons *IconCache, i int, onClick 
 // FileIcon 走 onMainValue，只在主线程按「行首次可见」懒取（O4 的硬约束），
 // 一旦把零长当图片交给 ui.DecodeBitmap 就是一帧解码失败日志。
 //
-// 缓存由 appState 装配（NewIconCache，256 条 FIFO）：只主线程用，无锁。
+// 缓存由 appState 装配（NewIconCache，256 条 LRU，隐藏 10s 后裁到 64 条）：
+// 只主线程用，无锁。
 func Icon(icons *IconCache, app appsmodel.AppEntry) *goui.Bitmap {
 	return iconForPath(icons, app.Path, app.Name)
 }

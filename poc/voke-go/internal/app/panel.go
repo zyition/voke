@@ -103,7 +103,11 @@ type appState struct {
 	globalList     ui.ListState
 	list           ui.ListState     // 列表状态（选中/Key/滚动）
 	input          ui.Handle        // 搜索框句柄，唤出时抢焦点
-	icons          *appui.IconCache // 解码图标位图缓存（256 条 FIFO，按 app.Path；主线程用）
+	icons          *appui.IconCache // 解码图标位图缓存（256 条 LRU，按 app.Path；主线程用）
+	// iconTrimTimer / iconTrimGen 是「隐藏 10s 后裁剪图标缓存」的一次性定时器与
+	// 世代号：showPanel 或新的 hidePanel 都会让旧定时器失效（Wox 同款延迟裁剪）。
+	iconTrimTimer *time.Timer
+	iconTrimGen   int
 	// trayLastClick 是托盘左键上一次点击的时刻：mygo 原生只上报单击（wmLButtonUp），
 	// 双击表现为两次 Clicked；据此在系统双击时间窗内识别双击并唤出面板。只主线程读写。
 	trayLastClick time.Time
@@ -148,8 +152,9 @@ func (st *appState) ready() {
 	// 主题：appcfg.Theme 的码值（"system"/"light"/"dark"）与 mygo ThemeSource 逐字相同，
 	// 直接透传。空（无配置）→ mygo 归一为跟随系统。
 	platform.SetThemeSource(string(loaded.Theme))
-	// 解码图标位图缓存：256 条 FIFO（真机 155 应用约 1.4MB，上限约 2.3MB@48px），
-	// 防止长会话里不同 exe 路径把堆无限推高。只主线程读写，见 internal/ui/iconcache.go。
+	// 解码图标位图缓存：256 条 LRU（真机 155 应用约 1.4MB，上限约 2.3MB@48px），
+	// 防止长会话里不同 exe 路径把堆无限推高；隐藏 10s 后另裁到 64 条。
+	// 只主线程读写，见 internal/ui/iconcache.go。
 	st.icons = appui.NewIconCache()
 	// 已落地 provider 注册表 + 进程内频率表（装配一次）。局部变量 `providers` 遮蔽了
 	// 包名，故经 builtinProviders() 助手拿注册表。
@@ -334,6 +339,7 @@ func (st *appState) ready() {
 // 「无闪烁显示」API（如 SWP_NOACTIVATE 暴露），能做到的即此，
 // 实测留 V5。
 func (st *appState) showPanel() {
+	st.stopIconTrimTimer()
 	d := mygo.Screen.PrimaryDisplay()
 	w, h := st.panel.Size()
 	x, y := geometry.PanelTopLeft(d.WorkArea.X, d.WorkArea.Y, d.WorkArea.Width, d.WorkArea.Height, w, h)
@@ -402,8 +408,62 @@ func (st *appState) resetSession() {
 //
 // 末尾的 resetSession 同样幂等（OnBlur 重入时多写一遍空值，无副作用）。
 func (st *appState) hidePanel() {
+	wasVisible := st.panel.IsVisible()
 	st.panel.Hide()
 	st.resetSession()
+	if wasVisible {
+		st.armIconTrimTimer()
+	}
+}
+
+// hiddenIconTrimDelay / hiddenIconCacheMax 对照 Wox 的隐藏裁剪：面板连续隐藏
+// 10 秒后，把解码图标缓存从常规 256 条压到 64 条；快速反复唤起不裁。
+const (
+	hiddenIconTrimDelay = 10 * time.Second
+	hiddenIconCacheMax  = 64
+)
+
+// armIconTrimTimer 在面板真正隐藏后启动一次性裁剪定时器。定时器在后台触发，
+// 裁剪动作经 Window.Update 回主线程（缓存只主线程读写）。世代号确保 showPanel
+// 或下一次 hidePanel 之后旧定时器即使晚到也不会误裁新会话。
+func (st *appState) armIconTrimTimer() {
+	st.stopIconTrimTimer()
+	panel := st.panel
+	if st.icons == nil || panel == nil {
+		return
+	}
+	st.iconTrimGen++
+	gen := st.iconTrimGen
+	st.iconTrimTimer = time.AfterFunc(hiddenIconTrimDelay, func() {
+		// 闭包只捕获 arm 时的 panel，不在后台 goroutine 里读 st.panel；真正裁剪
+		// 经 Window.Update 回主线程，世代号 / 面板同一性 / 已销毁三重校验后才执行。
+		panel.Update(func() {
+			if st.iconTrimGen != gen || st.panel != panel || panel.IsDestroyed() {
+				return
+			}
+			st.iconTrimTimer = nil
+			if panel.IsVisible() {
+				return
+			}
+			if st.settings != nil && !st.settings.closed {
+				return // Wox 同款：设置窗打开时不裁
+			}
+			before := st.icons.Len()
+			removed := st.icons.Trim(hiddenIconCacheMax)
+			if removed > 0 {
+				log.Printf("面板隐藏 %s，裁剪图标缓存 %d→%d 条", hiddenIconTrimDelay, before, st.icons.Len())
+			}
+		})
+	})
+}
+
+// stopIconTrimTimer 停掉待触发的隐藏裁剪，并让已在途的回调失效。
+func (st *appState) stopIconTrimTimer() {
+	st.iconTrimGen++
+	if st.iconTrimTimer != nil {
+		st.iconTrimTimer.Stop()
+		st.iconTrimTimer = nil
+	}
 }
 
 // togglePanel 是全局热键回调：可见则隐，不可见则唤。
