@@ -1,6 +1,5 @@
-# Go 版 Voke 的 CI：只在改动 Go PoC（poc/voke-go/**）时跑，避免与 Rust CI 互相拖累。
-# 合并进主线后可直接把 jobs 并入 ci.yml（或保留本文件做路径过滤），门禁内容不变：
-# gofmt / go mod tidy 自检 / go vet / race 测试 / Windows 交叉 vet + 构建。
+# Go 版 Voke 的 CI：只在改动 Go PoC（poc/voke-go/**）时跑（Rust CI 已退役）。
+# 门禁：gofmt / go mod tidy 自检 / go vet / race 测试 / Windows 交叉 vet + 构建。
 name: go-ci
 
 on:
