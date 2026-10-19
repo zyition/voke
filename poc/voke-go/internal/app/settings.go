@@ -22,6 +22,7 @@ import (
 	"log"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -33,15 +34,23 @@ import (
 	"github.com/zyition/voke/poc/voke-go/internal/ui/theme"
 )
 
+// buildVersion 是发布流水线通过 `-ldflags -X .../internal/app.buildVersion=<tag 版本>`
+// 注入的版本号（与安装器 -dVokeVersion 同源）。本地 / 未注入构建为空串。
+var buildVersion string
+
 // aboutVersion 是「关于」区显示的版本串，对照生产 read_only_item("版本", CARGO_PKG_VERSION)。
-// Go 侧等价取主模块版本（debug.ReadBuildInfo）；本地 / 未打 tag 构建得到 "(devel)"，如实反映
-// 「这是未发布构建」，不编造版本号。拿不到构建信息 → 「未知」。
+// 优先取构建期注入的 buildVersion；未注入时退回 debug.ReadBuildInfo（本地 `go build`
+// 给 "(devel)"，显示为「开发版」而不是把内部占位串直接甩给用户）。
 func aboutVersion() string {
-	bi, ok := debug.ReadBuildInfo()
-	if !ok || bi.Main.Version == "" {
-		return "未知"
+	if v := strings.TrimSpace(buildVersion); v != "" {
+		return v
 	}
-	return bi.Main.Version
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		if v := strings.TrimSpace(bi.Main.Version); v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return "开发版"
 }
 
 // aboutConfigPath 是「关于」区显示的配置文件位置，对照生产 config_path_label：拿不到有效
@@ -77,6 +86,9 @@ type settingsWindow struct {
 	autostart bool
 	theme     string
 	edits     []providerEdit
+	// closed 防重复进入销毁流程：OnClose 与「完成」按钮可能先后触发；销毁本身
+	// 经 Window.Update 延到当前帧之后执行。
+	closed bool
 	// 热键录制器状态：recording 时用一个只读输入框接管按键（每帧回焦点），捕获到组合
 	// 即注册生效；Esc 取消并恢复旧键。recBuf 是只读框的绑定串（不承载实际内容）。
 	recording bool
@@ -160,10 +172,18 @@ func (st *appState) seedSettings(s *settingsWindow) {
 }
 
 // openSettings 懒建并唤出设置窗（托盘「设置…」点来，主线程）。已存在则重刷当前值 +
-// 唤回焦点；创建走 mygo.NewWindow（普通窗，非 Panel/Frameless），OnClose 拦截为隐藏
-// （复用窗口对象，避开重建/销毁生命周期，与面板同款处置）。
+// 唤回焦点；创建走 mygo.NewWindow（普通窗，非 Panel/Frameless）。
+//
+// 生命周期：**关闭 = 程序化销毁**（对照 Rust settings.rs 的 remove_window 处置）。
+// 设置窗 880×600 会新建一套 swapchain / 字体纹理，常驻约 20MB；若像面板一样隐藏复用，
+// 这部分资源在窗口对象存活期间不会归还。故 OnClose /「完成」都走 closeSettings：
+// 先拦截，再把 Destroy 投递到主循环下一次迭代（避免在渲染回调栈内释放原生窗口），
+// 下次打开重新建窗。与 Rust 的「HWND 存活期内销毁」同一目的。
 func (st *appState) openSettings() {
 	if st.settings != nil {
+		if st.settings.closed {
+			return // 正在销毁；等主循环落地后下一次点击再建新窗
+		}
 		st.seedSettings(st.settings)
 		st.settings.win.Show()
 		st.settings.win.Focus()
@@ -182,10 +202,7 @@ func (st *appState) openSettings() {
 			return // 退出流程：放行真关闭（否则 veto 会让 App.Quit 的关窗循环中止）
 		}
 		e.PreventDefault()
-		if s.recording {
-			st.cancelHotkeyRecording(s) // 关窗=放弃录制，恢复旧键
-		}
-		w.Hide()
+		st.closeSettings(s)
 	})
 	// 录制态的两道保险：聚焦续期（短 TTL + 聚焦续期，防「开了录制去干别的」），
 	// 失焦即取消（切到别的应用 / 组合被系统或他人截走时不再干等）。
@@ -204,6 +221,29 @@ func (st *appState) openSettings() {
 	st.seedSettings(s)
 	w.Show()
 	w.Focus()
+	log.Printf("设置窗口已打开")
+}
+
+// closeSettings 结束设置窗：放弃录制、停掉录制定时器，然后**销毁窗口**而不是隐藏。
+// Destroy 经 Window.Update 投递到主循环下一轮执行——「完成」按钮是在设置窗 view 的
+// 渲染回调里调进来的，立即销毁会在回调栈内释放原生窗口；投递后当前帧先正常收尾。
+func (st *appState) closeSettings(s *settingsWindow) {
+	if s == nil || s.closed {
+		return
+	}
+	s.closed = true
+	if s.recording {
+		st.cancelHotkeyRecording(s) // 关窗=放弃录制，恢复旧键（必须赶在销毁前）
+	}
+	stopRecTimer(s)
+	s.win.Hide()
+	s.win.Update(func() {
+		if st.settings == s {
+			st.settings = nil
+		}
+		s.win.Destroy()
+		log.Printf("设置窗口 -> 程序化销毁（释放渲染资源）")
+	})
 }
 
 // startHotkeyRecording 进入录制态：**先注销当前全局热键**——否则按下旧组合会被系统
@@ -405,10 +445,7 @@ func (st *appState) settingsView(c *ui.Context) {
 		ui.Row(c).Padding(18).Gap(12).Children(func() {
 			ui.Spacer(c)
 			if ui.PrimaryButton(c, "完成").Clicked() {
-				if s.recording {
-					st.cancelHotkeyRecording(s)
-				}
-				s.win.Hide()
+				st.closeSettings(s)
 			}
 		})
 	})
