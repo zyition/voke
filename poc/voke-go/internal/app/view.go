@@ -1,0 +1,573 @@
+// view.go：面板整帧视图的**装配接缝** + 查询/模式路由的意图执行器。
+//
+// mygo 是 immediate-mode UI：view 每帧整体重建，只读写 appState，
+// 不持有跨帧的 Element/Context。
+//
+// §7.2 步骤7b：真正的**渲染层**（整帧布局 View、结果列表 AppsResults、单行 Row、
+// 图标 Icon、插件列表 PickerResults / PickerRow、空态文案 EmptyHint）已抽进
+// internal/ui（见 internal/ui/view.go / apps.go / picker.go）。本文件只留两件东西：
+//
+//  1. `view()`：把 appState 的 view 态（model / engineState / table / pickerRows 等）
+//     与窗口/装配侧的副作用（显隐 / 退出 / 启动 / 插件表产出）**组装**成 internal/ui
+//     的渲染入口所需输入，再调它——调用时序、返回值、副作用逐字保持（内部 ui 只画元素、
+//     只发意图，真正的 hidePanel / platform.LaunchApp / appsmodel.EnsureLoaded /
+//     rankPlugins 仍在下面的执行器里落地，见 §7.2.1「ui 只发意图、main 执行」）。
+//  2. 意图执行器（onQueryChanged / applyEngineState / onEsc / moveSelection / open /
+//     choose / clickRow / pickRow / confirmPicker / rebuildPicker / execLaunch /
+//     execute / apply）与按模式现取现算的文案（placeholder / hintLine / pluginPending /
+//     pendingHint / pickerHint）——**模式判定唯一来源是 engine**（铁律②），不进 internal/ui。
+//
+// 行为对栅（生产 voke 面板 search.rs 只读参考）：
+//   - 680 DIP 宽面板，行高 48 DIP（search.rs:144 ROW_HEIGHT）；
+//   - Enter 启动选中项，↑↓ 移动选中；**Esc 在任何模式下都直接隐藏面板**（CmdPal 对齐，
+//     见本文件 onEsc）；逐级回退（SubMode→Plugin→PluginPicker→Global）改由 **Backspace**
+//     在查询词删空那一刻承担（onQueryChanged → engine.BackspaceBack）；
+//   - 图标行：platform.AppIcon(path) 的 PNG，nil 时降级首字母占位（渲染在 internal/ui）。
+package app
+
+import (
+	"log"
+	"time"
+
+	appui "github.com/zyition/voke/poc/voke-go/internal/ui"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
+	"github.com/zyition/voke/poc/voke-go/internal/logic/appsmodel"
+	"github.com/zyition/voke/poc/voke-go/internal/logic/engine"
+	"github.com/zyition/voke/poc/voke-go/internal/logic/frequency"
+	"github.com/zyition/voke/poc/voke-go/internal/logic/panelstate"
+	"github.com/zyition/voke/poc/voke-go/internal/platform"
+	"github.com/zyition/voke/poc/voke-go/internal/providers"
+	"github.com/zyition/voke/poc/voke-go/internal/providers/terminal"
+)
+
+// view 是面板的整帧视图（WindowOptions.Content = ui.View(st.view)）。
+//
+// 本函数只做「读 appState、组 internal/ui 渲染输入、按 mode 选结果区」三件事，画元素
+// 的具体过程都在 internal/ui。键盘路由 / 输入框 / 令牌 / 提示行的布局与原 view() 逐字
+// 相同，只是搬进了 ui.View；副作用经回调回到本文件的执行器。
+func (st *appState) view(c *ui.Context) {
+	appui.View(c, appui.ViewInput{
+		Hotkey:             hotkeyShow,
+		Crumbs:             st.breadcrumbs(),
+		Query:              &st.model.Query,
+		Input:              &st.input,
+		Placeholder:        st.placeholder(),
+		RightHint:          st.hintLine(),
+		OnEsc:              st.onEsc,
+		OnMove:             st.moveSelection,
+		OnOpen:             st.open,
+		OnQueryChanged:     st.onQueryChanged,
+		OnBackspaceAtEmpty: st.onEmptyBackspace,
+		OnQuit:             mygo.App.Quit,
+		OnOpenSettings:     st.openSettings,
+		DiagDone:           &st.gpuDiagOnce,
+		RenderResults:      st.renderResults,
+	})
+}
+
+// renderResults 按 mode 三选一渲染结果区——这段 switch 与原 view() 里的分支逐字对应，
+// 判定只看 engine 持有的模式（这里不出现任何前缀比较，铁律②），画元素交给 internal/ui。
+//
+//   - PluginPicker：出 picker 列表（数据源 pickerRows，rankPlugins 的产物映射成
+//     appui.PluginRow，三个字段原样搬运、不重排不重判）；
+//   - 表里有但没落地实现的插件（pluginPending）：明说未接入，绝不拿 apps 结果冒充；
+//   - 其余（含 Global）：apps 结果列表。
+func (st *appState) renderResults(c *ui.Context) {
+	switch {
+	case st.engineState.Mode() == engine.PluginPicker:
+		rows := make([]appui.PluginRow, len(st.pickerRows))
+		for i, r := range st.pickerRows {
+			rows[i] = appui.PluginRow{ID: r.ID, Name: r.Name, Description: r.Description}
+		}
+		appui.PickerResults(c, rows, &st.pickerChosen, &st.pickerList, st.open, st.pickRow, st.pickerHint())
+	case st.providerActive():
+		// 已落地 provider 的插件态：出 providers.RunOne 的排序结果（provRows 在
+		// applyEngineState 刷新）；空态文案 provHint（解码失败提示 / 用法占位）。
+		appui.ProviderResults(c, st.provRows, &st.provChosen, &st.provList, &st.icons, st.open, st.providerClick, st.provHint)
+	case st.globalActive():
+		// 全局搜索且命中了 apps 以外的全局插件组 → 合并分组列表（apps 组在最前）。
+		appui.GlobalResults(c, st.globalView(), &st.globalChosen, &st.globalList, &st.icons, st.open, st.clickGlobal)
+	case st.pluginPending():
+		// 表里有、既非 apps 也未落地实现（不在 pluginReg）的插件：明说未接入。
+		appui.PendingResults(c, st.pendingHint())
+	default:
+		appui.AppsResults(c, &st.model, &st.icons, &st.list, st.open, st.clickRow)
+	}
+}
+
+// providerActive 报告当前是否落在「已落地实现的 provider 插件」上（Plugin 或 SubMode
+// 且 PluginID 命中 pluginReg）。apps / picker 各有专属分支，不算 providerActive。
+func (st *appState) providerActive() bool {
+	m := st.engineState.Mode()
+	if m != engine.Plugin && m != engine.SubMode {
+		return false
+	}
+	if st.pluginReg == nil {
+		return false
+	}
+	_, ok := st.pluginReg.Get(st.engineState.PluginID())
+	return ok
+}
+
+// placeholder / hintLine 是输入框占位与底部提示的按模式文案。
+//
+// Global 分支返回的字符串与接线前**逐字相同**（"搜索应用" /
+// "↑↓ 选择  单击/↵ 启动  esc 清空/隐藏"）；只有命中过前缀的帧才会换文案。
+func (st *appState) placeholder() string {
+	switch st.engineState.Mode() {
+	case engine.PluginPicker:
+		return "搜索插件"
+	case engine.Plugin, engine.SubMode:
+		// 已注册插件：用其（子模式）占位符（如 base64「输入要加密/解密的内容」）。
+		// 占位符为空则回落；apps / 未注册走下面的默认。
+		if st.pluginReg != nil {
+			if p, ok := st.pluginReg.Get(st.engineState.PluginID()); ok {
+				if s := p.Placeholder(st.engineState.SubMode()); s != "" {
+					return s
+				}
+			}
+		}
+	}
+	return "搜索应用"
+}
+
+func (st *appState) hintLine() string {
+	if st.engineState.Mode() == engine.PluginPicker {
+		return "↑↓ 选择  单击/↵ 进入  esc 返回全局"
+	}
+	return "↑↓ 选择  单击/↵ 启动  esc 清空/隐藏"
+}
+
+// pluginPending 报告当前是否落在「表里有、但既非 apps 也未落地实现（不在 pluginReg）」
+// 的插件上。apps 走自身路径、已注册 provider 走 providerActive 路径，都不算 pending；
+// 只有「注册了前缀但还没写实现」的插件才落这里，明说未接入而非拿 apps 结果冒充。
+func (st *appState) pluginPending() bool {
+	m := st.engineState.Mode()
+	if m == engine.Global || m == engine.PluginPicker {
+		return false
+	}
+	if st.engineState.PluginID() == providerAppsID {
+		return false
+	}
+	return !st.providerActive()
+}
+
+// pendingHint 是未落地插件的占位文案（把 id 带出来，方便真机/日志对照）。
+func (st *appState) pendingHint() string {
+	return "插件 " + st.engineState.PluginID() + " 尚未接入（本轮只落地 应用 与 插件列表）"
+}
+
+// pickerHint 是 picker 列表空态文案：「一个可选插件都没有」与「过滤词不中」
+// 是两回事（前者是注册表只有 picker 自己，属配置问题，得说清）。
+func (st *appState) pickerHint() string {
+	if st.engineState.Query() == "" {
+		return "没有已启用的插件"
+	}
+	return "没有匹配的插件"
+}
+
+// filter 委托 panelstate.Model.Filter，把返回的意图就地执行。
+// 只在主线程调用（view 内或 Window.Update 回调内）。
+func (st *appState) filter() {
+	st.execute(st.model.Filter())
+}
+
+// onQueryChanged 是搜索框内容变化后的统一入口：**先问 engine 这是什么模式，
+// 再决定把查询词交给谁**。
+//
+// 接线前这里只有一行 `st.execute(st.model.OnQueryChanged(time.Now()))`；接线后
+// 多出来的只有「Scan + 按 mode 派发」，而 mode 恒为 Global 时（=不打前缀=今天
+// 全部真实使用路径）派发落回 applyEngineState 的 default 分支，执行的就是
+// 那一行本身（见 applyEngineState）。懒加载触发点因此仍在 panelstate.Model 里，
+// 没挪、没抄第二份。
+func (st *appState) onQueryChanged() {
+	next := engine.Scan(st.table, st.engineState, st.model.Query)
+	// 只问 Scan 这是什么模式并落位——**不再**用「prev 非空 → 本次空」的状态猜测去
+	// 触发回退（那是特殊 hack，且会让输入为空时进的插件按 Backspace 退不动）。逐级
+	// 回退统一交 onEmptyBackspace（由输入框 OnTextKey 在「空 + Backspace」按键时驱动）。
+	st.applyEngineState(next)
+}
+
+// onEmptyBackspace 处理「输入框已空时按 Backspace」：沿 SubMode→Plugin→PluginPicker→
+// Global 逐级回退一级；已在 Global 则原地不动。由 ui 层输入框的 OnTextKey 捕获该按键
+// 调入（非空 Backspace 交编辑引擎正常删字符）。返回 true 消费此键——绝无关面板分支
+// （关面板只由 Esc 负责，见 engine.BackspaceBack 契约 close 恒 false）。
+func (st *appState) onEmptyBackspace() bool {
+	next, _ := engine.BackspaceBack(st.engineState)
+	st.applyEngineState(next)
+	return true
+}
+
+// applyEngineState 是模式状态的**唯一落点**：先同步输入框文本，再按 mode 派发。
+//
+// 同步方向是 State → 输入框（规则⑤：前缀不进输入框）。engine.Scan 命中前缀时
+// 把前缀吞掉、Query 置空，这里把框也清成空串；实测 mygo 认这种外部写入
+// （textinput.go:54 的 `ed.buf.s != *value` 分支，见 engine_wiring_test.go
+// 的 TestTypingPrefixClearsInputBoxInRealFrame——打完 "#" 再打 "y"，
+// 框里是 "y" 而不是 "#y"）。
+//
+// 派发三条路：
+//   - PluginPicker：出 picker 列表（rankPlugins），**完全不碰 model** ——
+//     picker 里的过滤词因此既不改 apps 的结果集，也不会触发 apps 的懒加载枚举
+//     （§7.7 决策④：只有真要搜应用时才枚举）；
+//   - Global / Plugin(apps)：把 Query 交给现有的 apps 过滤链路（逐字是接线前那行）；
+//   - 未落地的插件（pluginPending）：不出 apps 结果，出占位文案（见 renderResults 的分支）。
+func (st *appState) applyEngineState(next engine.State) {
+	st.engineState = next
+	if st.model.Query != next.Query() {
+		st.model.Query = next.Query()
+	}
+	if next.Mode() == engine.PluginPicker {
+		st.rebuildPicker()
+		return
+	}
+	if st.providerActive() {
+		// 已注册 provider：算它自己的结果，完全不碰 apps 的 model（懒加载也不触发）。
+		st.refreshProviderResults()
+		return
+	}
+	if st.pluginPending() {
+		return // 结果区出占位文案，这里不动 apps
+	}
+	st.execute(st.model.OnQueryChanged(time.Now()))
+	st.refreshGlobalAgg() // apps 结果更新后重算合并行（有全局插件命中才走合并渲染，否则 apps-only）
+}
+
+// refreshProviderResults 用当前 engineState（pluginID + subMode + query）跑一遍
+// providers.RunOne（weight×score×frequency 排序），写 provRows / provHint，选中复位到
+// 第 0 行（与 apps/picker 过滤词一变即回首行同姿势）。
+func (st *appState) refreshProviderResults() {
+	p, ok := st.pluginReg.Get(st.engineState.PluginID())
+	if !ok {
+		st.provRows, st.provChosen, st.provHint = nil, 0, ""
+		st.provLastKey = ""
+		return
+	}
+	key := providerQueryKey(st.engineState)
+	// 会重掷结果的 provider（random/timestamp/uuid）：输入没变（面板重新显示 / 热更新
+	// 等「没改却重跑」的路径）必须跳过重查，否则用户正要复制的值会被换成新的——
+	// 对照 Rust `regenerates_on_query` 的调用侧护栏。确定性 provider 重跑结果一致，不必跳。
+	if p.RegeneratesOnQuery() && key == st.provLastKey && len(st.provRows) > 0 {
+		return
+	}
+	ctx := providers.QueryCtx{Raw: st.engineState.Query(), Query: st.engineState.Query(), SubMode: st.engineState.SubMode()}
+	ranked, hints := providers.RunOne(p, ctx, st.freq)
+	st.provLastKey = key
+	st.provRows, st.provChosen, st.provHint = ranked, 0, ""
+	if len(ranked) == 0 {
+		if len(hints) > 0 {
+			st.provHint = hints[0].Title // 例如 base64 解码失败的「解码失败」
+		} else {
+			st.provHint = p.Placeholder(st.engineState.SubMode()) // 空输入的用法提示
+		}
+	}
+	if len(ranked) > 0 {
+		st.provList.ScrollIntoView(st.provChosen)
+	}
+}
+
+// breadcrumbs 把作用域栈映射成输入行的面包屑（栈底→栈顶，跳过 Global）。每段带显示名 +
+// 取图标的插件 id + 是否当前层；ui 层按 PluginIconSVG 画图标、› 分隔、当前层高亮。
+func (st *appState) breadcrumbs() []appui.Crumb {
+	scs := st.engineState.Scopes()
+	out := make([]appui.Crumb, 0, len(scs))
+	for i, sc := range scs {
+		if sc.Kind == engine.Global {
+			continue
+		}
+		label, pid := sc.PluginID, sc.PluginID
+		switch sc.Kind {
+		case engine.PluginPicker:
+			label, pid = "插件列表", engine.PickerPluginID
+		case engine.Plugin:
+			label = st.providerName(sc.PluginID)
+		case engine.SubMode:
+			label = sc.SubMode // 子命令标识（enc/dec 等），图标沿用所属插件
+		}
+		out = append(out, appui.Crumb{Label: label, ProviderID: pid, Current: i == len(scs)-1})
+	}
+	return out
+}
+
+// providerQueryKey 是 provider 一次查询的输入指纹（pluginID+subMode+query）。
+// 会重掷结果的 provider 靠它判断「输入没变」→ 跳过重查。
+func providerQueryKey(s engine.State) string {
+	return s.PluginID() + "\x00" + s.SubMode() + "\x00" + s.Query()
+}
+
+// onEsc 是 Esc 的唯一入口：**任何模式下 Esc 一律直接隐藏面板**（CmdPal 对齐，用户拍板）。
+// 逐级回退不再由 Esc 承担——那是 Backspace 的职责（见 onQueryChanged 里对
+// engine.BackspaceBack 的调用）。hidePanel 内部 resetSession 会把模式状态清回 Global，
+// 加上 showPanel 会清 Query，故下一次唤起必是干净的 Global 新会话。
+func (st *appState) onEsc() {
+	st.hidePanel()
+}
+
+// moveSelection 移动选中行：picker 模式在自己的列表上走，其余（含 Global）
+// 逐字是接线前的 `st.choose(st.model.Chosen ± delta)`。
+func (st *appState) moveSelection(delta int) {
+	if st.engineState.Mode() == engine.PluginPicker {
+		st.choosePicker(st.pickerChosen + delta)
+		return
+	}
+	if st.providerActive() {
+		st.chooseProvider(st.provChosen + delta)
+		return
+	}
+	if st.globalActive() {
+		st.chooseGlobal(st.globalChosen + delta)
+		return
+	}
+	st.choose(st.model.Chosen + delta)
+}
+
+// choose 移动选中行（钳在 [0, len-1]），并把「滚入视野」的意图执行到 st.list。
+// 钳位与「空列表不滚动」的判断都在 panelstate.Model.Choose 里，本函数只落地副作用。
+func (st *appState) choose(i int) {
+	st.execute(st.model.Choose(i))
+}
+
+// choosePicker 是 picker 版的 choose：钳位 + 滚动，但只碰 picker 自己的状态。
+// 空列表只复位选中、不滚动（与 panelstate.Model.Choose 同一口径）。
+func (st *appState) choosePicker(i int) {
+	if len(st.pickerRows) == 0 {
+		st.pickerChosen = 0
+		return
+	}
+	st.pickerChosen = max(0, min(i, len(st.pickerRows)-1))
+	st.pickerList.ScrollIntoView(st.pickerChosen)
+}
+
+// clickRow 处理「单击某行」：委托 Model.ClickRow 得到启动意图，交由 execLaunch
+// 执行（启动成功才清空+过滤+隐藏，失败保留面板）。选中行的设置已在 Model 内完成。
+func (st *appState) clickRow(i int) {
+	st.execLaunch(st.model.ClickRow(i))
+}
+
+// pickRow 单击 picker 的一行 = 选中它并进入它（决策⑤「单击即执行」在 picker
+// 列表上的对应物：这里的「执行」是进插件第一级，不是启动）。
+func (st *appState) pickRow(i int) {
+	if i < 0 || i >= len(st.pickerRows) {
+		return
+	}
+	st.pickerChosen = i
+	st.confirmPicker()
+}
+
+// confirmPicker 把 picker 选中的插件 id 交给 engine.SelectPlugin 进第一级。
+// 不在这里手拼 State（铁律②：模式构造只留在 engine）。
+func (st *appState) confirmPicker() {
+	if st.pickerChosen < 0 || st.pickerChosen >= len(st.pickerRows) {
+		return
+	}
+	st.applyEngineState(engine.SelectPlugin(st.engineState, st.pickerRows[st.pickerChosen].ID))
+}
+
+// enterPlugin 是「程序化进入某插件第一级」的唯一入口——对照生产
+// main.rs 的 `open_awake → view.activate_plugin("awake")`：不经输入框、不打前缀，
+// 由外部动作（托盘状态条目点击）直接把模式切到指定插件。构造仍只交给
+// engine.SelectPlugin（铁律②：模式构造只留在 engine，app 层不手拼 State）。
+//
+// 与 confirmPicker 的区别只是 id 来源：picker 取列表选中行，本函数取调用方给的 id。
+// 落点同样是 applyEngineState，故进 providerActive 的插件会即时刷出该插件的候选
+// （如 awake 一级亮屏方式），与非前缀路径行为一致。
+func (st *appState) enterPlugin(id string) {
+	st.applyEngineState(engine.SelectPlugin(st.engineState, id))
+}
+
+// rebuildPicker 按当前过滤词重出 picker 列表，并把选中复位到第 0 行
+// （与 apps 侧 filter→Choose(0) 同一姿势：过滤词一变，选中的是「新列表的第一行」）。
+func (st *appState) rebuildPicker() {
+	st.pickerRows = rankPlugins(st.providers, st.engineState.Query())
+	st.pickerChosen = 0
+	if len(st.pickerRows) > 0 {
+		st.pickerList.ScrollIntoView(st.pickerChosen)
+	}
+}
+
+// open 是 Enter / ↵ / list.Submitted 的唯一入口，先问模式：
+//
+//   - PluginPicker：Enter 选定当前插件行 → 进该插件第一级（engine.SelectPlugin）；
+//   - 未落地的插件：什么都不做（绝不能拿 apps 的陈旧结果去启动）；
+//   - 其余（含 Global）：逐字是接线前的 `st.execLaunch(st.model.Open())`。
+func (st *appState) open() {
+	switch {
+	case st.engineState.Mode() == engine.PluginPicker:
+		st.confirmPicker()
+	case st.providerActive():
+		st.openProvider()
+	case st.globalActive():
+		st.openGlobal(st.globalChosen)
+	case st.pluginPending():
+		return
+	default:
+		st.execLaunch(st.model.Open())
+	}
+}
+
+// providerClick 单击 provider 结果行：选中它再走与 Enter 同一条执行路（决策⑤单击即执行）。
+func (st *appState) providerClick(i int) {
+	if i < 0 || i >= len(st.provRows) {
+		return
+	}
+	st.provChosen = i
+	st.openProvider()
+}
+
+// chooseProvider 钳位 provider 选中行 + 滚入视野；空列表只复位。
+func (st *appState) chooseProvider(i int) {
+	if len(st.provRows) == 0 {
+		st.provChosen = 0
+		return
+	}
+	st.provChosen = max(0, min(i, len(st.provRows)-1))
+	st.provList.ScrollIntoView(st.provChosen)
+}
+
+// openProvider 执行当前 provider 选中行的意图：委托 runProviderIntent（providerID 取当前
+// 激活插件），保持与拆出前逐字一致的行为。
+func (st *appState) openProvider() {
+	if st.provChosen < 0 || st.provChosen >= len(st.provRows) {
+		return
+	}
+	st.runProviderIntent(st.provRows[st.provChosen].Match, st.engineState.PluginID())
+}
+
+// runProviderIntent 是 provider 结果行「执行」的唯一实现（IntentFor 分流）：
+// Copy→写剪贴板+记频率+隐藏；EnterSubMode→进子模式并刷新；ActivatePlugin→切插件；
+// PlatformAction→其余副作用（execPlatformAction）。providerID 供频率键（Global 合并列表里
+// 各行 providerID 不同，故参数化；插件态传 engineState.PluginID = 原行为）。
+func (st *appState) runProviderIntent(m providers.Match, providerID string) {
+	switch intent := providers.IntentFor(m); intent.Kind {
+	case providers.IntentCopy:
+		platform.WriteClipboard(intent.Text)
+		if st.freq != nil {
+			st.freq.Record(frequency.Key(providerID, m.Title))
+			saveFrequency(st.freq) // 持久化由 env 路径决定；未设 = no-op
+		}
+		st.hidePanel()
+	case providers.IntentEnterSubMode:
+		st.applyEngineState(engine.EnterSubMode(st.engineState, providerID, intent.Text))
+	case providers.IntentActivatePlugin:
+		st.applyEngineState(engine.SelectPlugin(st.engineState, intent.Text))
+	case providers.IntentRefresh:
+		// 「重新生成」行（random 二级首条）：用同一输入再掷一批。面板保留、输入不动
+		// （对照生产 Action::Refresh：should_reset_input=false + 「让 app 用同一输入再掷一批」）。
+		// 清 provLastKey 绕过 RegeneratesOnQuery 的「同输入跳过」护栏——那条是给「没改却重跑」
+		// （热更 / 重新显示）防抖用的，这里是用户显式点了重掷，必须真再算一遍出新批次。
+		st.provLastKey = ""
+		st.refreshProviderResults()
+	case providers.IntentPlatformAction:
+		if st.execPlatformAction(m.Action) {
+			if st.freq != nil {
+				st.freq.Record(frequency.Key(providerID, m.Title))
+				saveFrequency(st.freq)
+			}
+			st.hidePanel()
+		}
+		// 返回 false（窗口已消失 / 启动失败 / 未接入）→ 不隐藏，保留面板让用户重试。
+	default: // IntentNothing：提示行，什么都不做
+	}
+}
+
+// execPlatformAction 执行 provider 的副作用动作（对照 voke-app 的 dispatcher：core 只
+// 声明意图、副作用在边界落地）。返回 true = 已生效（调用方据此记频率 + 隐藏面板）；
+// false = 未生效（窗口没了 / 启动失败 / 动作类型尚未接入），面板保留。
+//
+// 平台相关调用都在 internal/platform 里，Windows 真实现、非 Windows 记日志占位，
+// 因此本函数跨平台可测（Linux 上 SetAwake/CancelAwake 走 stub、ActivateWindow 恒 false）。
+func (st *appState) execPlatformAction(a providers.Action) bool {
+	switch a.Kind {
+	case providers.ActionSetAwake:
+		platform.SetAwake(a.Minutes, a.KeepScreen)
+		st.refreshTrayMenu() // awake 变化即时刷新托盘状态条目（主线程，见 panel.go refreshTrayMenu）
+		return true
+	case providers.ActionCancelAwake:
+		platform.CancelAwake()
+		st.refreshTrayMenu()
+		return true
+	case providers.ActionActivateWindow:
+		return platform.ActivateWindow(a.Hwnd)
+	case providers.ActionLaunch:
+		return platform.Launch(a.Path, a.Args, a.NoConsole) == nil
+	case providers.ActionLaunchTerminalProfile:
+		// WT profile：先 App Activation（对齐 CmdPal / 生产，可带 `--profile "<guid>"`），
+		// 失败（如 WT 非 MSIX 安装的解包版）回退 wt.exe 直启 `-p <profile>`。对照
+		// voke-app dispatcher 的 n_profile（activate_app → 失败兜底 CreateProcess）。
+		if pid, ok := platform.ActivateApp(a.Aumid, terminal.ActivationArguments(a.Profile)); ok {
+			log.Printf("voke：WT App Activation 已提交 aumid=%s profile=%s pid=%d", a.Aumid, a.Profile, pid)
+			return true
+		}
+		if a.FallbackPath != "" {
+			if err := platform.Launch(a.FallbackPath, []string{"-p", a.Profile}, true); err == nil {
+				log.Printf("voke：App Activation 失败，已回退 wt.exe 直启 profile=%s", a.Profile)
+				return true
+			} else {
+				log.Printf("voke：wt.exe 兜底直启也失败（%s）：%v", a.FallbackPath, err)
+			}
+		}
+		log.Printf("voke：终端 profile 启动失败（激活与兜底均未成功）profile=%s", a.Profile)
+		return false
+	default:
+		log.Printf("voke：provider 动作类型 %v 未接入执行", a.Kind)
+		return false
+	}
+}
+
+// execLaunch 执行「可能含启动动作」的意图序列，保持原 clickRow/open 的时序：
+//
+//   - 遇到 ActionLaunch：取 Results[Index] 调 platform.LaunchApp；**成功**才调
+//     model.LaunchSucceeded()（清空查询+重新过滤+隐藏），把其返回的意图继续执行；
+//     **失败**只记日志并立即返回——面板得以保留，用户可改查询重试。
+//   - 其余意图（如未来可能出现的非启动前置动作）按序执行。
+//
+// 之所以把「清空/过滤/隐藏」拆到 LaunchSucceeded 而非和 Launch 一次性返回，正是
+// 为了守住「启动失败不清空、不隐藏」这条 E-1 行为：那几步会改状态，必须等
+// platform.LaunchApp 真的成功才提交。
+//
+// platform.LaunchApp 只在主线程调（背后 onMainValue，见 internal/platform/shell.go
+// 的线程标注）；本函数的调用点（Enter / 单击）本来就在主线程。
+func (st *appState) execLaunch(acts []panelstate.Action) {
+	for _, a := range acts {
+		if a.Kind == panelstate.ActionLaunch {
+			app := st.model.Results[a.Index]
+			if err := platform.LaunchApp(app); err != nil {
+				log.Printf("启动 %s 失败：%v", app.Name, err)
+				return
+			}
+			// 启动成功 → 记一次 apps 使用频率（对照生产 search.rs record_use("apps:<name>")），
+			// 下次 FilterApps 的 rank 据此把它顶到前面。键前缀用 appsmodel.ProviderID，与
+			// search.boostOf 的键必须一致。失败不记（与生产「选中执行才记」同）。
+			if st.freq != nil {
+				st.freq.Record(frequency.Key(appsmodel.ProviderID, app.Name))
+				saveFrequency(st.freq)
+			}
+			st.execute(st.model.LaunchSucceeded())
+			return
+		}
+		st.apply(a)
+	}
+}
+
+// execute 按序执行一组意图（不含启动——启动走 execLaunch 的成功门控）。
+func (st *appState) execute(acts []panelstate.Action) {
+	for _, a := range acts {
+		st.apply(a)
+	}
+}
+
+// apply 把单条「意图」翻译成对应的 UI/平台副作用。这是 panelstate 与 mygo 之间
+// 唯一的边界：logic 层只说做什么，副作用在此落地。Show/Hide 的 Show 仍只从
+// showPanel 走（§7.1.4）；这里只会因 LaunchSucceeded / Esc 调 hidePanel。
+func (st *appState) apply(a panelstate.Action) {
+	switch a.Kind {
+	case panelstate.ActionEnsureLoad:
+		appsmodel.EnsureLoaded()
+	case panelstate.ActionScrollTo:
+		st.list.ScrollIntoView(a.Index)
+	case panelstate.ActionHide:
+		st.hidePanel()
+	}
+}
