@@ -37,6 +37,16 @@
 
 ## 验证命令组合
 
+Go（当前主线，与 CI 同款）：
+
+```bash
+cd poc/voke-go
+gofmt -l . && go vet ./... && go test -race -count=1 -shuffle=on ./...
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -tags mygo_noinspector -ldflags="-s -w -H windowsgui" -o /tmp/voke.exe .
+```
+
+Rust（旧版，代码暂留作参考，CI 已退役）：
+
 ```bash
 cargo check --target x86_64-pc-windows-gnu -p voke-app --all-targets   # UI 改动验收（含测试代码）
 cargo test -p voke-core     # 285
@@ -54,14 +64,15 @@ cargo clippy -p voke-core -p voke-sys -p voke-app --all-targets        # 新代�
 
 ## 发版流程
 
-推 `vX.Y.Z` tag 即触发发版：`git tag v0.2.0 && git push origin v0.2.0` →
-`.github/workflows/release.yml` 在 windows-latest 上出安装包（`voke-setup-<ver>.exe`）
-与 portable zip（`voke-vX.Y.Z-windows-x86_64.zip`），建 GitHub Release 挂上这两个产物，
-并用 git-cliff 重新生成 `CHANGELOG.md` 回推默认分支。
+推 `vX.Y.Z` tag 即触发 **Go 版**发版：`git tag v0.2.0 && git push origin v0.2.0` →
+`.github/workflows/release.yml` 在 windows-latest 用 Go 构建 `poc/voke-go`，出安装包
+（`voke-setup-<ver>.exe`）与 portable zip（`voke-vX.Y.Z-windows-x86_64.zip`）；ubuntu job
+用 git-cliff 生成 `CHANGELOG.md` 并回推默认分支，建 GitHub Release 挂上两个产物。
+Rust 的 `ci.yml` 与旧 Rust 发版流水线已退役（Rust 代码暂留作参考）。
 
-版本号以 **tag 为唯一事实来源**：CI 会把 tag 写回 `Cargo.toml` 的 workspace version，
-`voke-app/build.rs` 据此写 exe 的 VERSIONINFO，ISCC 用 `-dVokeVersion` 覆盖安装器版本
-（不 sed 改 `voke.iss`）。所以本地不用手动改版本号文件。
+版本号以 **tag 为唯一事实来源**：Go exe 尚未注入 VERSIONINFO（已知差距），ISCC 用
+`-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名（不 sed 改 `voke.iss`），本地不用
+手动改版本文件。手动 `workflow_dispatch` 只出 artifacts、不建 Release，用于验证打包链路。
 
 ## 项目特有机制（一句话 + 指向文件）
 
