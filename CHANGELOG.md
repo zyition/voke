@@ -3,6 +3,15 @@
 > 本文件由 [git-cliff](https://git-cliff.org/) 依据 Conventional Commits 自动生成
 > （分组规则见 `cliff.toml`，发版流程见 `AGENTS.md`），**请勿手工编辑**。
 
+## [0.2.0] - 2026-10-19
+
+### 新功能
+
+- Go + mygo 全功能重写（替换 Rust 版准备，含 CI/CD）
+
+### 文档
+
+- 修正配置路径与 fmt 纪律的过时说明
 ## [0.1.3] - 2026-10-14
 
 ### 缺陷修复
