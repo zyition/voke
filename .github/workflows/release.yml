@@ -59,12 +59,15 @@ jobs:
           "VOKE_TAG=v$ver" >> $env:GITHUB_ENV
           Write-Host "版本：$ver"
 
-      - name: go build（Windows GUI，含 exe 图标 syso）
+      - name: go build（Windows GUI，含 exe 图标 syso 与版本注入）
         working-directory: poc/voke-go
         shell: pwsh
+        # buildVersion 经 -ldflags -X 注入（设置页「关于」显示）；与安装器
+        # -dVokeVersion 同源，均取 tag。Go 没有 build.rs，链接器只改写 string 变量。
         run: |
           $ErrorActionPreference = 'Stop'
-          go build -tags mygo_noinspector -ldflags="-s -w -H windowsgui" -o voke.exe .
+          $ldflags = "-s -w -H windowsgui -X github.com/zyition/voke/poc/voke-go/internal/app.buildVersion=$env:VOKE_VERSION"
+          go build -tags mygo_noinspector -ldflags="$ldflags" -o voke.exe .
           if ($LASTEXITCODE -ne 0) { throw "go build 失败（exit=$LASTEXITCODE）" }
 
       - name: 安装 Inno Setup 7

@@ -12,8 +12,19 @@ import (
 	"github.com/zyition/voke/poc/voke-go/internal/logic/engine"
 )
 
+// TestAboutVersionInjected 验证发布流水线 -ldflags -X 注入的版本优先于
+// debug.ReadBuildInfo（后者对 `go build` 恒为 "(devel)"）。
+func TestAboutVersionInjected(t *testing.T) {
+	old := buildVersion
+	t.Cleanup(func() { buildVersion = old })
+	buildVersion = "0.2.1"
+	if got := aboutVersion(); got != "0.2.1" {
+		t.Errorf("应显示注入版本 0.2.1，实得 %q", got)
+	}
+}
+
 // TestAboutHelpers 覆盖「关于」区两段只读值（对照生产 general_page 的「关于」group）：
-// 版本非空（ReadBuildInfo 本地构建给 "(devel)"，仍非空）；配置文件路径按 env 分支——
+// 版本非空（未注入时退回 ReadBuildInfo，本地构建显示「开发版」）；配置文件路径按 env 分支——
 // 设绝对路径 → 原样显示；设相对路径（IsAbs=false）→ 落到「未落盘…」文案，与生产
 // config_path_label 的「取不到路径就不显示半截」语义一致。
 func TestAboutHelpers(t *testing.T) {
