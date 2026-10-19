@@ -20,7 +20,7 @@ type GlobalRow struct {
 }
 
 // GlobalResults 渲染合并列表；ls/chosen 驱动单列表键盘导航，onOpen=Enter，onClick(i)=单击。
-func GlobalResults(c *goui.Context, rows []GlobalRow, chosen *int, ls *goui.ListState, icons *map[string]*goui.Bitmap, onOpen func(), onClick func(i int)) {
+func GlobalResults(c *goui.Context, rows []GlobalRow, chosen *int, ls *goui.ListState, icons *IconCache, onOpen func(), onClick func(i int)) {
 	ls.Selected = chosen
 	ls.Key = func(i int) any { return i }
 	ls.Label = func(i int) string { return rows[i].Title }
@@ -32,7 +32,7 @@ func GlobalResults(c *goui.Context, rows []GlobalRow, chosen *int, ls *goui.List
 }
 
 // globalRow 画一条合并行：可选组标题行 + 「图标 + 标题 + 副标题」药丸行。
-func globalRow(c *goui.Context, r GlobalRow, chosen int, icons *map[string]*goui.Bitmap, onClick func(i int), i int) {
+func globalRow(c *goui.Context, r GlobalRow, chosen int, icons *IconCache, onClick func(i int), i int) {
 	t := c.Theme()
 	btn := goui.ButtonBase(c).Grow(1).AlignItems(goui.Center).Background(t.Background)
 	if btn.Clicked() {

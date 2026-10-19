@@ -33,7 +33,7 @@ type ProviderRow struct {
 //   - hintText：无结果时展示的文案（提示行或占位说明）；
 //   - icons：与 apps 行共用的进程内图标缓存（按 Match.Icon 里的路径懒取；纯计算型 provider
 //     的 Match.Icon 为空串 → 该行不画图标，布局与原「标题+副标题」逐字不变）。
-func ProviderResults(c *goui.Context, rows []providers.RankedMatch, chosen *int, ls *goui.ListState, icons *map[string]*goui.Bitmap, onOpen func(), onClick func(i int), hintText string) {
+func ProviderResults(c *goui.Context, rows []providers.RankedMatch, chosen *int, ls *goui.ListState, icons *IconCache, onOpen func(), onClick func(i int), hintText string) {
 	t := c.Theme()
 	ls.Selected = chosen
 	ls.Key = func(i int) any { return i }
@@ -52,7 +52,7 @@ func ProviderResults(c *goui.Context, rows []providers.RankedMatch, chosen *int,
 // providerRow 画一行：可选图标（Match.Icon 非空时）+ 标题 + 副标题。三态配色与 hover
 // 逻辑与 apps Row 同口径。Match.Icon 为空串（base64/uuid 等纯计算 provider）→ 不画图标，
 // 行布局与改造前逐字一致。
-func providerRow(c *goui.Context, m providers.RankedMatch, chosen int, icons *map[string]*goui.Bitmap, onClick func(i int), i int) {
+func providerRow(c *goui.Context, m providers.RankedMatch, chosen int, icons *IconCache, onClick func(i int), i int) {
 	t := c.Theme()
 	bg := goui.Transparent
 	if i == chosen {

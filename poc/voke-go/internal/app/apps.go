@@ -102,6 +102,11 @@ func loadAppsAsync() {
 	shortcuts := platform.ShortcutApps()
 	entries = appsmodel.MergeShortcutApps(entries, shortcuts)
 	entries = appsmodel.DedupeApps(entries)
+	// Target 只服务跨来源去重（.lnk 目标 vs AppsFolder ID 词干），进入 UI 前清掉：
+	// 真机 40 条快捷方式共约 2KB 绝对路径，量小但不该随应用列表常驻。
+	for i := range entries {
+		entries[i].Target = ""
+	}
 	// 耗时打点：喂 V3 与生产口径（几十到几百毫秒，apps.rs:589-590）对照。
 	log.Printf("应用枚举完成：%d 条（AppsFolder %d + 快捷方式 %d，耗时 %s）", len(entries), len(found), len(shortcuts), elapsed)
 	// 「引擎索引完成」是 memory-footprint.md §1 快照标签体系的最后一点

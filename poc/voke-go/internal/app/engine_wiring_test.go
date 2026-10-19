@@ -38,6 +38,7 @@ import (
 	"github.com/zyition/voke/poc/voke-go/internal/logic/testutil"
 	"github.com/zyition/voke/poc/voke-go/internal/platform"
 	"github.com/zyition/voke/poc/voke-go/internal/providers"
+	appui "github.com/zyition/voke/poc/voke-go/internal/ui"
 )
 
 // 装配产物的绝对期望。改 providers.go 的 Descriptor 就得一并改这里——这是有意的：
@@ -923,9 +924,9 @@ func TestResetSessionClearsModes(t *testing.T) {
 // newRealRowTester 的处理）。picker 行不取图标，没有这个坑。
 func newViewTester(t *testing.T, st *appState) *ui.Tester {
 	t.Helper()
-	st.icons = map[string]*ui.Bitmap{}
+	st.icons = appui.NewIconCache()
 	for _, a := range st.model.Apps {
-		st.icons[a.Path] = nil
+		st.icons.Put(a.Path, nil)
 	}
 	tt := ui.NewTester(st.view, geometry.PanelWidth, geometry.PanelHeight)
 	tt.Frame()

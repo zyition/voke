@@ -85,15 +85,15 @@ func (st *appState) renderResults(c *ui.Context) {
 	case st.providerActive():
 		// 已落地 provider 的插件态：出 providers.RunOne 的排序结果（provRows 在
 		// applyEngineState 刷新）；空态文案 provHint（解码失败提示 / 用法占位）。
-		appui.ProviderResults(c, st.provRows, &st.provChosen, &st.provList, &st.icons, st.open, st.providerClick, st.provHint)
+		appui.ProviderResults(c, st.provRows, &st.provChosen, &st.provList, st.icons, st.open, st.providerClick, st.provHint)
 	case st.globalActive():
 		// 全局搜索且命中了 apps 以外的全局插件组 → 合并分组列表（apps 组在最前）。
-		appui.GlobalResults(c, st.globalView(), &st.globalChosen, &st.globalList, &st.icons, st.open, st.clickGlobal)
+		appui.GlobalResults(c, st.globalView(), &st.globalChosen, &st.globalList, st.icons, st.open, st.clickGlobal)
 	case st.pluginPending():
 		// 表里有、既非 apps 也未落地实现（不在 pluginReg）的插件：明说未接入。
 		appui.PendingResults(c, st.pendingHint())
 	default:
-		appui.AppsResults(c, &st.model, &st.icons, &st.list, st.open, st.clickRow)
+		appui.AppsResults(c, &st.model, st.icons, &st.list, st.open, st.clickRow)
 	}
 }
 

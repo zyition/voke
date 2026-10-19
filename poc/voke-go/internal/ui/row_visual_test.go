@@ -171,9 +171,9 @@ func marks(spans []rowSpan) []rowSpan {
 func newRealRowTester(t *testing.T, chosen int) (*goui.Tester, *goui.Theme) {
 	t.Helper()
 	m := panelstate.Model{Results: testutil.MkApps("AA", "BB", "CC", "DD"), Chosen: chosen}
-	icons := map[string]*goui.Bitmap{}
+	icons := NewIconCache()
 	for _, a := range m.Results {
-		icons[a.Path] = nil
+		icons.Put(a.Path, nil)
 	}
 	var ls goui.ListState
 	// renderedTheme 而非 theme：包名 theme（字号/行视觉常量的单一事实来源）
@@ -189,7 +189,7 @@ func newRealRowTester(t *testing.T, chosen int) (*goui.Tester, *goui.Theme) {
 			goui.Divider(c)
 			ls.Selected = &m.Chosen
 			goui.List(c, &ls, len(m.Results), func(i int) {
-				Row(c, &m, &icons, i, func(int) {}) // ← 生产代码
+				Row(c, &m, icons, i, func(int) {}) // ← 生产代码
 			}).Grow(1).Padding(6)
 			goui.Divider(c)
 		})
@@ -385,9 +385,9 @@ func TestSelectedRowNoAccentBleed(t *testing.T) {
 func TestPanelStillShowsEightRows(t *testing.T) {
 	m := panelstate.Model{Results: testutil.MkApps(
 		"AA", "BB", "CC", "DD", "EE", "FF", "GG", "HH", "II")}
-	icons := map[string]*goui.Bitmap{}
+	icons := NewIconCache()
 	for _, a := range m.Results {
-		icons[a.Path] = nil
+		icons.Put(a.Path, nil)
 	}
 	var ls goui.ListState
 	var listBottom float32
@@ -399,7 +399,7 @@ func TestPanelStillShowsEightRows(t *testing.T) {
 			goui.Divider(c)
 			ls.Selected = &m.Chosen
 			l := goui.List(c, &ls, len(m.Results), func(i int) {
-				Row(c, &m, &icons, i, func(int) {})
+				Row(c, &m, icons, i, func(int) {})
 			}).Grow(1).Padding(6)
 			l.Draw(func(p *goui.Painter, r goui.Rect) {
 				listBottom = r.Y + r.H

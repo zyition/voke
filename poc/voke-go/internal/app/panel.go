@@ -101,9 +101,9 @@ type appState struct {
 	globalProvRows []providers.RankedMatch
 	globalChosen   int
 	globalList     ui.ListState
-	list           ui.ListState          // 列表状态（选中/Key/滚动）
-	input          ui.Handle             // 搜索框句柄，唤出时抢焦点
-	icons          map[string]*ui.Bitmap // 图标位图缓存（按 app.Path，官方 launcher 同款）
+	list           ui.ListState     // 列表状态（选中/Key/滚动）
+	input          ui.Handle        // 搜索框句柄，唤出时抢焦点
+	icons          *appui.IconCache // 解码图标位图缓存（256 条 FIFO，按 app.Path；主线程用）
 	// trayLastClick 是托盘左键上一次点击的时刻：mygo 原生只上报单击（wmLButtonUp），
 	// 双击表现为两次 Clicked；据此在系统双击时间窗内识别双击并唤出面板。只主线程读写。
 	trayLastClick time.Time
@@ -148,6 +148,9 @@ func (st *appState) ready() {
 	// 主题：appcfg.Theme 的码值（"system"/"light"/"dark"）与 mygo ThemeSource 逐字相同，
 	// 直接透传。空（无配置）→ mygo 归一为跟随系统。
 	platform.SetThemeSource(string(loaded.Theme))
+	// 解码图标位图缓存：256 条 FIFO（真机 155 应用约 1.4MB，上限约 2.3MB@48px），
+	// 防止长会话里不同 exe 路径把堆无限推高。只主线程读写，见 internal/ui/iconcache.go。
+	st.icons = appui.NewIconCache()
 	// 已落地 provider 注册表 + 进程内频率表（装配一次）。局部变量 `providers` 遮蔽了
 	// 包名，故经 builtinProviders() 助手拿注册表。
 	st.pluginReg = builtinProviders()
