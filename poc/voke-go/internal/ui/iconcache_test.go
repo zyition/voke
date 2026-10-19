@@ -2,9 +2,9 @@ package ui
 
 import "testing"
 
-// TestIconCacheFIFO 锁定解码位图缓存的上限与淘汰判据：满后按插入序淘汰，
-// 命中不会延长寿命（与 platform iconcache 同口径）；nil 作为负缓存保留。
-func TestIconCacheFIFO(t *testing.T) {
+// TestIconCacheLRUEvictsColdest 锁定容量淘汰判据是「最近使用」而非插入序：
+// 满后访问过的条目应保留，最久未用的被淘汰；nil 作为负缓存也参与 LRU。
+func TestIconCacheLRUEvictsColdest(t *testing.T) {
 	c := newIconCache(3)
 	c.Put("a", nil) // nil = 已确认无图标，也应占位并区分未命中
 	c.Put("b", nil)
@@ -15,11 +15,11 @@ func TestIconCacheFIFO(t *testing.T) {
 	if _, ok := c.Get("missing"); ok {
 		t.Fatal("未写入的 key 不应命中")
 	}
-	c.Put("d", nil) // 淘汰最旧的 a
-	if _, ok := c.Get("a"); ok {
-		t.Error("超出上限应淘汰最早插入的 a")
+	c.Put("d", nil) // 满：淘汰最久未用的 b（a 刚被 Get 刷新）
+	if _, ok := c.Get("b"); ok {
+		t.Error("超出上限应淘汰最久未使用的 b")
 	}
-	for _, k := range []string{"b", "c", "d"} {
+	for _, k := range []string{"a", "c", "d"} {
 		if _, ok := c.Get(k); !ok {
 			t.Errorf("%s 应仍在缓存中", k)
 		}
@@ -29,19 +29,43 @@ func TestIconCacheFIFO(t *testing.T) {
 	}
 }
 
-// TestIconCacheUpdateKeepsOrder 验证同一 key 重复 Put 只更新值、不重复插入，
-// 不会把其他条目意外挤出。
-func TestIconCacheUpdateKeepsOrder(t *testing.T) {
+// TestIconCacheTrim 模拟隐藏后的裁剪：保留最近使用的 max 条，其余移除。
+func TestIconCacheTrim(t *testing.T) {
+	c := newIconCache(5)
+	for _, k := range []string{"a", "b", "c", "d", "e"} {
+		c.Put(k, nil)
+	}
+	c.Get("a") // 刷新 a
+	c.Get("d") // 刷新 d
+	if removed := c.Trim(2); removed != 3 {
+		t.Fatalf("应移除 3 条，实得 %d", removed)
+	}
+	if got := c.Len(); got != 2 {
+		t.Fatalf("裁剪后应为 2 条，实得 %d", got)
+	}
+	for _, k := range []string{"a", "d"} {
+		if _, ok := c.Get(k); !ok {
+			t.Errorf("最近使用的 %s 应保留", k)
+		}
+	}
+	if removed := c.Trim(2); removed != 0 {
+		t.Errorf("未超上限时 Trim 不应移除，实得 %d", removed)
+	}
+}
+
+// TestIconCacheUpdateKeepsEntry 验证同一 key 重复 Put 只更新值并刷新 LRU，
+// 不会新增条目或把其他条目误挤出去。
+func TestIconCacheUpdateKeepsEntry(t *testing.T) {
 	c := newIconCache(2)
 	c.Put("a", nil)
 	c.Put("b", nil)
-	c.Put("a", nil) // 更新不应新增 order 项
-	c.Put("c", nil) // 淘汰 a（它仍是最早插入）
-	if _, ok := c.Get("a"); ok {
-		t.Error("重复 Put 不应延长 a 的寿命")
+	c.Put("a", nil) // 更新并刷新 a
+	c.Put("c", nil) // 淘汰最久未用的 b
+	if _, ok := c.Get("b"); ok {
+		t.Error("重复 Put 后 b 仍是最冷条目，应被淘汰")
 	}
-	if _, ok := c.Get("b"); !ok {
-		t.Error("b 应仍在缓存")
+	if _, ok := c.Get("a"); !ok {
+		t.Error("a 应仍在缓存")
 	}
 	if _, ok := c.Get("c"); !ok {
 		t.Error("c 应已写入")
@@ -58,5 +82,8 @@ func TestIconCacheZeroValue(t *testing.T) {
 	c.Put("x", nil)
 	if _, ok := c.Get("x"); !ok {
 		t.Error("零值缓存写入后应可命中")
+	}
+	if removed := c.Trim(0); removed != 1 {
+		t.Errorf("Trim(0) 应移除唯一一条，实得 %d", removed)
 	}
 }
