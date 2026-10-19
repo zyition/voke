@@ -46,10 +46,10 @@ const (
 	// 模块文档），同尺寸便于 V4 与现网图标逐一对照；实际向 FileIcon 请求的
 	// 像素尺寸 = DIP × 最大显示器缩放（见 iconPixelSize）。
 	iconDIPSize = 24
-	// iconCacheMax 是图标进程内缓存的条目上限。生产 voke 现网落盘缓存
-	// 322 个 PNG，PoC 应用量同级；512 留一倍余量，超出按 FIFO 淘汰，
-	// 保证列表滚动时缓存有界（防 Immediate-mode 每帧查图把内存推高）。
-	iconCacheMax = 512
+	// iconCacheMax 是 PNG 字节缓存（L2）条目上限，与 UI 解码位图缓存同量级：
+	// 当前 155 个应用全覆盖，窗口 provider 的 exe 路径满则 FIFO 淘汰。两层都
+	// 有界，长会话里不会因不同路径无限增长。
+	iconCacheMax = 256
 )
 
 // InstalledApps 枚举机器上已安装的应用（Windows 侧就是开始菜单的「所有应用」：

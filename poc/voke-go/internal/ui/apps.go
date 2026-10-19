@@ -48,7 +48,7 @@ import (
 //     入场出场动画、不做颜色过渡。
 //   - E4 元素阴影：只留给 tooltip 与设置窗分组头，不给列表行，
 //     约束写在 Row() 的注释里。
-func AppsResults(c *goui.Context, m *panelstate.Model, icons *map[string]*goui.Bitmap, ls *goui.ListState, onOpen func(), onClick func(i int)) {
+func AppsResults(c *goui.Context, m *panelstate.Model, icons *IconCache, ls *goui.ListState, onOpen func(), onClick func(i int)) {
 	t := c.Theme()
 	ls.Selected = &m.Chosen
 	ls.Key = func(i int) any { return m.Results[i].Path }
@@ -168,7 +168,7 @@ func AppsResults(c *goui.Context, m *panelstate.Model, icons *map[string]*goui.B
 //
 // 综上：ui.ButtonBase 包住整行内容是唯一可靠的官方姿势，选中高亮仍由
 // 选中行驱动——单击里既设选中又执行，见 main 侧 clickRow（经 onClick 回调）。
-func Row(c *goui.Context, m *panelstate.Model, icons *map[string]*goui.Bitmap, i int, onClick func(i int)) {
+func Row(c *goui.Context, m *panelstate.Model, icons *IconCache, i int, onClick func(i int)) {
 	app := m.Results[i]
 	t := c.Theme()
 	// 三态配色：选中 > hover > 静止，见上方「三态配色」。
@@ -232,20 +232,16 @@ func Row(c *goui.Context, m *panelstate.Model, icons *map[string]*goui.Bitmap, i
 // FileIcon 走 onMainValue，只在主线程按「行首次可见」懒取（O4 的硬约束），
 // 一旦把零长当图片交给 ui.DecodeBitmap 就是一帧解码失败日志。
 //
-// icons 是指向持有者图标缓存字段的指针（原 `&st.icons`）：缓存未初始化时在此
-// 现造，与原实现「首次取图标时 lazy-init st.icons」逐字一致，写回经指针落回持有者。
-func Icon(icons *map[string]*goui.Bitmap, app appsmodel.AppEntry) *goui.Bitmap {
+// 缓存由 appState 装配（NewIconCache，256 条 FIFO）：只主线程用，无锁。
+func Icon(icons *IconCache, app appsmodel.AppEntry) *goui.Bitmap {
 	return iconForPath(icons, app.Path, app.Name)
 }
 
 // iconForPath 是 apps 行与「带图标的 provider 行」（如窗口切换器按进程路径取图标）共用的
 // 懒取 + 缓存核心（O4：FileIcon 走 onMainValue、只许主线程、行首次可见才取，禁批量预取）。
-// 命中缓存即返；AppIcon 零长 / 解码失败 → 缓存并返回 nil，调用方据此降级。
-func iconForPath(icons *map[string]*goui.Bitmap, path, label string) *goui.Bitmap {
-	if *icons == nil {
-		*icons = map[string]*goui.Bitmap{}
-	}
-	if b, ok := (*icons)[path]; ok {
+// 命中缓存即返（含负缓存 nil）；AppIcon 零长 / 解码失败 → 缓存并返回 nil，调用方据此降级。
+func iconForPath(icons *IconCache, path, label string) *goui.Bitmap {
+	if b, ok := icons.Get(path); ok {
 		return b
 	}
 	var b *goui.Bitmap
@@ -257,7 +253,7 @@ func iconForPath(icons *map[string]*goui.Bitmap, path, label string) *goui.Bitma
 			b = decoded
 		}
 	}
-	(*icons)[path] = b
+	icons.Put(path, b)
 	return b
 }
 
