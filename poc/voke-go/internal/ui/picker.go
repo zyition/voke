@@ -52,7 +52,7 @@ func PickerResults(c *goui.Context, rows []PluginRow, chosen *int, ls *goui.List
 }
 
 // PickerRow 渲染 picker 的一行：名称 + 描述副行（描述里带上该插件的前缀，
-// 让用户看得见「这个插件也能用 = / #b 那样的前缀直达」）。
+// 让用户看得见「这个插件也能用 = / @b 那样的前缀直达」）。
 //
 // 三态配色与 Row() 一致（选中 Selection / hover SurfaceHover / 静止 Transparent），
 // 外层同样铺 t.Background 遮住 mygo 行节点自带的整槽高亮（§11.5 遮罩理由）。

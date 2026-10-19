@@ -34,9 +34,9 @@ func TestReloadConfigsAppliesSavedOverrides(t *testing.T) {
 	if prov, ok := st.pluginReg.Get("base64"); !ok || prov.Config().Enabled {
 		t.Errorf("live base64 实例应 enabled=false：ok=%v", ok)
 	}
-	// 禁用者不进 BuildTable：#b 前缀不再命中 base64。
-	if got := engine.Scan(st.table, engine.State{}, "#b"); got.Mode() == engine.Plugin && got.PluginID() == "base64" {
-		t.Errorf("禁用后 #b 不该仍路由到 base64：%+v", got)
+	// 禁用者不进 BuildTable：@b 前缀不再命中 base64。
+	if got := engine.Scan(st.table, engine.State{}, "@b"); got.Mode() == engine.Plugin && got.PluginID() == "base64" {
+		t.Errorf("禁用后 @b 不该仍路由到 base64：%+v", got)
 	}
 	// 顶层 hotkey 回存到 st.cfg（下次 seedSettings 一致）。
 	if st.cfg.Hotkey != "ctrl+alt+space" {

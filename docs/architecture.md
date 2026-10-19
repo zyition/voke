@@ -82,7 +82,7 @@ pub struct ProviderConfig {
     pub enabled: bool,
     pub is_global: bool,      // 是否出现在全局结果
     pub weight: f32,          // 权重（只影响组内排序，见 §5）
-    pub prefix: Option<String>, // 触发前缀，如 "="、"#"、"#b"
+    pub prefix: Option<String>, // 触发前缀，如 "="、"#"、"@b"
     pub activation: Activation,  // 前缀激活方式（Direct=输入即路由 / Indirect=前缀+空格）
 }
 ```
@@ -107,7 +107,7 @@ weight = 1.0
 enabled = true
 is_global = false
 weight = 1.0
-prefix = "#b"
+prefix = "@b"
 activation = "indirect"    # 前缀 + 空格才路由（见下「激活方式」）
 
 [providers.calculator]
@@ -121,7 +121,7 @@ activation = "direct"
 enabled = true
 is_global = false
 weight = 1.0
-prefix = "#r"
+prefix = "@r"
 activation = "indirect"
 
 [providers.terminal]
@@ -133,14 +133,14 @@ weight = 1.0
 enabled = true
 is_global = false
 weight = 1.0
-prefix = "#"
+prefix = "@t"
 activation = "indirect"
 
 [providers.uuid]
 enabled = true
 is_global = false
 weight = 1.0
-prefix = "#u"
+prefix = "@u"
 activation = "indirect"
 
 [providers.windows]
@@ -159,9 +159,11 @@ weight = 1.0
 任意一项（如只写 `hotkey`）其余字段沿用默认值，**不用把整张表抄全**。
 
 **激活方式（`activation`）**：`"direct"` = 输入前缀立即路由进插件（`=` → calculator）；
-`"indirect"` = 必须「前缀 + 恰好一个空格」才路由（`#`/`#b`/`#u`/`#r` 默认如此，避免与
-裸 `#` 的插件列表入口冲突）。`None`（用户没写）由 `AppConfig::normalize` 按前缀回填：
-以 `#` 开头 → `indirect`，其余 → `direct`。坏值（如 `"xxx"`）记日志并按默认处理、不废整份配置。
+`"indirect"` = 必须「前缀 + 恰好一个空格」才路由（`@t`/`@b`/`@u`/`@r` 默认如此）。
+`#` 留给插件列表入口（Direct），插件前缀统一使用 `@` 命名空间；前缀之间还要通过 C2：
+展开成触发串后不能互为前缀（`#` 遮蔽 `#b` 这类会被拒绝）。用户没写 `activation` 时取
+Descriptor 默认（Go 版）；Rust 旧实现按前缀回填（以 `#` 开头 → `indirect`，其余 →
+`direct`）。坏值（如 `"xxx"`）记日志并按默认处理、不废整份配置。
 
 **扩展形态：MVP 用编译期静态注册**（`Vec<Box<dyn Provider>>`，写死在 main 里），不做动态加载。理由：自用工具，改一行注册代码的成可接受，换来零安全问题、调试简单、编译期类型检查。
 

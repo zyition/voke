@@ -240,7 +240,7 @@ func TestConfigsCandidateFor(t *testing.T) {
 		t.Fatal("CandidateFor(base64) 失败")
 	}
 	want := Candidate{
-		PluginID: "base64", Title: "Base64", Prefix: "#b", Activation: engine.Direct,
+		PluginID: "base64", Title: "Base64", Prefix: "@b", Activation: engine.Direct,
 		Aliases: []string{"b", "b64"}, Weight: 1.0, Fuzzy: 0,
 	}
 	if !reflect.DeepEqual(got, want) {

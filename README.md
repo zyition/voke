@@ -65,11 +65,15 @@ Voke 用 Rust + gpui-kit 自研，稳态常驻内存约 **60–70MB**（实测�
 | `terminal` | Windows Terminal 配置（按 profile 启动） | 无（全局结果） |
 | `workspaces` | 工作区（读 Zed / VSCode 最近工作区历史） | 无（全局结果） |
 | `calculator` | 计算器 | `=`（输入即路由） |
-| `timestamp` | 时间戳转换 | `#` + 空格 |
-| `base64` | Base64 编 / 解 | `#b` + 空格 |
-| `uuid` | 生成 UUID | `#u` + 空格 |
-| `random` | 生成随机值（整数 / 字符串 / 特殊字符 / 十六进制，支持重新生成） | `#r` + 空格 |
+| `timestamp` | 时间戳转换 | `@t` + 空格 |
+| `base64` | Base64 编 / 解 | `@b` + 空格 |
+| `uuid` | 生成 UUID | `@u` + 空格 |
+| `random` | 生成随机值（整数 / 字符串 / 特殊字符 / 十六进制，支持重新生成） | `@r` + 空格 |
 
+> `#` 是插件列表专用入口；插件前缀统一使用 `@` 命名空间，避免与 `#` 构成「短前缀
+> 遮蔽长前缀」。设置页会拦截互为前缀的配置，旧版 `#b/#u/#t/#r` 会在加载时自动
+> 迁移到新默认值。
+>
 > 前缀、权重、激活方式均可在 `config.toml` 或设置页调整。完整的 Provider 契约与默认配置见
 > [`docs/architecture.md`](docs/architecture.md)。
 

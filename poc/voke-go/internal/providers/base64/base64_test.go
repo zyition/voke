@@ -93,8 +93,8 @@ func TestMetadataMatchesRust(t *testing.T) {
 		t.Errorf("元数据不符：%s / %s / %s", p.ID(), p.Name(), p.Description())
 	}
 	c := p.Config()
-	if c.IsGlobal || !c.Enabled || c.Prefix != "#b" || c.Activation != "Indirect" {
-		t.Errorf("默认配置不符（is_global=false/prefix=#b/Indirect）：%+v", c)
+	if c.IsGlobal || !c.Enabled || c.Prefix != "@b" || c.Activation != "Indirect" {
+		t.Errorf("默认配置不符（is_global=false/prefix=@b/Indirect）：%+v", c)
 	}
 	if p.Placeholder(SubModeEnc) == p.Placeholder("") {
 		t.Error("子模式占位符应与第一级不同")

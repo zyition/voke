@@ -22,11 +22,11 @@ func withCount(c int) *Provider {
 }
 
 func rand(p *Provider, q string) []providers.Match {
-	return p.Query(providers.QueryCtx{Raw: "#r" + q, Query: q})
+	return p.Query(providers.QueryCtx{Raw: "@r" + q, Query: q})
 }
 
 func randMode(p *Provider, q, mode string) []providers.Match {
-	return p.Query(providers.QueryCtx{Raw: "#r" + q, Query: q, SubMode: mode})
+	return p.Query(providers.QueryCtx{Raw: "@r" + q, Query: q, SubMode: mode})
 }
 
 func titles(ms []providers.Match) []string {
@@ -46,8 +46,8 @@ func TestMetadata(t *testing.T) {
 	if c.IsGlobal {
 		t.Error("随机值不得进全局")
 	}
-	if c.Prefix != "#r" || c.Activation != "Indirect" || c.Count != 5 {
-		t.Errorf("配置不符（#r/Indirect/count=5）：%+v", c)
+	if c.Prefix != "@r" || c.Activation != "Indirect" || c.Count != 5 {
+		t.Errorf("配置不符（@r/Indirect/count=5）：%+v", c)
 	}
 }
 

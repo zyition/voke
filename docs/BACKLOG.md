@@ -100,7 +100,7 @@
   ① `providers.go` `builtinDescriptors` 加 Descriptor + `builtinProviders()` 追加；② `panel.go`
   appState 字段与 ready()/resetSession 已在 base64 轮就位，加 provider 不动它；③ `view.go`
   的 `providerActive`/`refreshProviderResults`/`openProvider`（`providers.IntentFor`）同一套。
-  前缀：picker `#`、base64 `#b`、uuid `#u`、timestamp `#t`、random `#r`、calculator `=`（Direct）；
+  前缀：picker `#`、base64 `@b`、uuid `@u`、timestamp `@t`、random `@r`、calculator `=`（Direct）；
   awake/windows/terminal/workspaces 四条 is_global 无前缀（Global 聚合链路已接
   `collectGlobalBatches→Registry.Aggregate→globalActive`，裸查询直接命中成组，`TestCollectGlobalBatches` 锁；Linux 下
   windows/terminal/workspaces 数据源返回空被跳过、awake 出方向候选，真机 V 验实际命中）；fake 未接入 id 现用「不在表里的任意串」。globalCount 现钉恰好 5

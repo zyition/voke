@@ -147,7 +147,7 @@ type ProviderConfig struct {
 	Enabled  bool
 	IsGlobal bool
 	Weight   float64
-	// Prefix 是专属触发前缀（"=" / "#" / "#b"）；空串 = 无前缀。
+	// Prefix 是专属触发前缀（"=" / "#" / "@b"）；空串 = 无前缀。
 	Prefix     string
 	Activation string // "Direct" / "Indirect"；对照 Rust Activation 枚举（此处简化为字符串）。
 	Count      int    // 单次查询生成条数（目前仅 random 消费），默认 5。

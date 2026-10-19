@@ -5,8 +5,8 @@
 // **启用 / 参与全局搜索 / 权重 0–3 / 激活别名(prefix)**，加 §33 的 Direct/Indirect 下拉）。
 // 数据全走 appcfg 落盘 + platform 副作用，保存时尽量当场生效：
 //   - 开机自启：`platform.SetAutostart`；
-//   - 插件配置：写 config.json 的 enabled/is_global/weight/prefix/activation 覆盖 +
-//     `reloadConfigs` 下发到 live 注册表（改坏的值由 Normalize C2/C3/C5/C6/C7 挡下并兜底）；
+//   - 插件配置：写 config.toml 的 enabled/is_global/weight/prefix/activation 覆盖 +
+//     `reloadConfigs` 下发到 live 注册表（前缀先过 prefixSettingsError 的 C2/C3/C4，无效不落盘）；
 //   - 界面主题：`platform.SetThemeSource`（appcfg 码值 = mygo ThemeSource，即时换肤）；
 //   - 唤隐热键：`UnregisterHotkey(旧)` → `RegisterHotkey(新)`，失败回滚旧串（不留空窗）。
 //
@@ -19,11 +19,13 @@
 package app
 
 import (
+	"fmt"
 	"log"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -66,8 +68,8 @@ func aboutConfigPath() string {
 // providerEdit 是「插件配置」区的一行（对照设计文档 §385 的每插件 Group：启用 /
 // 参与全局搜索 / 权重 0–3 / 激活别名(prefix)，外加 §33 的 Direct/Indirect 下拉）。
 // 各字段直接是绑定态（widget 就地改它），保存时逐个包成 *指针* 落 override。
-// 值从 st.providers（归一后的生效态）seed，故「不改直接存」是幂等写回；改坏的值交给
-// Normalize 的 C2/C3/C5/C6/C7 校验 + reloadConfigs 兜底。
+// 值从 st.providers（归一后的生效态）seed，故「不改直接存」是幂等写回；前缀改坏了
+// 由 prefixSettingsError 在落盘前拦下（冲突 / 空白 / 保留键），其余数值由 Normalize 兜底。
 type providerEdit struct {
 	id         string
 	name       string
@@ -93,6 +95,9 @@ type settingsWindow struct {
 	// 即注册生效；Esc 取消并恢复旧键。recBuf 是只读框的绑定串（不承载实际内容）。
 	recording bool
 	hotkeyErr string
+	// configErr 是插件前缀校验失败的中文提示（冲突 / 含空白 / 保留键）。
+	// 非空时 applySettings 不落盘、不重载，界面停留在上一次有效配置。
+	configErr string
 	recBuf    string
 	recHandle ui.Handle
 	// recGen 是录制超时的世代号：每次续期 +1；超时回调只在世代号未变且仍在录制时
@@ -156,6 +161,7 @@ func themeCode(label string) appcfg.Theme {
 // seedSettings 用最近一次装配的 st.cfg（顶层）+ st.providers（插件启用态）把绑定态刷成
 // 当前真值。每次 openSettings 都重刷，避免隐藏期残留上一次未保存的编辑。
 func (st *appState) seedSettings(s *settingsWindow) {
+	s.configErr = ""
 	s.hotkey = st.cfg.Hotkey
 	if s.hotkey == "" {
 		s.hotkey = hotkeyShow
@@ -400,6 +406,9 @@ func (st *appState) settingsView(c *ui.Context) {
 				// ── 插件 ──
 				ui.Text(c, "插件").FontSize(theme.TitleSize).TextColor(t.TextMuted).
 					Padding(2, 2)
+				if s.configErr != "" {
+					ui.Text(c, s.configErr).FontSize(theme.HintSize).TextColor(t.Danger)
+				}
 				for i := range s.edits {
 					p := &s.edits[i]
 					ui.Fieldset(c, p.name, func() {
@@ -417,7 +426,7 @@ func (st *appState) settingsView(c *ui.Context) {
 							ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 								ui.Text(c, "前缀").FontSize(theme.HintSize).TextColor(t.TextMuted)
 								if ui.TextInput(c, &p.prefix).Grow(1).FontSize(theme.InputSize).
-									Placeholder("如 #b；空=无").Label(p.name + " 前缀").Changed() {
+									Placeholder("如 @b；空=无").Label(p.name + " 前缀").Changed() {
 									st.applySettings()
 								}
 								ui.Text(c, "权重").FontSize(theme.HintSize).TextColor(t.TextMuted)
@@ -467,6 +476,14 @@ func (st *appState) applySettings() {
 	if s == nil {
 		return
 	}
+	overrides := providerOverrides(s.edits)
+	if msg := prefixSettingsError(s.edits, overrides); msg != "" {
+		// 前缀无效时不落盘、不重载：界面与生效配置都停在上一次有效状态，
+		// 错误提示就地显示（见 settingsView 的「插件」区）。
+		s.configErr = msg
+		return
+	}
+	s.configErr = ""
 	hotkey := s.hotkey
 	if _, ok := config.ParseHotkey(hotkey); !ok {
 		fallback := st.cfg.Hotkey
@@ -490,15 +507,6 @@ func (st *appState) applySettings() {
 	}
 
 	top := appcfg.Top{Hotkey: hotkey, Autostart: autostart, Theme: themeCode(s.theme)}
-	overrides := make([]config.UserOverride, 0, len(s.edits))
-	for _, p := range s.edits {
-		enabled, isGlobal, weight, prefix := p.enabled, p.isGlobal, p.weight, p.prefix
-		activation := activationCode(p.activation)
-		overrides = append(overrides, config.UserOverride{
-			ID: p.id, Enabled: &enabled, IsGlobal: &isGlobal,
-			Weight: &weight, Prefix: &prefix, Activation: &activation,
-		})
-	}
 
 	if err := saveConfig(top, overrides); err != nil {
 		log.Printf("voke 写设置失败：%v", err)
@@ -524,4 +532,35 @@ func (st *appState) applySettings() {
 	}
 
 	s.hotkey = st.showHotkey // 回显实际生效的键（改键失败时即旧键）
+}
+
+// providerOverrides 把设置页的绑定态包成 UserOverride。所有字段都写成指针，
+// 保持「打开后不改、直接触发一次保存」也是幂等写回。
+func providerOverrides(edits []providerEdit) []config.UserOverride {
+	overrides := make([]config.UserOverride, 0, len(edits))
+	for _, p := range edits {
+		enabled, isGlobal, weight, prefix := p.enabled, p.isGlobal, p.weight, p.prefix
+		activation := activationCode(p.activation)
+		overrides = append(overrides, config.UserOverride{
+			ID: p.id, Enabled: &enabled, IsGlobal: &isGlobal,
+			Weight: &weight, Prefix: &prefix, Activation: &activation,
+		})
+	}
+	return overrides
+}
+
+// prefixSettingsError 在落盘前校验插件前缀，返回中文错误（空串 = 通过）：
+//   - 含空白：Normalize 的 C3 会静默置空，设置页必须当场拦住并说明原因；
+//   - Normalize 的 C2 / C4：触发串互为前缀（含相同）或撞上保留键（字母 / 数字），
+//     直接复用归一层的判定与消息，避免设置页与启动路径各有一套规则。
+func prefixSettingsError(edits []providerEdit, overrides []config.UserOverride) string {
+	for _, p := range edits {
+		if p.prefix != "" && strings.IndexFunc(p.prefix, unicode.IsSpace) >= 0 {
+			return fmt.Sprintf("%s 的前缀不能包含空白（间接模式由程序自动追加一个空格）", p.name)
+		}
+	}
+	if _, err := config.Normalize(builtinDescriptors(), overrides); err != nil {
+		return err.Error()
+	}
+	return ""
 }

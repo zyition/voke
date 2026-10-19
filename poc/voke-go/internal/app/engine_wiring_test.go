@@ -165,7 +165,7 @@ func TestProviderRegenerateGuardSkipsSameInput(t *testing.T) {
 	st := newWiredState(t, "Chrome", "Firefox", "VLC")
 	st.pluginReg = builtinProviders()
 
-	typeInto(st, "#r ") // 进 Plugin(random)
+	typeInto(st, "@r ") // 进 Plugin(random)
 	st.provChosen = 0   // 选「随机整数」
 	st.open()           // → SubMode(random/int)，空查询出一批整数
 	if st.engineState.SubMode() != "int" || len(st.provRows) < 2 {
@@ -201,15 +201,15 @@ func TestBuildPrefixTableShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildPrefixTable 失败：%v", err)
 	}
-	// apps 无前缀 → BuildTable 不为它生成条目；表里有 picker(#)/base64(#b)/uuid(#u)/timestamp(#t)/random(#r)/calculator(=) 六条，表序即优先级。
+	// apps 无前缀 → BuildTable 不为它生成条目；表里有 picker(#)/base64(@b)/uuid(@u)/timestamp(@t)/random(@r)/calculator(=) 六条，表序即优先级。
 	if len(table) != 6 ||
 		table[0] != (engine.PrefixEntry{Prefix: "#", PluginID: engine.PickerPluginID, Activation: engine.Direct}) ||
-		table[1] != (engine.PrefixEntry{Prefix: "#b", PluginID: "base64", Activation: engine.Indirect}) ||
-		table[2] != (engine.PrefixEntry{Prefix: "#u", PluginID: "uuid", Activation: engine.Indirect}) ||
-		table[3] != (engine.PrefixEntry{Prefix: "#t", PluginID: "timestamp", Activation: engine.Indirect}) ||
-		table[4] != (engine.PrefixEntry{Prefix: "#r", PluginID: "random", Activation: engine.Indirect}) ||
+		table[1] != (engine.PrefixEntry{Prefix: "@b", PluginID: "base64", Activation: engine.Indirect}) ||
+		table[2] != (engine.PrefixEntry{Prefix: "@u", PluginID: "uuid", Activation: engine.Indirect}) ||
+		table[3] != (engine.PrefixEntry{Prefix: "@t", PluginID: "timestamp", Activation: engine.Indirect}) ||
+		table[4] != (engine.PrefixEntry{Prefix: "@r", PluginID: "random", Activation: engine.Indirect}) ||
 		table[5] != (engine.PrefixEntry{Prefix: "=", PluginID: "calculator", Activation: engine.Direct}) {
-		t.Errorf("前缀表 = %+v，想要六条 [{# __picker Direct}, {#b base64 Indirect}, {#u uuid Indirect}, {#t timestamp Indirect}, {#r random Indirect}, {= calculator Direct}]", table)
+		t.Errorf("前缀表 = %+v，想要六条 [{# __picker Direct}, {@b base64 Indirect}, {@u uuid Indirect}, {@t timestamp Indirect}, {@r random Indirect}, {= calculator Direct}]", table)
 	}
 	if got := strings.Join(cfg.IDs(), ","); got != "apps,__picker,base64,uuid,timestamp,random,calculator,awake,windows,terminal,workspaces" {
 		t.Errorf("注册 id 序列（注册顺序）= %q，想要 \"apps,__picker,base64,uuid,timestamp,random,calculator,awake,windows,terminal,workspaces\"", got)
@@ -252,7 +252,7 @@ func TestGlobalPathUnchangedWithoutPrefix(t *testing.T) {
 		{"  chr  ", "Chrome"}, // Scan 保留原文（含首尾空格）；FilterApps 自己 trim
 		{"   ", wantAll},      // 纯空白不命中任何前缀，trim 后为空 → 全量
 		{"nope", ""},
-		{"#ba", ""}, // 全等才切（决策⑥）：#ba 不切，仍是 Global 的裸查询词
+		{"@ba", ""}, // 全等才切（决策⑥）：@ba 不切，仍是 Global 的裸查询词
 	}
 	for _, tc := range tests {
 		typeInto(st, tc.input)
@@ -286,7 +286,7 @@ func TestEmptyTableDegradesToPureGlobal(t *testing.T) {
 	st.model.Apps = testutil.MkApps("Chrome", "Firefox", "VLC")
 	st.model.Loaded = true
 
-	for _, input := range []string{"#", "# ", "#chr", "#ba"} {
+	for _, input := range []string{"#", "# ", "#chr", "@ba"} {
 		typeInto(st, input)
 		wantState(t, st, "空表输入 "+input, engine.Global, "", input, input)
 		wantNoToken(t, st, "空表输入 "+input)
@@ -446,11 +446,11 @@ func TestPickerFilterDoesNotTriggerAppsLoad(t *testing.T) {
 func TestNoPrefixRejudgedOnceActivated(t *testing.T) {
 	st := newWiredState(t, "Chrome", "Firefox", "VLC")
 
-	// picker 里再打 "#ba"：仍是 picker，只当过滤词。
+	// picker 里再打 "@ba"：仍是 picker，只当过滤词。
 	typeInto(st, wantPickerPrefix)
-	typeInto(st, "#ba")
-	wantState(t, st, "picker 里打 #ba", engine.PluginPicker, "", "#ba", "#ba")
-	wantToken(t, st, "picker 里打 #ba", wantPickerPrefix)
+	typeInto(st, "@ba")
+	wantState(t, st, "picker 里打 @ba", engine.PluginPicker, "", "@ba", "@ba")
+	wantToken(t, st, "picker 里打 @ba", wantPickerPrefix)
 
 	// 把过滤词收回可用的 "yy" 后 Enter 选定 apps，插件态里打 "#" 也不切。
 	typeInto(st, "yy")
@@ -553,7 +553,7 @@ func TestEscChainFromSubModeWithFakePlugin(t *testing.T) {
 }
 
 // TestBase64EndToEndCompute 端到端跑通 provider 接线（compute 层，不碰剪贴板/Window）：
-// 打 "#b " 进 Plugin(base64) → providerActive、出第一级两行 → Enter「加密」进 SubMode
+// 打 "@b " 进 Plugin(base64) → providerActive、出第一级两行 → Enter「加密」进 SubMode
 // (base64/enc) → 打 hello 出编码结果行。验证 applyEngineState→refreshProviderResults→
 // RunOne→provRows 与 open→openProvider→IntentEnterSubMode 这条真实路由链。Copy 的执行
 // （写剪贴板 + 隐藏面板）走 onMain，无主循环不可 headless 跑，留真机验。
@@ -561,9 +561,9 @@ func TestBase64EndToEndCompute(t *testing.T) {
 	st := newWiredState(t, "Chrome", "Firefox", "VLC")
 	st.pluginReg = builtinProviders()
 
-	typeInto(st, "#b ") // Indirect：命中需前缀 + 一个空格
+	typeInto(st, "@b ") // Indirect：命中需前缀 + 一个空格
 	if st.engineState.Mode() != engine.Plugin || st.engineState.PluginID() != "base64" {
-		t.Fatalf("打 \"#b \" 应进 Plugin(base64)，实得 %+v", st.engineState)
+		t.Fatalf("打 \"@b \" 应进 Plugin(base64)，实得 %+v", st.engineState)
 	}
 	if !st.providerActive() {
 		t.Fatal("base64 已在 builtinProviders 注册 → providerActive 应为真")
@@ -584,16 +584,16 @@ func TestBase64EndToEndCompute(t *testing.T) {
 	}
 }
 
-// TestUUIDEndToEndCompute 端到端跑通 uuid 接线（compute 层）：打 "#u " 进 Plugin(uuid)
+// TestUUIDEndToEndCompute 端到端跑通 uuid 接线（compute 层）：打 "@u " 进 Plugin(uuid)
 // → providerActive、默认出 1 条 UUID；打 "2" → requested_count 生效出 2 条。验证 uuid
 // 无子模式也走通同一 providerActive/refreshProviderResults 路径。Copy 执行留真机。
 func TestUUIDEndToEndCompute(t *testing.T) {
 	st := newWiredState(t, "Chrome", "Firefox", "VLC")
 	st.pluginReg = builtinProviders()
 
-	typeInto(st, "#u ") // Indirect：前缀 + 空格
+	typeInto(st, "@u ") // Indirect：前缀 + 空格
 	if st.engineState.Mode() != engine.Plugin || st.engineState.PluginID() != "uuid" {
-		t.Fatalf("打 \"#u \" 应进 Plugin(uuid)，实得 %+v", st.engineState)
+		t.Fatalf("打 \"@u \" 应进 Plugin(uuid)，实得 %+v", st.engineState)
 	}
 	if !st.providerActive() {
 		t.Fatal("uuid 已注册 → providerActive 应为真")
@@ -611,17 +611,17 @@ func TestUUIDEndToEndCompute(t *testing.T) {
 	}
 }
 
-// TestTimestampEndToEndCompute 端到端跑通 timestamp 接线（compute 层）：打 "#t " 进
+// TestTimestampEndToEndCompute 端到端跑通 timestamp 接线（compute 层）：打 "@t " 进
 // Plugin(timestamp) → providerActive、空查询默认出当前 ts 两行；打 10 位串（偏移 0
-// 下 New 走系统时钟但换算与 now 无关）→ 出确定的一行 UTC。锁住 #t 前缀路由与
+// 下 New 走系统时钟但换算与 now 无关）→ 出确定的一行 UTC。锁住 @t 前缀路由与
 // refreshProviderResults 对无子模式 value-provider 的复用；Copy 执行留真机。
 func TestTimestampEndToEndCompute(t *testing.T) {
 	st := newWiredState(t, "Chrome", "Firefox", "VLC")
 	st.pluginReg = builtinProviders()
 
-	typeInto(st, "#t ") // Indirect：前缀 + 空格
+	typeInto(st, "@t ") // Indirect：前缀 + 空格
 	if st.engineState.Mode() != engine.Plugin || st.engineState.PluginID() != "timestamp" {
-		t.Fatalf("打 \"#t \" 应进 Plugin(timestamp)，实得 %+v", st.engineState)
+		t.Fatalf("打 \"@t \" 应进 Plugin(timestamp)，实得 %+v", st.engineState)
 	}
 	if !st.providerActive() {
 		t.Fatal("timestamp 已注册 → providerActive 应为真")
@@ -639,17 +639,17 @@ func TestTimestampEndToEndCompute(t *testing.T) {
 	}
 }
 
-// TestRandomEndToEndCompute 端到端跑通 random 接线（compute 层）：打 "#r " 进
+// TestRandomEndToEndCompute 端到端跑通 random 接线（compute 层）：打 "@r " 进
 // Plugin(random) → 一级 4 个类型方向 → Enter「随机整数」进 SubMode(random/int) →
-// 二级首条「重新生成」+ 默认 count 条整数。验证 #r 前缀 + 两级子模式复用同一
+// 二级首条「重新生成」+ 默认 count 条整数。验证 @r 前缀 + 两级子模式复用同一
 // providerActive/refreshProviderResults/openProvider 链路。Refresh/Copy 执行留真机。
 func TestRandomEndToEndCompute(t *testing.T) {
 	st := newWiredState(t, "Chrome", "Firefox", "VLC")
 	st.pluginReg = builtinProviders()
 
-	typeInto(st, "#r ") // Indirect：前缀 + 空格
+	typeInto(st, "@r ") // Indirect：前缀 + 空格
 	if st.engineState.Mode() != engine.Plugin || st.engineState.PluginID() != "random" {
-		t.Fatalf("打 \"#r \" 应进 Plugin(random)，实得 %+v", st.engineState)
+		t.Fatalf("打 \"@r \" 应进 Plugin(random)，实得 %+v", st.engineState)
 	}
 	if !st.providerActive() {
 		t.Fatal("random 已注册 → providerActive 应为真")
@@ -768,9 +768,73 @@ func TestLoadConfigsWithOverride(t *testing.T) {
 			t.Errorf("disabled base64 不该进前缀表：%+v", table)
 		}
 	}
-	// 其余插件不受影响（uuid 仍默认启用、#u 仍在表）。
+	// 其余插件不受影响（uuid 仍默认启用、@u 仍在表）。
 	if u, ok := cfg.Lookup("uuid"); !ok || !u.Enabled {
 		t.Errorf("uuid 不该被波及：%+v", u)
+	}
+}
+
+// TestLoadConfigsRepairsLegacyPrefixConflict：v0.2.3 之前的预设是 picker "#" +
+// base64/uuid "#b"/"#u"（Indirect）。在新冲突规则下它们互为前缀，整份配置不能直接
+// 归一。loadConfigs 应只丢掉冲突插件的 Prefix 覆盖，让新默认（@b/@u）生效，同时
+// 保留热键 / 主题 / 自启以及无关的自定义前缀。
+func TestLoadConfigsRepairsLegacyPrefixConflict(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	data := `hotkey = "ctrl+alt+k"
+autostart = true
+theme = "dark"
+
+[providers.__picker]
+prefix = "#"
+
+[providers.base64]
+prefix = "#b"
+
+[providers.uuid]
+prefix = "#u"
+
+[providers.awake]
+prefix = "@a"
+is_global = false
+`
+	if err := os.WriteFile(p, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(configPathEnv, p)
+
+	loaded, cfg, table, err := loadConfigs()
+	if err != nil {
+		t.Fatalf("旧前缀冲突配置应可自动修复，实得 err = %v", err)
+	}
+	if loaded.Hotkey != "ctrl+alt+k" || !loaded.HasHotkey {
+		t.Errorf("修复前缀冲突不应丢掉热键：%+v", loaded)
+	}
+	if string(loaded.Theme) != "dark" || !loaded.HasAutostart || !loaded.Autostart {
+		t.Errorf("修复前缀冲突不应丢主题/自启：%+v", loaded)
+	}
+	wantPrefix := map[string]string{
+		engine.PickerPluginID: "#",  // 冲突项丢弃覆盖后仍回落到默认 "#"
+		"base64":              "@b", // 新默认
+		"uuid":                "@u", // 新默认
+		"awake":               "@a", // 与冲突无关的自定义前缀保留
+	}
+	for id, want := range wantPrefix {
+		got, ok := cfg.Lookup(id)
+		if !ok || got.Prefix != want {
+			t.Errorf("%s 前缀 = %q ok=%v，期望 %q", id, got.Prefix, ok, want)
+		}
+	}
+	foundB64, foundUUID := false, false
+	for _, e := range table {
+		if e.PluginID == "base64" && e.Prefix == "@b" {
+			foundB64 = true
+		}
+		if e.PluginID == "uuid" && e.Prefix == "@u" {
+			foundUUID = true
+		}
+	}
+	if !foundB64 || !foundUUID {
+		t.Errorf("修复后的前缀表应含 @b / @u：%+v", table)
 	}
 }
 
@@ -793,7 +857,7 @@ func TestLoadConfigsNoFileIsPureDefault(t *testing.T) {
 }
 
 // TestLoadConfigsBadTOMLFallsBack 锁「坏配置挡不住面板」：TOML 坏 → appcfg 回落默认 +
-// 记日志，loadConfigs 返回可用默认产物（base64 仍启用、#b 仍在表），err 为 nil。
+// 记日志，loadConfigs 返回可用默认产物（base64 仍启用、@b 仍在表），err 为 nil。
 func TestLoadConfigsBadTOMLFallsBack(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(p, []byte("this is = = not toml"), 0o600); err != nil {
@@ -815,7 +879,7 @@ func TestLoadConfigsBadTOMLFallsBack(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("坏配置下 #b 应仍在表：%+v", table)
+		t.Errorf("坏配置下 @b 应仍在表：%+v", table)
 	}
 }
 
@@ -974,7 +1038,7 @@ func TestGlobalFrameHasNoTokenAndKeepsAppsRows(t *testing.T) {
 //   - **前缀不进输入框**（框被清成空串，且下一帧没被 mygo 编辑器改回 "#"）；
 //   - 模式令牌 "#" 渲染出来了；
 //   - picker 行可见；
-//   - 紧接着打的字符只当过滤词（框里是 "b" 而不是 "#b"，规则④ + ⑤）。
+//   - 紧接着打的字符只当过滤词（框里是 "b" 而不是 "@b"，规则④ + ⑤）。
 func TestTypingPrefixClearsInputBoxInRealFrame(t *testing.T) {
 	st := newWiredState(t, "Chrome", "Firefox", "VLC")
 	tt := newViewTester(t, st)

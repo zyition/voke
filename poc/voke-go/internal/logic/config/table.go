@@ -16,7 +16,7 @@ import "github.com/zyition/voke/poc/voke-go/internal/logic/engine"
 // engine.PickerPluginID、默认前缀由注册表带进来，这里没有任何针对 picker 的分支。
 // 命中它之后 mode = PluginPicker 由 engine 决定，config 不参与判定。
 //
-// 注：C2 的前缀唯一性对**禁用**插件同样成立（禁用者仍占着自己的前缀），
+// 注：C2 的触发串互斥对**禁用**插件同样成立（禁用者仍占着自己的前缀），
 // 目的是「拨开开关的那一刻不会静默改掉别人的路由」。
 func (c Configs) BuildTable() engine.Table {
 	t := make(engine.Table, 0, len(c.Providers))

@@ -38,8 +38,8 @@ func TestMetadataMatchesRust(t *testing.T) {
 	if c.IsGlobal {
 		t.Error("时间戳不得进全局结果")
 	}
-	if c.Prefix != "#t" || c.Activation != "Indirect" {
-		t.Errorf("配置不符（prefix=#t/Indirect）：%+v", c)
+	if c.Prefix != "@t" || c.Activation != "Indirect" {
+		t.Errorf("配置不符（prefix=@t/Indirect）：%+v", c)
 	}
 	if c.Weight != 1.0 {
 		t.Errorf("weight = %v，想要 1.0", c.Weight)

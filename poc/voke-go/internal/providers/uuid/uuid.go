@@ -17,7 +17,7 @@ import (
 const (
 	ID       = "uuid"
 	maxCount = 20
-	prefix   = "#u" // 二级前缀，Indirect（`#u ` 触发），对齐 base64 的 #b 模式。
+	prefix   = "@u" // 二级前缀，Indirect（`@u ` 触发），对齐 base64 的 @b 模式（`#` 归 picker）。
 )
 
 // Provider 实现 providers.Provider。
@@ -27,7 +27,7 @@ type Provider struct {
 
 var _ providers.Provider = (*Provider)(nil)
 
-// New 返回默认配置的 uuid provider（is_global=false、prefix=#u、Indirect）。
+// New 返回默认配置的 uuid provider（is_global=false、prefix=@u、Indirect）。
 func New() *Provider {
 	return &Provider{config: providers.ProviderConfig{
 		Enabled: true, IsGlobal: false, Weight: 1.0,

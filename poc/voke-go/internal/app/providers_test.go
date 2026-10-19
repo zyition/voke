@@ -108,25 +108,25 @@ func TestBuildPrefixTableHappyPath(t *testing.T) {
 			ID: "base64", Name: "Base64", Description: "base64 编解码（加密 / 解密）",
 			Aliases: []string{"b", "b64"},
 			Enabled: true, IsGlobal: false,
-			Prefix: "#b", Activation: engine.Indirect, Weight: 1.0, Count: 5,
+			Prefix: "@b", Activation: engine.Indirect, Weight: 1.0, Count: 5,
 		},
 		{
 			ID: "uuid", Name: "UUID", Description: "生成 UUID v4（可指定个数）",
 			Aliases: []string{"u"},
 			Enabled: true, IsGlobal: false,
-			Prefix: "#u", Activation: engine.Indirect, Weight: 1.0, Count: 5,
+			Prefix: "@u", Activation: engine.Indirect, Weight: 1.0, Count: 5,
 		},
 		{
 			ID: "timestamp", Name: "时间戳", Description: "时间戳 ⇄ 可读时间",
 			Aliases: []string{"t", "sj", "ts", "time"},
 			Enabled: true, IsGlobal: false,
-			Prefix: "#t", Activation: engine.Indirect, Weight: 1.0, Count: 5,
+			Prefix: "@t", Activation: engine.Indirect, Weight: 1.0, Count: 5,
 		},
 		{
 			ID: "random", Name: "随机值", Description: "随机整数 / 随机字符串",
 			Aliases: []string{"r", "sj", "rand"},
 			Enabled: true, IsGlobal: false,
-			Prefix: "#r", Activation: engine.Indirect, Weight: 1.0, Count: 5,
+			Prefix: "@r", Activation: engine.Indirect, Weight: 1.0, Count: 5,
 		},
 		{
 			ID: "calculator", Name: "计算器", Description: "算术表达式求值，如 1+1",
@@ -197,10 +197,10 @@ func TestBuildPrefixTableHappyPath(t *testing.T) {
 	// ── 表层：BuildTable 是唯一来源（铁律③），空前缀条目不进表 ──
 	wantTable := engine.Table{
 		{Prefix: "#", PluginID: wantPickerID, Activation: engine.Direct},
-		{Prefix: "#b", PluginID: "base64", Activation: engine.Indirect},
-		{Prefix: "#u", PluginID: "uuid", Activation: engine.Indirect},
-		{Prefix: "#t", PluginID: "timestamp", Activation: engine.Indirect},
-		{Prefix: "#r", PluginID: "random", Activation: engine.Indirect},
+		{Prefix: "@b", PluginID: "base64", Activation: engine.Indirect},
+		{Prefix: "@u", PluginID: "uuid", Activation: engine.Indirect},
+		{Prefix: "@t", PluginID: "timestamp", Activation: engine.Indirect},
+		{Prefix: "@r", PluginID: "random", Activation: engine.Indirect},
 		{Prefix: "=", PluginID: "calculator", Activation: engine.Direct},
 	}
 	if !reflect.DeepEqual(table, wantTable) {
@@ -216,8 +216,8 @@ func TestBuildPrefixTableHappyPath(t *testing.T) {
 			t.Errorf("前缀表里出现了 apps 条目 {Prefix:%q}：apps 必须无前缀，否则裸查询词会被劫持（Global 回归）", e.Prefix)
 		}
 	}
-	if got := strings.Join(prefixes, ","); got != "#,#b,#u,#t,#r,=" {
-		t.Errorf("前缀集合（表序）= %q，想要 \"#,#b,#u,#t,#r,=\"", got)
+	if got := strings.Join(prefixes, ","); got != "#,@b,@u,@t,@r,=" {
+		t.Errorf("前缀集合（表序）= %q，想要 \"#,@b,@u,@t,@r,=\"", got)
 	}
 
 	// ── 这张真实表喂给 engine 的判定结果（装配产物的可用性闭环）──
@@ -325,8 +325,8 @@ func TestBuiltinDescriptorsInvariants(t *testing.T) {
 		}
 	}
 
-	if got := strings.Join(prefixed, ","); got != "#,#b,#u,#t,#r,=" {
-		t.Errorf("带前缀的 Descriptor 的前缀序列 = %q，想要 \"#,#b,#u,#t,#r=\"（picker #、base64 #b、uuid #u、timestamp #t、random #r、calculator =）", got)
+	if got := strings.Join(prefixed, ","); got != "#,@b,@u,@t,@r,=" {
+		t.Errorf("带前缀的 Descriptor 的前缀序列 = %q，想要 \"#,@b,@u,@t,@r=\"（picker #、base64 @b、uuid @u、timestamp @t、random @r、calculator =）", got)
 	}
 
 	// 不变式（升级自旧「只 apps+picker」）：除 picker 外，每条「带前缀」的 Descriptor
@@ -440,8 +440,10 @@ func TestNormalizeFailureDegradesToPureGlobal(t *testing.T) {
 	if !errors.Is(err, config.ErrPrefixConflict) {
 		t.Errorf("撞车前缀报的错不是 ErrPrefixConflict：%v", err)
 	}
-	if want := `" 同时被 apps 与 ` + wantPickerID + ` 声明`; !strings.Contains(err.Error(), want) {
-		t.Errorf("C2 消息没有点名撞车的两条：%v（想要含 %q）", err, want)
+	for _, want := range []string{wantAppsID, wantPickerID, "触发串"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("C2 消息没有点名撞车的两条/触发串：%v（想要含 %q）", err, want)
+		}
 	}
 	assertZeroConfigs(t, cfg, "C2 前缀撞车")
 

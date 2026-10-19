@@ -18,7 +18,8 @@ import (
 var (
 	// ErrUnknownProviderID 是 C1：用户写了注册表里不存在的 provider id。
 	ErrUnknownProviderID = errors.New("未知的 provider id")
-	// ErrPrefixConflict 是 C2：同一个前缀被多个插件声明。
+	// ErrPrefixConflict 是 C2：两条前缀展开后的触发串互为前缀（含完全相同），
+	// 逐键扫描时先命中的一条会遮蔽另一条。判定见 prefix.go。
 	ErrPrefixConflict = errors.New("前缀冲突")
 	// ErrReservedPrefix 是 C4：前缀撞上保留键。
 	ErrReservedPrefix = errors.New("保留键冲突")
@@ -48,7 +49,7 @@ const (
 //  1. C1 未知 id → 报错，列出**全部**未知 id（生产 D4 的静默失效就是缺这条）；
 //  2. 逐插件合并 + C7 activation、C5 weight、C6 count、C3 prefix；
 //  3. C4 保留键 → 报错（要拦的是「picker 那条还没进表就被字母键挤掉」）；
-//  4. C2 前缀全局唯一 → 报错，列出撞车的**两个插件**。
+//  4. C2 触发串互不为前缀 → 报错，列出每一对撞车插件（判定见 prefix.go）。
 //
 // 返回 error 时 Configs 是零值：调用方不该「带着坏配置继续跑」，
 // 要么退出要么显式降级（接线层决定，本包只保证消息里说清了是什么坏了）。
@@ -155,22 +156,35 @@ func Normalize(descriptors []Descriptor, overrides []UserOverride) (Configs, err
 			ErrReservedPrefix, strings.Join(reserved, "；"))
 	}
 
-	// C2：前缀全局唯一 → 报错，列出撞车的两个插件（注册顺序里先出现者在前）。
-	// 空前缀不参与判定：多个「无前缀」插件共存是合法配置。
-	firstByID := make(map[string]string)
-	var clashes []string
+	// C2：两条前缀展开后的触发串互为前缀 → 报错。判定的是**触发串**而不是字面量：
+	// Direct 展开为前缀本身、Indirect 展开为「前缀 + 一个空格」（engine.Scan 的全等
+	// 比较目标），所以 `#` 与 `#b`（间接）也会冲突；而 `@b` 与 `@bc`（都间接）不冲突。
+	// 空前缀不参与：多个「无前缀」插件共存是合法配置。
+	claims := make([]prefixClaim, 0, len(out.Providers))
 	for _, p := range out.Providers {
 		if p.Prefix == "" {
 			continue
 		}
-		if first, hit := firstByID[p.Prefix]; hit {
-			clashes = append(clashes, fmt.Sprintf("%q 同时被 %s 与 %s 声明", p.Prefix, first, p.ID))
-			continue
+		claims = append(claims, prefixClaim{
+			id: p.ID, name: p.Name, prefix: p.Prefix, activation: p.Activation,
+		})
+	}
+	var clashes []string
+	for i := 0; i < len(claims); i++ {
+		for j := i + 1; j < len(claims); j++ {
+			a, b := claims[i], claims[j]
+			if !prefixesConflict(a, b) {
+				continue
+			}
+			clashes = append(clashes, fmt.Sprintf(
+				"%s（%s，%s）的前缀 %q 与 %s（%s，%s）的前缀 %q 冲突：触发串 %q 与 %q 互为前缀",
+				a.id, a.name, activationChinese(a.activation), a.prefix,
+				b.id, b.name, activationChinese(b.activation), b.prefix,
+				ActivationTarget(a.prefix, a.activation), ActivationTarget(b.prefix, b.activation)))
 		}
-		firstByID[p.Prefix] = p.ID
 	}
 	if len(clashes) > 0 {
-		return Configs{}, fmt.Errorf("%w：%s（前缀必须全局唯一，C2）",
+		return Configs{}, fmt.Errorf("%w：%s（C2：各前缀展开后的触发串不能互为前缀）",
 			ErrPrefixConflict, strings.Join(clashes, "；"))
 	}
 

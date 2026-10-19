@@ -1,7 +1,7 @@
 // Package base64 是 base64 编解码插件——1:1 对照生产 `voke-core/src/base64.rs`。
 //
 // 分层：纯逻辑（编解码 + 出 Match），零 mygo、零 IO，Linux 原生可测。执行 Copy
-// 动作（写剪贴板）在 app 层 dispatcher。路由（`#b` 前缀、Indirect 激活、子模式标识）
+// 动作（写剪贴板）在 app 层 dispatcher。路由（`@b` 前缀、Indirect 激活、子模式标识）
 // 由 config/engine 既有机制承载，本包只声明 provider 自身的元数据与查询产出。
 package base64
 
@@ -19,9 +19,10 @@ const (
 	ID         = "base64"
 	SubModeEnc = "enc"
 	SubModeDec = "dec"
-	// prefix 是二级前缀 `#b`（`#` 命名空间下避开 timestamp 直占的 `#`），
-	// Indirect 激活：输入 `#b ` 才路由进来。
-	prefix = "#b"
+	// prefix 是二级前缀 `@b`。`#` 归插件列表 picker 独占：它若配成 Direct，
+	// 展开后的触发串 "#" 是任何 "#…" 的前缀，会遮蔽同命名空间的所有前缀（C2），
+	// 所以二级前缀统一放在 `@` 下。Indirect 激活：输入 `@b ` 才路由进来。
+	prefix = "@b"
 )
 
 // Provider 实现 providers.Provider。
@@ -32,7 +33,7 @@ type Provider struct {
 // 编译期断言：base64.Provider 必须满足 providers.Provider 契约（接口漂移即编译失败）。
 var _ providers.Provider = (*Provider)(nil)
 
-// New 返回带默认配置的 base64 provider（is_global=false、prefix=#b、Indirect）。
+// New 返回带默认配置的 base64 provider（is_global=false、prefix=@b、Indirect）。
 func New() *Provider {
 	return &Provider{config: providers.ProviderConfig{
 		Enabled: true, IsGlobal: false, Weight: 1.0,

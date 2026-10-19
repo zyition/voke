@@ -100,7 +100,7 @@ func TestMetadataMatchesRust(t *testing.T) {
 		t.Errorf("别名应为 [u]：%v", p.Aliases())
 	}
 	c := p.Config()
-	if c.IsGlobal || c.Prefix != "#u" || c.Activation != "Indirect" {
-		t.Errorf("配置不符（is_global=false/prefix=#u/Indirect）：%+v", c)
+	if c.IsGlobal || c.Prefix != "@u" || c.Activation != "Indirect" {
+		t.Errorf("配置不符（is_global=false/prefix=@u/Indirect）：%+v", c)
 	}
 }

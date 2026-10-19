@@ -8,6 +8,7 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/zyition/voke/poc/voke-go/internal/logic/engine"
@@ -34,10 +35,10 @@ func TestNormalizeDescriptorDefaultsWinWhenUserWritesNothing(t *testing.T) {
 			Prefix: "$", Activation: engine.Indirect, Weight: 1.0, Count: 5},
 		{ID: "base64", Name: "Base64", Description: "base64 编解码（加密 / 解密）",
 			Aliases: []string{"b", "b64"}, Enabled: true, IsGlobal: false,
-			Prefix: "#b", Activation: engine.Direct, Weight: 1.0, Count: 5},
+			Prefix: "@b", Activation: engine.Direct, Weight: 1.0, Count: 5},
 		{ID: "random", Name: "随机数", Description: "随机整数 / 随机字符串",
 			Aliases: []string{"r", "rand"}, Enabled: true, IsGlobal: false,
-			Prefix: "#r", Activation: engine.Indirect, Weight: 1.0, Count: 6},
+			Prefix: "@r", Activation: engine.Indirect, Weight: 1.0, Count: 6},
 		{ID: engine.PickerPluginID, Name: "列出所有插件", Description: "按名称 / 别名过滤插件",
 			Enabled: true, IsGlobal: false,
 			Prefix: "#", Activation: engine.Direct, Weight: 1.0, Count: 5},
@@ -133,14 +134,15 @@ func TestNormalizeRegistrySelfCheck(t *testing.T) {
 	}
 }
 
-// ── C2：前缀全局唯一 ────────────────────────────────────────────────────
+// ── C2：触发串不能互为前缀 ──────────────────────────────────────────────
 
 func TestNormalizePrefixCollisionNamesBothPlugins(t *testing.T) {
-	// 普通撞车：base64 抢 calculator 的 "="。
+	// 普通撞车：base64 抢 calculator 的 "="（两条都是 Direct，触发串全等）。
 	_, err := Normalize(fakeRegistry(), []UserOverride{
 		{ID: "base64", Prefix: sp("=")},
 	})
-	want := "前缀冲突：\"=\" 同时被 calculator 与 base64 声明（前缀必须全局唯一，C2）"
+	want := "前缀冲突：calculator（计算器，直接）的前缀 \"=\" 与 base64（Base64，直接）的前缀 \"=\" 冲突：" +
+		"触发串 \"=\" 与 \"=\" 互为前缀（C2：各前缀展开后的触发串不能互为前缀）"
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v，期望 %q", err, want)
 	}
@@ -148,11 +150,13 @@ func TestNormalizePrefixCollisionNamesBothPlugins(t *testing.T) {
 		t.Errorf("err 不是 ErrPrefixConflict：%v", err)
 	}
 
-	// D6 的形状：某插件抢了 picker 的 "#"（旧实现里 `#` 既是 timestamp 前缀又是列表入口）。
+	// 触发串含空格：random 覆盖成 "#" 后仍是 Indirect（默认激活方式），触发串 "# "；
+	// picker 的 "#" 是 Direct，触发串 "#" 是 "# " 的前缀 → 冲突。
 	_, err = Normalize(fakeRegistry(), []UserOverride{
 		{ID: "random", Prefix: sp("#")},
 	})
-	want = "前缀冲突：\"#\" 同时被 random 与 __picker 声明（前缀必须全局唯一，C2）"
+	want = "前缀冲突：random（随机数，间接）的前缀 \"#\" 与 __picker（列出所有插件，直接）的前缀 \"#\" 冲突：" +
+		"触发串 \"# \" 与 \"#\" 互为前缀（C2：各前缀展开后的触发串不能互为前缀）"
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v，期望 %q", err, want)
 	}
@@ -163,9 +167,49 @@ func TestNormalizePrefixCollisionNamesBothPlugins(t *testing.T) {
 		{ID: "timestamp", Prefix: sp("%")},
 		{ID: "random", Prefix: sp("%")},
 	})
-	want = "前缀冲突：\"=\" 同时被 calculator 与 base64 声明；\"%\" 同时被 timestamp 与 random 声明（前缀必须全局唯一，C2）"
+	want = "前缀冲突：calculator（计算器，直接）的前缀 \"=\" 与 base64（Base64，直接）的前缀 \"=\" 冲突：" +
+		"触发串 \"=\" 与 \"=\" 互为前缀；timestamp（时间戳，间接）的前缀 \"%\" 与 random（随机数，间接）的前缀 \"%\" 冲突：" +
+		"触发串 \"% \" 与 \"% \" 互为前缀（C2：各前缀展开后的触发串不能互为前缀）"
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v，期望 %q", err, want)
+	}
+}
+
+// TestNormalizePrefixRelationIsNotExactMatch 锁住 C2 的核心：判的是**展开后的触发串**
+// 的互为前缀关系，不是字面量全等。# 与 #b、@ 与 @b 这种长短关系同样要被拦下，
+// 而两个 Indirect 前缀只要展开后不构成前缀关系（@b / @bc）就必须放行。
+func TestNormalizePrefixRelationIsNotExactMatch(t *testing.T) {
+	// 用户实际遇到的形状：picker "#" Direct 遮蔽 base64 "#b" Indirect。
+	_, err := Normalize(fakeRegistry(), []UserOverride{
+		{ID: engine.PickerPluginID, Prefix: sp("#")},
+		{ID: "base64", Prefix: sp("#b"), Activation: sp("indirect")},
+	})
+	if !errors.Is(err, ErrPrefixConflict) {
+		t.Fatalf("picker # 与 base64 #b 应判冲突，err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "触发串 \"#b \" 与 \"#\" 互为前缀") {
+		t.Errorf("错误消息应说明触发串关系（含间接的空格），实得：%v", err)
+	}
+
+	// 两个 Indirect：触发串 "@b " 与 "@bc " 互不为前缀 → 合法共存。
+	c := mustNormalize(t, fakeRegistry(), []UserOverride{
+		{ID: "base64", Prefix: sp("@b"), Activation: sp("indirect")},
+		{ID: "random", Prefix: sp("@bc"), Activation: sp("indirect")},
+	})
+	if got := mustLookup(t, c, "base64").Prefix; got != "@b" {
+		t.Errorf("base64 前缀 = %q，期望 @b", got)
+	}
+	if got := mustLookup(t, c, "random").Prefix; got != "@bc" {
+		t.Errorf("random 前缀 = %q，期望 @bc", got)
+	}
+
+	// Direct 短串 vs Indirect 长串："@" 是 "@bc " 的前缀 → 冲突（敲 @ 就进 base64）。
+	_, err = Normalize(fakeRegistry(), []UserOverride{
+		{ID: "base64", Prefix: sp("@"), Activation: sp("direct")},
+		{ID: "random", Prefix: sp("@bc"), Activation: sp("indirect")},
+	})
+	if !errors.Is(err, ErrPrefixConflict) {
+		t.Errorf("Direct @ 与 Indirect @bc 应判冲突（@ 是 @bc␠ 的前缀），err = %v", err)
 	}
 }
 
@@ -267,7 +311,7 @@ func TestNormalizeSymbolPrefixesAllAccepted(t *testing.T) {
 		ID: "solo", Name: "单插件", DefaultEnabled: true, DefaultIsGlobal: false,
 		DefaultActivation: engine.Direct, DefaultWeight: 1.0, DefaultCount: 5,
 	}}
-	for _, p := range []string{"=", "{", "}", "$", "%", "#", "#b", "#u", "#r", "??", ">", "<", ")", "`", "+", "~"} {
+	for _, p := range []string{"=", "{", "}", "$", "%", "#", "@b", "@u", "@r", "??", ">", "<", ")", "`", "+", "~"} {
 		c := mustNormalize(t, solo, []UserOverride{{ID: "solo", Prefix: sp(p)}})
 		if got := mustLookup(t, c, "solo").Prefix; got != p {
 			t.Errorf("前缀 %q 被改成 %q", p, got)

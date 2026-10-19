@@ -13,7 +13,7 @@
 //	① 默认值只出现在 Descriptor：本包不写任何插件的默认前缀 / 权重 / 激活方式 /
 //	   条数。「列出所有插件」那条也一样——它是注册表里 ID == engine.PickerPluginID
 //	   的普通 Descriptor，前缀 "#" 由插件作者侧的 Descriptor 带进来（见 table_test.go
-//	   的 fake 注册表），config 里没有任何 "#"/"="/"#b" 字面量。
+//	   的 fake 注册表），config 里没有任何 "#"/"="/"@b" 字面量。
 //	② 判定只有一处：前缀**怎么触发**全在 logic/engine 的全等扫描，本包只产 Table，
 //	   不写第二个 strings.HasPrefix。alias bonus 只加分、不产生触发（见 alias.go）。
 //	③ 引擎只吃归一后的配置：engine.Table 的唯一来源是 Configs.BuildTable。

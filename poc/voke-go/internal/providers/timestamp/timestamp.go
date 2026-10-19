@@ -19,7 +19,7 @@ import (
 
 const (
 	ID     = "timestamp"
-	prefix = "#t" // 二级前缀（`#` 归 picker），Indirect 激活：`#t ` 触发，对齐 #b/#u。
+	prefix = "@t" // 二级前缀（`#` 归 picker），Indirect 激活：`@t ` 触发，对齐 @b/@u。
 )
 
 // Provider 实现 providers.Provider。

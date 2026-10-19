@@ -170,10 +170,15 @@ prefix = "="
 | terminal | ✓ | ✓ | 1.0 | — |
 | workspaces | ✓ | ✓ | 1.0 | — |
 | calculator | ✓ | ✗ | 1.0 | `=` |
-| timestamp | ✓ | ✗ | 1.0 | `#` |
-| base64 | ✓ | ✗ | 1.0 | `#b` |
-| uuid | ✓ | ✗ | 1.0 | `#u` |
-| random | ✓ | ✗ | 1.0 | `#r` |
+| timestamp | ✓ | ✗ | 1.0 | `@t` |
+| base64 | ✓ | ✗ | 1.0 | `@b` |
+| uuid | ✓ | ✗ | 1.0 | `@u` |
+| random | ✓ | ✗ | 1.0 | `@r` |
+
+> 2026-10-19（Go 版）：`#` 归插件列表 picker 独占（Direct），二级前缀统一迁到 `@+字母`。
+> 冲突校验从「前缀字面量全等」升级为「展开后的触发串互为前缀」——Direct 用前缀本身、
+> Indirect 用前缀 + 一个空格；`#` 与 `#b`、`@` 与 `@b` 这类关系会被拒绝，而 `@b` 与
+> `@bc`（都 Indirect）可以共存。
 
 校验规则（`AppConfig::normalize()`）：
 - `weight` clamp 到 `0.0..=3.0`；

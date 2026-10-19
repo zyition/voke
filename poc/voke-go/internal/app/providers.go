@@ -74,31 +74,34 @@ func builtinDescriptors() []config.Descriptor {
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
+			// 二级前缀统一 `@+字母`：picker 用 Direct 的 "#" 独占 `#` 命名空间，
+			// 任何 "#…" 触发串都会被它的 "#" 抢先命中（C2 也会直接拒绝），
+			// 故 #b/#u/#t/#r 迁到 @b/@u/@t/@r。
 			ID: base64.ID, Name: "Base64", Description: "base64 编解码（加密 / 解密）",
 			Aliases:        []string{"b", "b64"},
 			DefaultEnabled: true, DefaultIsGlobal: false,
-			DefaultPrefix: "#b", DefaultActivation: engine.Indirect,
+			DefaultPrefix: "@b", DefaultActivation: engine.Indirect,
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
 			ID: uuid.ID, Name: "UUID", Description: "生成 UUID v4（可指定个数）",
 			Aliases:        []string{"u"},
 			DefaultEnabled: true, DefaultIsGlobal: false,
-			DefaultPrefix: "#u", DefaultActivation: engine.Indirect,
+			DefaultPrefix: "@u", DefaultActivation: engine.Indirect,
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
 			ID: timestamp.ID, Name: "时间戳", Description: "时间戳 ⇄ 可读时间",
 			Aliases:        []string{"t", "sj", "ts", "time"},
 			DefaultEnabled: true, DefaultIsGlobal: false,
-			DefaultPrefix: "#t", DefaultActivation: engine.Indirect,
+			DefaultPrefix: "@t", DefaultActivation: engine.Indirect,
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
 			ID: random.ID, Name: "随机值", Description: "随机整数 / 随机字符串",
 			Aliases:        []string{"r", "sj", "rand"},
 			DefaultEnabled: true, DefaultIsGlobal: false,
-			DefaultPrefix: "#r", DefaultActivation: engine.Indirect,
+			DefaultPrefix: "@r", DefaultActivation: engine.Indirect,
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
@@ -383,16 +386,72 @@ func loadConfigs() (appcfg.Loaded, config.Configs, engine.Table, error) {
 	}
 	loaded, cfg, table, err := appcfg.Merge(builtinDescriptors(), data)
 	if err != nil {
+		// 旧配置迁移：v0.2.3 之前预设是 #b/#u/#t/#r，与 picker 的 "#" 构成
+		// 「短触发串遮蔽长触发串」。此时只丢掉冲突插件的 Prefix 覆盖再归一，
+		// 让新默认（@b/@u/@t/@r）生效，其余设置（热键/主题/自定义前缀）保持不动。
+		if errors.Is(err, config.ErrPrefixConflict) {
+			if repairedCfg, repairedTable, dropped, rerr := repairPrefixConflicts(loaded.Overrides); rerr == nil {
+				log.Printf("voke 配置(%s)存在前缀冲突，已忽略 %s 的自定义前缀并回落到默认值：%v",
+					path, strings.Join(dropped, "、"), err)
+				return loaded, repairedCfg, repairedTable, nil
+			} else {
+				log.Printf("voke 配置(%s)前缀冲突自动修复失败：%v", path, rerr)
+			}
+		}
 		if table == nil {
-			// Normalize 报错（覆盖里撞车/未知 id 等）：这份配置不可用，退回内置默认。
-			log.Printf("voke 配置(%s)归一失败，退回内置默认：%v", path, err)
+			// Normalize 报错（覆盖里未知 id / 保留键 / 无法修复的前缀冲突等）：
+			// 这份配置不可用，插件配置退回内置默认；顶层设置仍保留，避免一次坏前缀
+			// 连带丢掉热键 / 主题 / 自启。
+			log.Printf("voke 配置(%s)归一失败，插件配置退回内置默认：%v", path, err)
 			fallbackCfg, fallbackTable, ferr := buildPrefixTable()
-			return appcfg.Loaded{}, fallbackCfg, fallbackTable, ferr
+			return loaded, fallbackCfg, fallbackTable, ferr
 		}
 		// 可恢复的解析告警（坏 JSON 已按默认兜底）：落日志，正常返回兜底产物。
 		log.Printf("voke 配置(%s)有解析问题，已按默认兜底：%v", path, err)
 	}
 	return loaded, cfg, table, nil
+}
+
+// repairPrefixConflicts 把与前缀冲突相关的 Prefix 覆盖丢掉后重跑归一，返回修复后的
+// 配置、表和被丢弃的插件 id（按首次出现顺序、去重）。
+//
+// 循环至多 4 轮：丢掉某个前缀覆盖后，该插件会回落到 Descriptor 默认值，可能与另一条
+// 自定义前缀形成新的冲突。每一轮只处理 Prefix 指针非 nil 的条目；若冲突全部来自
+// Descriptor 默认值（装配期 bug）则修不了，交回调用方走整体兜底。
+func repairPrefixConflicts(overrides []config.UserOverride) (config.Configs, engine.Table, []string, error) {
+	ovs := append([]config.UserOverride(nil), overrides...)
+	dropped := make([]string, 0, 2)
+	seen := make(map[string]bool)
+	for attempt := 0; attempt < 4; attempt++ {
+		bad := config.PrefixConflictIDs(builtinDescriptors(), ovs)
+		if len(bad) == 0 {
+			break
+		}
+		changed := false
+		for _, id := range bad {
+			for i := range ovs {
+				if ovs[i].ID == id && ovs[i].Prefix != nil {
+					ovs[i].Prefix = nil
+					changed = true
+					if !seen[id] {
+						seen[id] = true
+						dropped = append(dropped, id)
+					}
+				}
+			}
+		}
+		if !changed {
+			return config.Configs{}, nil, nil, fmt.Errorf("前缀冲突涉及默认值，无法自动修复")
+		}
+	}
+	cfg, err := config.Normalize(builtinDescriptors(), ovs)
+	if err != nil {
+		return config.Configs{}, nil, nil, err
+	}
+	if len(dropped) == 0 {
+		return config.Configs{}, nil, nil, fmt.Errorf("没有可丢弃的前缀覆盖")
+	}
+	return cfg, cfg.BuildTable(), dropped, nil
 }
 
 // loadFrequency 启动时读频率表（数据目录下的 frequency.toml，env 可覆盖）。文件不存在

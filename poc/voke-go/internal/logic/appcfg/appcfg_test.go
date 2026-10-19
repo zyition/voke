@@ -40,7 +40,7 @@ func sampleDescriptors() []config.Descriptor {
 		{ID: "apps", Name: "应用", Description: "d", DefaultEnabled: true, DefaultIsGlobal: true,
 			DefaultActivation: engine.Direct, DefaultWeight: 1.2, DefaultCount: 5},
 		{ID: "base64", Name: "Base64", Description: "d", Aliases: []string{"b"},
-			DefaultEnabled: true, DefaultIsGlobal: false, DefaultPrefix: "#b",
+			DefaultEnabled: true, DefaultIsGlobal: false, DefaultPrefix: "@b",
 			DefaultActivation: engine.Indirect, DefaultWeight: 1.0, DefaultCount: 5},
 	}
 }
@@ -68,13 +68,13 @@ func TestMergeBadJSONFallsBackToDefaults(t *testing.T) {
 	if err == nil {
 		t.Error("坏 JSON 应返回 decodeErr（供落日志，绝不静默）")
 	}
-	// 但归一产物仍须是有效默认（面板照常起）：base64 默认启用 + #b 进表。
+	// 但归一产物仍须是有效默认（面板照常起）：base64 默认启用 + @b 进表。
 	b, ok := cfg.Lookup("base64")
-	if !ok || !b.Enabled || b.Prefix != "#b" {
+	if !ok || !b.Enabled || b.Prefix != "@b" {
 		t.Errorf("坏配置应回落默认：%+v", b)
 	}
-	if len(table) != 1 || table[0].Prefix != "#b" {
-		t.Errorf("默认前缀表应含 #b：%+v", table)
+	if len(table) != 1 || table[0].Prefix != "@b" {
+		t.Errorf("默认前缀表应含 @b：%+v", table)
 	}
 }
 
@@ -196,14 +196,14 @@ func TestEncodeFromTOMLRoundtrip(t *testing.T) {
 // 「不改即幂等写回」依赖的前提。
 func TestEncodeFromTOMLRoundtripAllProviderFields(t *testing.T) {
 	overrides := []config.UserOverride{
-		{ID: "base64", Enabled: ptr(true), IsGlobal: ptr(false), Weight: ptr(1.5), Prefix: ptr("#b"), Activation: ptr("indirect")},
+		{ID: "base64", Enabled: ptr(true), IsGlobal: ptr(false), Weight: ptr(1.5), Prefix: ptr("@b"), Activation: ptr("indirect")},
 		{ID: "awake", Enabled: ptr(true), IsGlobal: ptr(true), Weight: ptr(1.0), Prefix: ptr(""), Activation: ptr("direct")},
 	}
 	data, err := Encode(Top{Hotkey: "alt+space", Autostart: true, Theme: ThemeSystem}, overrides)
 	if err != nil {
 		t.Fatalf("Encode 失败：%v", err)
 	}
-	for _, frag := range []string{`is_global = true`, `weight = 1.5`, `prefix = "#b"`, `activation = "indirect"`} {
+	for _, frag := range []string{`is_global = true`, `weight = 1.5`, `prefix = "@b"`, `activation = "indirect"`} {
 		if !strings.Contains(string(data), frag) {
 			t.Errorf("落盘缺 %s：\n%s", frag, data)
 		}
@@ -225,7 +225,7 @@ func TestEncodeFromTOMLRoundtripAllProviderFields(t *testing.T) {
 	if awake.Prefix != nil {
 		t.Errorf("awake 空前缀应省略（读回 nil），实际 %+v", awake.Prefix)
 	}
-	if base.Prefix == nil || *base.Prefix != "#b" || base.Weight == nil || *base.Weight != 1.5 ||
+	if base.Prefix == nil || *base.Prefix != "@b" || base.Weight == nil || *base.Weight != 1.5 ||
 		base.IsGlobal == nil || *base.IsGlobal || base.Activation == nil || *base.Activation != "indirect" {
 		t.Errorf("base64 覆盖往返错：%+v", base)
 	}

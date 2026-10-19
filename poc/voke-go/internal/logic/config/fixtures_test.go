@@ -19,7 +19,7 @@ func ip(v int) *int         { return &v }
 // 样例拿 "#"。**注册顺序即优先级顺序**，多处断言依赖它，改顺序要一并改断言。
 //
 // 前缀分配：apps / windows 无前缀（参与全局搜索）、calculator "=" Direct、
-// timestamp "$" Indirect、base64 "#b" Direct、random "#r" Indirect、__picker "#" Direct。
+// timestamp "$" Indirect、base64 "@b" Direct、random "@r" Indirect、__picker "#" Direct。
 func fakeRegistry() []Descriptor {
 	return []Descriptor{
 		{
@@ -54,14 +54,14 @@ func fakeRegistry() []Descriptor {
 			ID: "base64", Name: "Base64", Description: "base64 编解码（加密 / 解密）",
 			Aliases:        []string{"b", "b64"},
 			DefaultEnabled: true, DefaultIsGlobal: false,
-			DefaultPrefix: "#b", DefaultActivation: engine.Direct,
+			DefaultPrefix: "@b", DefaultActivation: engine.Direct,
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
 			ID: "random", Name: "随机数", Description: "随机整数 / 随机字符串",
 			Aliases:        []string{"r", "rand"},
 			DefaultEnabled: true, DefaultIsGlobal: false,
-			DefaultPrefix: "#r", DefaultActivation: engine.Indirect,
+			DefaultPrefix: "@r", DefaultActivation: engine.Indirect,
 			DefaultWeight: 1.0, DefaultCount: 6,
 		},
 		{

@@ -25,7 +25,7 @@ const (
 	SubModeSym = "sym"
 	SubModeHex = "hex"
 
-	prefix           = "#r" // 二级前缀（`#` 归 picker），Indirect：`#r ` 触发，对齐 #b/#u/#t。
+	prefix           = "@r" // 二级前缀（`#` 归 picker），Indirect：`@r ` 触发，对齐 @b/@u/@t。
 	defaultStringLen = 16
 	maxStringLen     = 256
 	defaultIntMax    = 100

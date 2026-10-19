@@ -5,6 +5,7 @@ package app
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/zyition/voke/poc/voke-go/internal/logic/appcfg"
@@ -62,7 +63,7 @@ func TestSeedSettings(t *testing.T) {
 		cfg: appcfg.Loaded{Hotkey: "ctrl+space", Autostart: true, Theme: appcfg.ThemeDark},
 		providers: config.Configs{Providers: []config.ProviderConfig{
 			{ID: "apps", Name: "应用", Enabled: true, IsGlobal: true, Weight: 1.2},
-			{ID: "base64", Name: "Base64", Enabled: false, Prefix: "#b", Activation: engine.Indirect, Weight: 1.0},
+			{ID: "base64", Name: "Base64", Enabled: false, Prefix: "@b", Activation: engine.Indirect, Weight: 1.0},
 		}},
 	}
 	s := &settingsWindow{}
@@ -85,8 +86,8 @@ func TestSeedSettings(t *testing.T) {
 		t.Errorf("apps 行错误：%+v", e0)
 	}
 	e1 := s.edits[1]
-	if e1.id != "base64" || e1.enabled || e1.prefix != "#b" || e1.activation != "间接" {
-		t.Errorf("base64 行应未启用/前缀#b/间接：%+v", e1)
+	if e1.id != "base64" || e1.enabled || e1.prefix != "@b" || e1.activation != "间接" {
+		t.Errorf("base64 行应未启用/前缀@b/间接：%+v", e1)
 	}
 	// 中文显示值 ↔ 落码映射（save 靠 activationCode 回落 direct/indirect）。
 	if activationCode("间接") != "indirect" || activationCode("直接") != "direct" {
@@ -94,6 +95,33 @@ func TestSeedSettings(t *testing.T) {
 	}
 	if activationLabel(engine.Indirect) != "间接" || activationLabel(engine.Direct) != "直接" {
 		t.Errorf("activationLabel 映射错")
+	}
+}
+
+// TestPrefixSettingsError 锁设置页保存前的校验：合法的默认预设通过；触发串互为前缀、
+// 含空白、撞保留键都在落盘前被拦下，消息指名道姓。
+func TestPrefixSettingsError(t *testing.T) {
+	picker := providerEdit{id: engine.PickerPluginID, name: "列出所有插件", prefix: "#", activation: "直接"}
+	base64 := providerEdit{id: "base64", name: "Base64", prefix: "@b", activation: "间接"}
+	valid := []providerEdit{picker, base64}
+	if msg := prefixSettingsError(valid, providerOverrides(valid)); msg != "" {
+		t.Fatalf("合法前缀不该报错，实得 %q", msg)
+	}
+
+	conflict := []providerEdit{picker, {id: "base64", name: "Base64", prefix: "#b", activation: "间接"}}
+	msg := prefixSettingsError(conflict, providerOverrides(conflict))
+	if !strings.Contains(msg, "前缀冲突") || !strings.Contains(msg, "base64") || !strings.Contains(msg, "__picker") {
+		t.Errorf("冲突消息应点名两个插件，实得 %q", msg)
+	}
+
+	space := []providerEdit{{id: "base64", name: "Base64", prefix: "b 6", activation: "间接"}}
+	if msg := prefixSettingsError(space, providerOverrides(space)); !strings.Contains(msg, "不能包含空白") {
+		t.Errorf("含空白前缀应被拦下，实得 %q", msg)
+	}
+
+	reserved := []providerEdit{{id: "base64", name: "Base64", prefix: "b", activation: "间接"}}
+	if msg := prefixSettingsError(reserved, providerOverrides(reserved)); !strings.Contains(msg, "保留键冲突") {
+		t.Errorf("字母前缀应被 C4 拦下，实得 %q", msg)
 	}
 }
 

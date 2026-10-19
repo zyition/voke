@@ -110,7 +110,8 @@ type Ranked struct {
 // ActivationTarget 返回该条目的触发目标串（与 engine.Scan 的比较目标同形：
 // Direct 是前缀本身，Indirect 是前缀 + 一个空格）。
 //
-// 本包只用它拼 alias 键做**排序加分**；真正的触发判定在 engine，别在这里再判一次。
+// 本包用它拼 alias 键做**排序加分**，并在 C2 的冲突判定里展开两条前缀
+// （prefix.go）；真正的触发判定在 engine，别在这里再判一次。
 func ActivationTarget(prefix string, a engine.Activation) string {
 	if prefix == "" {
 		return ""

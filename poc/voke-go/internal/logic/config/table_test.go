@@ -19,8 +19,8 @@ func TestBuildTableShape(t *testing.T) {
 	want := engine.Table{
 		{Prefix: "=", PluginID: "calculator", Activation: engine.Direct},
 		{Prefix: "$", PluginID: "timestamp", Activation: engine.Indirect},
-		{Prefix: "#b", PluginID: "base64", Activation: engine.Direct},
-		{Prefix: "#r", PluginID: "random", Activation: engine.Indirect},
+		{Prefix: "@b", PluginID: "base64", Activation: engine.Direct},
+		{Prefix: "@r", PluginID: "random", Activation: engine.Indirect},
 		{Prefix: "#", PluginID: engine.PickerPluginID, Activation: engine.Direct},
 	}
 	if !reflect.DeepEqual(table, want) {
@@ -44,7 +44,7 @@ func TestBuildTableSkipsDisabledAndPrefixless(t *testing.T) {
 	want := engine.Table{
 		{Prefix: "(", PluginID: "apps", Activation: engine.Direct},
 		{Prefix: "=", PluginID: "calculator", Activation: engine.Direct},
-		{Prefix: "#r", PluginID: "random", Activation: engine.Indirect},
+		{Prefix: "@r", PluginID: "random", Activation: engine.Indirect},
 		{Prefix: "#", PluginID: engine.PickerPluginID, Activation: engine.Direct},
 	}
 	if !reflect.DeepEqual(table, want) {
@@ -81,11 +81,11 @@ func TestBuiltTableDrivesEngineScan(t *testing.T) {
 		want  engine.State
 	}{
 		{"Direct 全等命中 calculator", "=", engine.NewState(engine.Plugin, "calculator", "", "")},
-		{"Direct 全等命中 base64（决策 a 的「全等才激活」）", "#b", engine.NewState(engine.Plugin, "base64", "", "")},
+		{"Direct 全等命中 base64（决策 a 的「全等才激活」）", "@b", engine.NewState(engine.Plugin, "base64", "", "")},
 		{"列表条目命中 → PluginPicker，与别的条目同一条路径", "#", engine.NewState(engine.PluginPicker, "", "", "")},
 		{"Indirect 要前缀 + 空格", "$ ", engine.NewState(engine.Plugin, "timestamp", "", "")},
 		{"Indirect 裸前缀不切", "$", engine.NewState(engine.Global, "", "", "$")},
-		{"多打一个字符不切（决策 a：不做前缀回落）", "#ba", engine.NewState(engine.Global, "", "", "#ba")},
+		{"多打一个字符不切（决策 a：不做前缀回落）", "@ba", engine.NewState(engine.Global, "", "", "@ba")},
 		{"算式不切", "=1+1", engine.NewState(engine.Global, "", "", "=1+1")},
 		{"无前缀插件不参与扫描", "win", engine.NewState(engine.Global, "", "", "win")},
 	}
@@ -104,8 +104,8 @@ func TestBuiltTableDrivesEngineScan(t *testing.T) {
 		}
 		return ""
 	}
-	if got := prefixOf("base64"); got != "#b" {
-		t.Errorf("base64 前缀 = %q，期望 \"#b\"", got)
+	if got := prefixOf("base64"); got != "@b" {
+		t.Errorf("base64 前缀 = %q，期望 \"@b\"", got)
 	}
 	if got := prefixOf(engine.PickerPluginID); got != "#" {
 		t.Errorf("picker 前缀 = %q，期望 \"#\"", got)
@@ -124,7 +124,7 @@ func TestBuildTableReflectsConfiguredPrefix(t *testing.T) {
 		{Prefix: "=", PluginID: "calculator", Activation: engine.Direct},
 		{Prefix: "$", PluginID: "timestamp", Activation: engine.Indirect},
 		{Prefix: "#", PluginID: "base64", Activation: engine.Direct},
-		{Prefix: "#r", PluginID: "random", Activation: engine.Indirect},
+		{Prefix: "@r", PluginID: "random", Activation: engine.Indirect},
 		{Prefix: "??", PluginID: engine.PickerPluginID, Activation: engine.Direct},
 	}
 	if !reflect.DeepEqual(table, want) {
@@ -136,7 +136,7 @@ func TestBuildTableReflectsConfiguredPrefix(t *testing.T) {
 	if got := engine.Scan(table, engine.State{}, "#"); !got.Equal(engine.NewState(engine.Plugin, "base64", "", "")) {
 		t.Errorf("Scan(\"#\") = %+v，期望进 base64", got)
 	}
-	if got := engine.Scan(table, engine.State{}, "#ba"); !got.Equal(engine.NewState(engine.Global, "", "", "#ba")) {
-		t.Errorf("Scan(\"#ba\") = %+v，期望留在 Global", got)
+	if got := engine.Scan(table, engine.State{}, "@ba"); !got.Equal(engine.NewState(engine.Global, "", "", "@ba")) {
+		t.Errorf("Scan(\"@ba\") = %+v，期望留在 Global", got)
 	}
 }
