@@ -66,20 +66,26 @@ SolidCompression=yes
 WizardStyle=modern
 
 ; ----- 安装前结束正在运行的 voke -----
-; 官方 [Setup] CloseApplications（默认就是 yes，这里显式写出）：
-;   * 交互安装：Setup 在"准备安装"页列出占用待替换文件的进程，问用户是否关闭；
+; 官方 [Setup] CloseApplications 取值 force / yes / no（官方帮助核实），三者都用
+; Windows Restart Manager 检测并关闭占用待替换文件的进程：
+;   * 交互安装：Setup 在"准备安装"页列出占用文件的进程，问用户是否自动关闭；
 ;   * 静默安装：Setup 直接关闭这些进程，装完后按 RestartApplications 决定是否重启。
-; 它用的是 Windows Restart Manager（官方帮助原文：「Setup uses Windows Restart
-; Manager to detect, close, and restart applications」）。
 ;
-; 与 AppMutex 的区别（官方帮助核实后选择）：
-;   * AppMutex 需要**应用自己** CreateMutex 一个约定名，Setup/卸载器启动时检测到就
-;     弹"请手动关闭再点确定"——它只是"劝退"，不代劳，且交互式会打断流程；
-;     voke 虽是常驻托盘（single_instance.rs 里确有 Local\voke.instance 互斥体），
-;     但用它只会每次安装都弹一次提示，体验差。
-;   * CloseApplications 不依赖应用配合，直接由 Restart Manager 关闭，最省事且可靠。
-; 故此处不用 AppMutex。
-CloseApplications=yes
+; **必须用 force，不能用默认的 yes**：voke 是常驻托盘应用，关闭窗口 ≠ 退出进程
+; （面板/设置窗的 WM_CLOSE 只隐藏或销毁窗口，托盘常驻语义不变）。Restart Manager
+; 的非强制关闭会等进程自己退出，托盘进程永远不满足，RmShutdown 返回 351
+; （ERROR_FAIL_SHUTDOWN），安装器弹"无法关闭应用程序"，用户只能手动退出托盘再装。
+; 2026-10-19 在本机用 Restart Manager 对运行中的 voke.exe 实测：非强制 rc=351、
+; 进程存活；RmForceShutdown rc=0、进程退出。官方帮助对 force 的说明是"关闭应用
+; 时强制关闭、不与应用协商"，并提示可能丢失未保存数据——voke 无未保存数据，且
+; 卸载侧本来就 taskkill /F（见 [UninstallRun]），强制关闭与现有策略一致。
+; 交互安装仍会照常停在"准备安装"页列出 voke、问是否自动关闭（这是 Setup 的常规
+; 页面，不是失败）；用户确认后即强制结束，不再出现"无法关闭 → 手动退出"。
+;
+; 与 AppMutex 的区别：AppMutex 需要应用 CreateMutex 一个约定名，Setup 检测到只弹
+; "请手动关闭再点确定"，不代劳。Go 版单实例走 mygo 的 AF_UNIX socket，没有可被
+; Setup 检测的命名互斥体；即便有，也解决不了"谁去关进程"的问题。故不用 AppMutex。
+CloseApplications=force
 
 ; 不在安装结束后自动重启被关掉的 voke：它是常驻托盘应用，装完由用户自己（或自启）
 ; 拉起即可，安装器不越俎代庖。
