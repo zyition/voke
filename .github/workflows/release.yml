@@ -1,0 +1,241 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------
+  # windows：出安装包 + portable zip。
+  # 必须跑 windows-latest —— ISCC.exe（Inno Setup 编译器）是 Windows 原生程序，
+  # 不能像 voke.exe 本体那样在 WSL 里交叉出来。
+  # ---------------------------------------------------------------------
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 去掉仓库内的 crates.io 镜像覆盖
+        shell: bash
+        run: rm -f .cargo/config.toml
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 从 tag 取版本号并同步 Cargo.toml
+        shell: bash
+        # 单一事实来源 = tag（vX.Y.Z）。
+        #
+        # 为什么不只是把版本号传给 ISCC、而还要改 Cargo.toml：
+        # voke-app/build.rs 的 VERSIONINFO 取自 CARGO_PKG_VERSION（= workspace
+        # 的 version）。只改安装器版本的话，会出现「安装包是 1.2.3、exe 属性里还是
+        # 0.1.0」的错位。所以这里把 Cargo.toml:6 的 workspace version 改成 tag，
+        # 让 exe 资源版本、安装器 AppVersion、产物文件名三处一致。
+        #
+        # 为什么用 sed 而不是 `cargo set-version`：后者要先 `cargo install cargo-edit`
+        # （编译几分钟），而这里只改一行、且 Cargo.toml 里第一个 `^version = "` 就
+        # 是 [workspace.package] 下的那一行（前面的行没有 version，后面的
+        # workspace.dependencies 都是 `xxx = { version = ...}` 形式，不以 version 开头）。
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          # 版本号必须是「数字开头」，防止 tag 打歪（如 vfoo）后悄悄用空版本号出包。
+          [[ "$ver" =~ ^[0-9] ]] || { echo "tag 版本号不合法：$ver"; exit 1; }
+          sed -i "0,/^version = \"/s/^version = \".*/version = \"$ver\"/" Cargo.toml
+          # 改完立刻自检：没生效就直接失败，别拿 0.1.0 的版本号去发 1.2.3。
+          grep -q "^version = \"$ver\"" Cargo.toml || { echo "版本同步失败：Cargo.toml 没写成 $ver"; exit 1; }
+          grep -n '^version' Cargo.toml | head -1
+          echo "VOKE_VERSION=$ver" >> "$GITHUB_ENV"
+          echo "VOKE_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+
+      - name: 准备 llvm-rc / clang（voke-app/build.rs 的 msvc 分支需要）
+        shell: pwsh
+        # 【待真机验证】与 ci.yml 的同名步骤一致，windows-latest 镜像预装 LLVM 20，
+        # 但不保证含 llvm-rc.exe；找不到时 choco install llvm 兜底。
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Find-LlvmRc {
+            $cmd = Get-Command llvm-rc -ErrorAction SilentlyContinue
+            if ($cmd) { return $cmd.Source }
+            $hit = Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' `
+                     -Filter 'llvm-rc.exe' -Recurse -Depth 6 -ErrorAction SilentlyContinue |
+                   Select-Object -First 1
+            if ($hit) { return $hit.FullName }
+            return $null
+          }
+
+          $rc = Find-LlvmRc
+          if (-not $rc) {
+            Write-Host 'llvm-rc 不在 PATH，改用 choco install llvm 兜底'
+            choco install llvm -y --no-progress
+            $env:Path = @($env:Path,
+              [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+              [Environment]::GetEnvironmentVariable('Path', 'User')) -join ';'
+            $rc = Find-LlvmRc
+          }
+          if (-not $rc) { throw 'llvm-rc.exe 未找到，voke-app/build.rs 的 msvc 分支无法编译资源' }
+
+          Write-Host "llvm-rc: $rc"
+          Split-Path $rc -Parent | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: cargo build --release
+        shell: pwsh
+        run: cargo build --release --target x86_64-pc-windows-msvc -p voke-app
+
+      - name: 安装 Inno Setup 7
+        shell: pwsh
+        # 直链来源（已实测核对，不是凭记忆）：
+        #   files.jrsoftware.org/is/7/readme.txt —— "In March 2026 Inno Setup
+        #   download links were updated to use immutable releases on GitHub,
+        #   See https://github.com/jrsoftware/issrc/releases"
+        #   files.jrsoftware.org/is/7/ 下只剩 .issig 签名文件，exe 已不在该目录
+        #   （innosetup-7.1.0.exe 实测 404）。
+        # 用 GitHub API 查 issrc 的 release 资源，确认 7.1.0 的资源名是
+        #   innosetup-7.1.0-x64.exe / innosetup-7.1.0-x86.exe
+        # 并对前者做过 HEAD 请求（200，application/octet-stream）。
+        #
+        # 不用 choco 的 innosetup：它只到 6.x，而 packaging/voke.iss 用了 Inno 7
+        # 的默认行为（WizardStyle=modern / x64compatible 语义），必须 7.x。
+        #
+        # 装完落到哪个目录取决于安装器自身的作用域默认值（per-user →
+        # %LOCALAPPDATA%\Programs\Inno Setup 7；all-users → Program Files），
+        # 所以下面把几个候选目录都找一遍，再把 ISCC.exe 所在目录推进 PATH。
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe'
+          $exe = Join-Path $env:RUNNER_TEMP 'innosetup-7.1.0-x64.exe'
+          Write-Host "下载 $url"
+          # 用 curl.exe（Windows 10+ 自带）而不是 Invoke-WebRequest：后者在 PS7 里
+          # 对大文件会慢，且 -UseBasicParsing 的可用性随版本变化。
+          & curl.exe -fsSL --retry 3 -o $exe $url
+          if ($LASTEXITCODE -ne 0) { throw "下载 Inno Setup 失败（exit=$LASTEXITCODE）：$url" }
+          Write-Host '静默安装 Inno Setup 7.1.0'
+          Start-Process -FilePath $exe `
+            -ArgumentList '/VERYSILENT', '/NORESTART', '/SUPPRESSMSGBOXES', '/NOCANCEL' -Wait
+
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 7\ISCC.exe'),
+            'C:\Program Files (x86)\Inno Setup 7\ISCC.exe',
+            'C:\Program Files\Inno Setup 7\ISCC.exe'
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            $found = Get-ChildItem -Path "$env:LOCALAPPDATA\Programs", 'C:\Program Files', 'C:\Program Files (x86)' `
+                       -Filter 'ISCC.exe' -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+                     Select-Object -First 1
+            if ($found) { $iscc = $found.FullName }
+          }
+          if (-not $iscc) { throw 'ISCC.exe 未找到：Inno Setup 7 安装可能未成功，检查上一步的输出' }
+
+          Write-Host "ISCC: $iscc"
+          # 两条路都留：目录进 PATH（给手工复现用），完整路径进 GITHUB_ENV（下一步直接用）。
+          Split-Path $iscc -Parent | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "ISCC_PATH=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: 生成安装包（Inno Setup）
+        shell: pwsh
+        # 走 .iss 自带的 #ifndef 覆盖点：-dVokeVersion 改 AppVersion + 产物文件名，
+        # 不 sed 改文件（voke.iss:17-19 就是为这个准备的）。
+        # VokeExe 用 .iss 的默认值（..\target\x86_64-pc-windows-msvc\release\voke.exe），
+        # 与上一步 --target 的产物路径一致，故不额外传 -dVokeExe。
+        # 产物：packaging\dist\voke-setup-<ver>.exe
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:ISCC_PATH 'packaging\voke.iss' "-dVokeVersion=$env:VOKE_VERSION"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC 失败（exit=$LASTEXITCODE）" }
+          Get-ChildItem 'packaging\dist'
+
+      - name: 打 portable zip 并汇总到 dist/
+        shell: pwsh
+        # 汇总成**扁平**的一个目录再上传：避免 upload-artifact 把
+        # packaging/dist 这层路径带进产物、导致 release 步骤的 glob 对不上。
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path 'dist' | Out-Null
+          Copy-Item 'packaging\dist\voke-setup-*.exe' -Destination 'dist\'
+          Compress-Archive `
+            -Path 'target\x86_64-pc-windows-msvc\release\voke.exe' `
+            -DestinationPath "dist\voke-$env:VOKE_TAG-windows-x86_64.zip"
+          Get-ChildItem 'dist'
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: voke-release
+          path: dist/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------
+  # ubuntu：生成 changelog + 建 GitHub Release，并把 CHANGELOG.md 回推默认分支。
+  # ---------------------------------------------------------------------
+  release:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # git-cliff 要完整历史 + 全部 tag 才能生成 changelog。
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: voke-release
+          path: artifacts
+
+      - name: Generate changelog and release body
+        shell: bash
+        # git-cliff 读 git 历史 + Conventional Commits（cliff.toml），
+        # 一次跑出完整 CHANGELOG.md，一次跑出本次版本的 release 正文。
+        run: |
+          set -euo pipefail
+          git-cliff --tag "${{ github.ref_name }}" -o CHANGELOG.md
+          git-cliff --latest --tag "${{ github.ref_name }}" -o release-body.md
+          printf '\n---\n' >> release-body.md
+          echo "Full changelog: https://github.com/${{ github.repository }}/blob/${{ github.event.repository.default_branch }}/CHANGELOG.md" >> release-body.md
+          echo "Release body:"
+          cat release-body.md
+
+      - name: Commit regenerated CHANGELOG.md to the default branch
+        shell: bash
+        # tag push 跑在 detached HEAD 上，所以先切回默认分支再提交。
+        # CHANGELOG.md 没变化时不产生空提交。
+        run: |
+          set -euo pipefail
+          branch="${{ github.event.repository.default_branch }}"
+          git fetch origin "$branch"
+          git checkout "$branch"
+          if git diff --quiet -- CHANGELOG.md; then
+            echo "CHANGELOG.md 无变化，跳过提交"
+          else
+            git add CHANGELOG.md
+            git -c user.name="github-actions[bot]" \
+                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                commit -m "docs: changelog for ${{ github.ref_name }}"
+            git push origin "$branch"
+            echo "CHANGELOG.md 已提交到 $branch"
+          fi
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          body_path: release-body.md
+          # 用 **/ 前缀：不管 upload-artifact 有没有把目录层级带进产物都能命中。
+          files: |
+            artifacts/**/voke-setup-*.exe
+            artifacts/**/voke-*-windows-x86_64.zip

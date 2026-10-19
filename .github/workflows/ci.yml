@@ -1,0 +1,180 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+    # 纯文档变更不跑 CI：release.yml 发版后会往默认分支回推一条
+    # "docs: changelog for vX.Y.Z"（只改 CHANGELOG.md），为这种提交重跑一遍
+    # 构建是纯粹的浪费；顶层 markdown（README / AGENTS / SECURITY 等）与
+    # docs/ 下的 markdown 同理。
+    # 刻意**不用** `**/*.md`：代码层的 md 后续可能用于静态模板之类的资源，
+    # 那种变更必须照常过 CI。
+    # 注意：paths-ignore 是「本次推送所有变更文件都命中忽略列表才跳过」，
+    # 代码 + 文档混改仍会正常触发。
+    paths-ignore:
+      - '*.md'          # 顶层 markdown
+      - 'docs/*.md'     # docs/ 直接子级
+      - 'docs/**/*.md'  # docs/ 更深层级（与上一条合起来覆盖 docs/ 全树）
+  pull_request:
+    # 只改文档的 PR 同样不需要跑构建（语义同 push）。
+    paths-ignore:
+      - '*.md'
+      - 'docs/*.md'
+      - 'docs/**/*.md'
+
+# 同一个分支 / PR 上连续推送时，掐掉还在跑的旧任务。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------
+  # 格式检查：仓库根目录有 rustfmt.toml（edition 2024 / max_width 100），
+  # HEAD 已整体格式化过，`cargo fmt --all -- --check` 当前是干净的，所以可以直接
+  # 全量卡死（不需要「只检查本次 PR 改动的文件」那套 git diff 过滤）。
+  # AGENTS.md 把它列为合并前置条件。
+  # ---------------------------------------------------------------------
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 去掉仓库内的 crates.io 镜像覆盖
+        run: rm -f .cargo/config.toml
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+  # ---------------------------------------------------------------------
+  # ubuntu：只跑与平台无关的两个 crate。
+  #
+  # 刻意**不包含** -p voke-app：voke-app 依赖 gpui（要 fontconfig.pc），在 Linux
+  # 原生 check 会因缺系统库环境性失败，属于已知预期（见 AGENTS.md「WSL 交叉编译」）。
+  # voke-app 的编译验证放在下面的 windows 构建 job 里。
+  # ---------------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 去掉仓库内的 crates.io 镜像覆盖
+        # .cargo/config.toml 把 crates.io 换成了 TUNA（国内镜像，方便本地开发）。
+        # GitHub 的 runner 在境外，走该镜像又慢又容易 429，CI 里直接用官方源。
+        # 只删工作区副本，不改动仓库内容。
+        run: rm -f .cargo/config.toml
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo test
+        # 295（voke-core）+ 67（voke-sys）
+        run: cargo test -p voke-core -p voke-sys --all-targets
+
+  # ---------------------------------------------------------------------
+  # windows：voke-app 只在 Windows 上构建，这里是唯一的编译验证点。
+  # 只出 exe 并上传供人工验证，不做安装包（安装包在 release.yml 里做）。
+  # ---------------------------------------------------------------------
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 去掉仓库内的 crates.io 镜像覆盖
+        shell: bash
+        run: rm -f .cargo/config.toml
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 准备 llvm-rc / clang（voke-app/build.rs 的 msvc 分支需要）
+        shell: pwsh
+        # 【待真机验证】本步骤未经真机跑过，是按本地 WSL 侧的实测推出来的。
+        #
+        # 背景：voke-app/build.rs 在 target_env=msvc 时直接调 `llvm-rc` 把图标 +
+        # VERSIONINFO 编成 .res（gpui-pre 还会塞一个 gpui.lib，lld-link 只允许一个
+        # 资源对象，所以必须是真 .res，不能用 windres 的 COFF 对象）；llvm-rc 内部
+        # 还要再调 clang 做预处理，因此 clang 也得在 PATH 上。
+        #
+        # 已核过的事实：rust 的 `llvm-tools-preview` 组件**不含** llvm-rc
+        # （解包 llvm-tools-1.98.1-x86_64-pc-windows-msvc.tar.xz 看过 bin/ 列表，
+        # 只有 ar/as/cov/dis/link/nm/objcopy/objdump/profdata/readobj/size/strip +
+        # llc/opt），所以 `rustup component add llvm-tools-preview` 这条路走不通。
+        #
+        # windows-latest 镜像预装了 LLVM 20（runner-images toolset-2025.json 里
+        # "llvm": {"version": "20"}），但不确定是否含 llvm-rc.exe；故按顺序兜底：
+        #   1. PATH 里已有 llvm-rc → 直接用；
+        #   2. 否则 choco install llvm（约 300–400MB，慢但一次性的，有缓存）；
+        #   3. 否则全盘扫几个常见安装目录找 llvm-rc.exe。
+        # 若三步都找不到，job 会在下一步构建时报明确的错误而不是静默通过。
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Find-LlvmRc {
+            $cmd = Get-Command llvm-rc -ErrorAction SilentlyContinue
+            if ($cmd) { return $cmd.Source }
+            $roots = @('C:\Program Files', 'C:\Program Files (x86)')
+            $hit = Get-ChildItem -Path $roots -Filter 'llvm-rc.exe' -Recurse -Depth 6 `
+                     -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($hit) { return $hit.FullName }
+            return $null
+          }
+
+          $rc = Find-LlvmRc
+          if (-not $rc) {
+            Write-Host 'llvm-rc 不在 PATH，改用 choco install llvm 兜底'
+            choco install llvm -y --no-progress
+            # choco 装完不会刷新当前会话的 PATH，手动并一次。
+            $env:Path = @($env:Path,
+              [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+              [Environment]::GetEnvironmentVariable('Path', 'User')) -join ';'
+            $rc = Find-LlvmRc
+          }
+          if (-not $rc) {
+            # 单行 throw（不用 here-string：PowerShell 的 '@ 必须在行首，会破坏
+            # YAML 块标量的缩进）。三种兜底都写在消息里，方便直接照着改。
+            throw 'llvm-rc.exe 未找到，voke-app/build.rs 的 msvc 分支无法编译资源。兜底（任选其一写进本步骤）：1) choco install llvm（看 choco 日志为何失败）；2) winget install --id LLVM.LLVM -e --silent；3) 改用 Windows SDK 自带的 rc.exe（C:\Program Files (x86)\Windows Kits\10\bin\*\x64\rc.exe），并把 build.rs 的 msvc 分支 program 换成 rc.exe（/fo 参数同样可用，但要先验证产出的 .res 能被 lld-link 与 gpui.lib 合并）。'
+          }
+
+          Write-Host "llvm-rc: $rc"
+          # 把 llvm-rc 所在目录写进 GITHUB_PATH，后续构建步骤才能看见它 + 同目录的 clang。
+          Split-Path $rc -Parent | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: cargo clippy（全 workspace，含 voke-app）
+        shell: pwsh
+        # 把 clippy 移进 windows build job：voke-app 只在 Windows 上构建，
+        # 之前 ubuntu 的 core/sys-only clippy 扫不到它。这里用 --workspace 覆盖
+        # 全部 crate，并用 -D warnings 让告警阻断构建（存量 6 条告警已在分支里清掉）。
+        # 与下方的 cargo build 共用同一 toolchain/target，不破坏 windows 构建。
+        run: cargo clippy --target x86_64-pc-windows-msvc --workspace --all-targets -- -D warnings
+
+      - name: cargo build --release
+        shell: pwsh
+        # 显式写 target：产物落在 target\x86_64-pc-windows-msvc\release\voke.exe，
+        # 与 packaging/voke.iss 里的默认 VokeExe 路径一致（release.yml 直接复用）。
+        run: cargo build --release --target x86_64-pc-windows-msvc -p voke-app
+
+      - name: Upload exe
+        uses: actions/upload-artifact@v7
+        with:
+          name: voke-windows-x86_64
+          path: target/x86_64-pc-windows-msvc/release/voke.exe
+          if-no-files-found: error

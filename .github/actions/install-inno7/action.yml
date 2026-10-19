@@ -1,0 +1,38 @@
+name: install-inno7
+description: 安装 Inno Setup 7.1.0（Windows runner），把 ISCC.exe 路径写入 GITHUB_PATH/GITHUB_ENV
+runs:
+  using: composite
+  steps:
+    # 直链与安装姿势与 .github/workflows/release.yml 的「安装 Inno Setup 7」一致：
+    # Inno 7 的下载已迁到 GitHub Releases（files.jrsoftware.org 只剩签名文件），
+    # 且 Release 资源名为 innosetup-7.1.0-x64.exe。不用 choco（只到 6.x）。
+    - name: 下载并静默安装 Inno Setup 7.1.0
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $url = 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe'
+        $exe = Join-Path $env:RUNNER_TEMP 'innosetup-7.1.0-x64.exe'
+        Write-Host "下载 $url"
+        & curl.exe -fsSL --retry 3 -o $exe $url
+        if ($LASTEXITCODE -ne 0) { throw "下载 Inno Setup 失败（exit=$LASTEXITCODE）：$url" }
+        Write-Host '静默安装 Inno Setup 7.1.0'
+        Start-Process -FilePath $exe `
+          -ArgumentList '/VERYSILENT', '/NORESTART', '/SUPPRESSMSGBOXES', '/NOCANCEL' -Wait
+
+        $candidates = @(
+          (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 7\ISCC.exe'),
+          'C:\Program Files (x86)\Inno Setup 7\ISCC.exe',
+          'C:\Program Files\Inno Setup 7\ISCC.exe'
+        )
+        $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $iscc) {
+          $found = Get-ChildItem -Path "$env:LOCALAPPDATA\Programs", 'C:\Program Files', 'C:\Program Files (x86)' `
+                     -Filter 'ISCC.exe' -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+                   Select-Object -First 1
+          if ($found) { $iscc = $found.FullName }
+        }
+        if (-not $iscc) { throw 'ISCC.exe 未找到：Inno Setup 7 安装可能未成功' }
+
+        Write-Host "ISCC: $iscc"
+        Split-Path $iscc -Parent | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+        "ISCC_PATH=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
