@@ -347,6 +347,7 @@ func (st *appState) showPanel() {
 	st.resetSession()
 	st.model.Query = ""
 	st.filter()
+	st.resetListScroll() // filter 的 ScrollIntoView(0) 只保证首行可见；这里钉到真正顶部
 	st.input.Focus()
 	st.panel.Show()
 	// 唤起即刷新托盘（awake 剩余时间是随时间变的；此处重建让用户每次看托盘都拿到
@@ -392,6 +393,20 @@ func (st *appState) resetSession() {
 	st.provRows, st.provChosen, st.provHint = nil, 0, ""
 	st.provLastKey = ""
 	st.globalRows, st.globalProvRows, st.globalChosen = nil, nil, 0
+	st.resetListScroll()
+}
+
+// resetListScroll 把四个结果列表的滚动位置请求钉到顶部。
+//
+// ui.ListState 的 anchor/inset 是跨帧状态：只清数据/选中（resetSession、Filter、
+// refreshGlobalAgg）不会把它复位，下一次出现结果时会保留上一次的滚动位置，
+// 表现为「输入框已重置、列表还停在旧位置」。输入/作用域变化、唤起/隐藏、
+// 首轮数据到达时都显式回顶，确保新的一次查询从第一行开始。
+func (st *appState) resetListScroll() {
+	st.list.ScrollTo(0, ui.Start)
+	st.pickerList.ScrollTo(0, ui.Start)
+	st.provList.ScrollTo(0, ui.Start)
+	st.globalList.ScrollTo(0, ui.Start)
 }
 
 // hidePanel 隐藏面板（失焦 / 热键 / 托盘菜单 / Esc 二级 / 启动成功都会走到）。

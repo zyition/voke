@@ -25,6 +25,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/appsmodel"
+	"github.com/zyition/voke/poc/voke-go/internal/logic/config"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/engine"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/frequency"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/geometry"
@@ -771,6 +773,114 @@ func TestLoadConfigsWithOverride(t *testing.T) {
 	// 其余插件不受影响（uuid 仍默认启用、@u 仍在表）。
 	if u, ok := cfg.Lookup("uuid"); !ok || !u.Enabled {
 		t.Errorf("uuid 不该被波及：%+v", u)
+	}
+}
+
+// TestQueryChangeResetsListScrollToTop 锁「输入变化 / 会话重置 → 列表回顶」：
+// ui.ListState 的滚动位置是跨帧状态，只清 Results/Chosen 不够；否则输入框
+// 已经清空、列表还停在上一轮的位置，用户会看到“乱跳”。
+func TestQueryChangeResetsListScrollToTop(t *testing.T) {
+	names := make([]string, 30)
+	for i := range names {
+		names[i] = fmt.Sprintf("App%02d", i)
+	}
+	st := newWiredState(t, names...)
+	tt := newViewTester(t, st)
+
+	typeInto(st, "app")
+	tt.Frame()
+	tt.Frame()
+	if first, _ := st.list.Visible(); first != 0 {
+		t.Fatalf("前置条件：初始列表不在顶部（first=%d）", first)
+	}
+
+	// 手动把列表滚到第 20 行，确认真实帧里已生效。
+	st.list.ScrollTo(20, ui.Start)
+	tt.Frame()
+	tt.Frame()
+	if first, _ := st.list.Visible(); first == 0 {
+		t.Fatal("前置条件：ScrollTo(20) 没有让列表离开顶部")
+	}
+
+	// 输入变化 → 必须回到顶部。
+	typeInto(st, "app1")
+	tt.Frame()
+	tt.Frame()
+	if first, last := st.list.Visible(); first != 0 {
+		t.Errorf("查询变化后列表仍在 first=%d last=%d，期望回到顶部", first, last)
+	}
+
+	// 会话重置（面板隐藏/再过一次 showPanel 的路径）同样回顶。
+	st.list.ScrollTo(10, ui.Start)
+	tt.Frame()
+	tt.Frame()
+	if first, _ := st.list.Visible(); first == 0 {
+		t.Fatal("前置条件：第二次 ScrollTo(10) 没有让列表离开顶部")
+	}
+	st.resetSession()
+	tt.Frame()
+	tt.Frame()
+	if first, last := st.list.Visible(); first != 0 {
+		t.Errorf("resetSession 后列表仍在 first=%d last=%d，期望回到顶部", first, last)
+	}
+}
+
+// manyGlobalProvider 是 global 列表测试用的假全局 provider：一次给 40 条可执行
+// 结果，让合并列表超过面板可见行数、能够真实滚动。
+type manyGlobalProvider struct{}
+
+func (manyGlobalProvider) ID() string          { return "many" }
+func (manyGlobalProvider) Name() string        { return "Many" }
+func (manyGlobalProvider) Aliases() []string   { return nil }
+func (manyGlobalProvider) Description() string { return "" }
+func (manyGlobalProvider) Config() providers.ProviderConfig {
+	return providers.ProviderConfig{Enabled: true, IsGlobal: true, Weight: 1, Count: 5}
+}
+func (manyGlobalProvider) SetConfig(providers.ProviderConfig) {}
+func (manyGlobalProvider) Placeholder(string) string          { return "" }
+func (manyGlobalProvider) RegeneratesOnQuery() bool           { return false }
+func (manyGlobalProvider) Query(providers.QueryCtx) []providers.Match {
+	out := make([]providers.Match, 40)
+	for i := range out {
+		out[i] = providers.MatchExecute("many", fmt.Sprintf("M%02d", i), "",
+			providers.Action{Kind: providers.ActionCopy, Text: "x"}, 1)
+	}
+	return out
+}
+
+// TestGlobalQueryChangeResetsScrollToTop 锁定全局合并列表的滚回顶部：
+// 该列表在旧实现里只复位 globalChosen、不触发 ScrollIntoView(0)，是用户
+// “输入变了但滚动条停在原处”的最直接路径。
+func TestGlobalQueryChangeResetsScrollToTop(t *testing.T) {
+	names := make([]string, 30)
+	for i := range names {
+		names[i] = fmt.Sprintf("App%02d", i)
+	}
+	st := newWiredState(t, names...)
+	st.pluginReg = providers.NewRegistry(manyGlobalProvider{})
+	st.providers = config.Configs{Providers: []config.ProviderConfig{{
+		ID: "many", Name: "Many", Enabled: true, IsGlobal: true, Weight: 1, Count: 5,
+	}}}
+	tt := newViewTester(t, st)
+
+	typeInto(st, "app")
+	tt.Frame()
+	tt.Frame()
+	if !st.globalActive() {
+		t.Fatal("前置条件：合并列表未激活")
+	}
+	st.globalList.ScrollTo(10, ui.Start)
+	tt.Frame()
+	tt.Frame()
+	if first, _ := st.globalList.Visible(); first == 0 {
+		t.Fatal("前置条件：ScrollTo(10) 没有让合并列表离开顶部")
+	}
+
+	typeInto(st, "app1")
+	tt.Frame()
+	tt.Frame()
+	if first, last := st.globalList.Visible(); first != 0 {
+		t.Errorf("全局查询变化后合并列表仍在 first=%d last=%d，期望回到顶部", first, last)
 	}
 }
 

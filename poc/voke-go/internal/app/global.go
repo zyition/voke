@@ -125,6 +125,11 @@ func (st *appState) refreshGlobalAgg() {
 	batches := st.collectGlobalBatches(nil, providers.QueryCtx{Raw: q, Query: q})
 	agg := st.pluginReg.Aggregate(batches, st.freq)
 	st.globalRows, st.globalProvRows = buildGlobalRows(st.model.Results, agg)
+	if len(st.globalRows) > 0 {
+		// 首次枚举完成 / 查询变化后合并行是全新内容，必须从顶部开始；
+		// 仅复位 globalChosen 不够，ListState 的滚动位置是跨帧状态。
+		st.resetListScroll()
+	}
 }
 
 // globalActive 报告本次全局查询是否命中了 apps 以外的全局插件组——只有此时才走合并渲染；

@@ -215,6 +215,12 @@ func (st *appState) onEmptyBackspace() bool {
 //   - Global / Plugin(apps)：把 Query 交给现有的 apps 过滤链路（逐字是接线前那行）；
 //   - 未落地的插件（pluginPending）：不出 apps 结果，出占位文案（见 renderResults 的分支）。
 func (st *appState) applyEngineState(next engine.State) {
+	// 任何查询/作用域变化都让结果列表回到顶部：新一次过滤从第一行开始。
+	// 用 defer 是为了覆盖下面各分支自己的 ScrollIntoView(0)——它只保证首行
+	// 可见，滚动量很小时可能留下偏移；这里以 ScrollTo(0, Start) 钉死。
+	if !st.engineState.Equal(next) {
+		defer st.resetListScroll()
+	}
 	st.engineState = next
 	if st.model.Query != next.Query() {
 		st.model.Query = next.Query()
