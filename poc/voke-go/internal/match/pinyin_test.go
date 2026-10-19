@@ -1,5 +1,5 @@
 // 拼音数据层测试：go-pinyin 输出与 Rust pinyin 0.11 的对齐，
-// 以及两包数据已知差异的可执行记录（差异分析见 docs/notes/voke-go-poc.md §10-9）。
+// 以及两包数据已知差异的可执行记录（差异分析见 docs/notes/matching.md）。
 package match
 
 import "testing"

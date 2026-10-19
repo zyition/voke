@@ -1,13 +1,10 @@
-// main.go 是 voke-go PoC 的装配入口：单实例、全局热键、托盘、退出逻辑。
+// main.go 是 voke 的装配入口：单实例、全局热键、托盘、退出逻辑。
 //
-// 隔离纪律（与生产 voke 并存运行不得互相干扰，见 docs/notes/voke-go-poc.md §3）：
-//   - 二进制名 voke-go.exe（生产 voke 是 voke.exe）；
-//   - 默认热键 Ctrl+Alt+Space（生产 voke 是 alt+space）；
-//   - 单实例按 app id 区分（mygo 的锁按 App.Name 粒度，与可执行路径无关），
-//     且生产 voke 用的是命名互斥体 Local\voke.instance，机制不同、天然隔离；
-//   - 数据/日志目录 %APPDATA%\voke-go\（严禁碰 %APPDATA%\voke\；口径落在
-//     internal/platform 的 InitLog / DataDir）；
-//   - 不进开机自启动（不调用任何 OpenAtLogin 相关 API）。
+// 运行事实（详见 docs/architecture.md）：
+//   - 二进制为 voke.exe；默认热键 Alt+Space；
+//   - 单实例用 mygo 的 per-user socket 锁（按 app 名，不是命名互斥体）；
+//   - 数据/日志目录 %APPDATA%\voke\（InitLog / DataDir 在 internal/platform）；
+//   - 开机自启由设置页开关写入/删除 HKCU\...\Run\voke。
 package app
 
 import (

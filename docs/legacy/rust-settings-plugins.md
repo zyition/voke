@@ -1,3 +1,7 @@
+> **历史存档（Rust/gpui 时代）**：本文描述 Go + mygo 重写之前的 Rust 实现，已不再是当前主线。
+> 当前文档：[README](../../README.md) · [架构](../architecture.md) · [贡献指南](../../CONTRIBUTING.md)。
+> 文内相对链接按移动前路径书写，可能失效；仅作历史参考。
+
 # 设置页 / 插件配置 / 面板快捷键 / 托盘 / 开机自启 —— 实施文档
 
 > 给后续实现 agent（含 multitask 子代理）的**唯一施工依据**。
@@ -170,15 +174,10 @@ prefix = "="
 | terminal | ✓ | ✓ | 1.0 | — |
 | workspaces | ✓ | ✓ | 1.0 | — |
 | calculator | ✓ | ✗ | 1.0 | `=` |
-| timestamp | ✓ | ✗ | 1.0 | `@t` |
-| base64 | ✓ | ✗ | 1.0 | `@b` |
-| uuid | ✓ | ✗ | 1.0 | `@u` |
-| random | ✓ | ✗ | 1.0 | `@r` |
-
-> 2026-10-19（Go 版）：`#` 归插件列表 picker 独占（Direct），二级前缀统一迁到 `@+字母`。
-> 冲突校验从「前缀字面量全等」升级为「展开后的触发串互为前缀」——Direct 用前缀本身、
-> Indirect 用前缀 + 一个空格；`#` 与 `#b`、`@` 与 `@b` 这类关系会被拒绝，而 `@b` 与
-> `@bc`（都 Indirect）可以共存。
+| timestamp | ✓ | ✗ | 1.0 | `#` |
+| base64 | ✓ | ✗ | 1.0 | `#b` |
+| uuid | ✓ | ✗ | 1.0 | `#u` |
+| random | ✓ | ✗ | 1.0 | `#r` |
 
 校验规则（`AppConfig::normalize()`）：
 - `weight` clamp 到 `0.0..=3.0`；

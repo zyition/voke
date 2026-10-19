@@ -1,17 +1,17 @@
-# Go 版 Voke 的 CI：只在改动 Go PoC（poc/voke-go/**）时跑（Rust CI 已退役）。
+# Go 版 Voke 的 CI：只在改动 Go 主线（poc/voke-go/**）时跑（Rust CI 已退役）。
 # 门禁：gofmt / go mod tidy 自检 / go vet / race 测试 / Windows 交叉 vet + 构建。
-name: go-ci
+name: ci
 
 on:
   push:
     paths:
       - 'poc/voke-go/**'
-      - '.github/workflows/go-ci.yml'
+      - '.github/workflows/ci.yml'
       - '.github/actions/**'
   pull_request:
     paths:
       - 'poc/voke-go/**'
-      - '.github/workflows/go-ci.yml'
+      - '.github/workflows/ci.yml'
       - '.github/actions/**'
 
 permissions:
@@ -58,7 +58,7 @@ jobs:
           CGO_ENABLED: '0'
         run: go vet ./...
 
-      # 交付构建命令（与 PoC 文档 §2.1 一致）：三个 flag 缺一不可——
+      # 交付构建命令（与 CONTRIBUTING.md 一致）：三个 flag 缺一不可——
       # 裸 go build 会丢 GUI 子系统（弹黑框）。syso（exe 图标）按文件名
       # rsrc_windows_amd64.syso 自动只在 windows/amd64 目标参与链接。
       - name: Windows 交叉构建（GUI）
@@ -71,6 +71,6 @@ jobs:
       - name: Upload voke.exe
         uses: actions/upload-artifact@v7
         with:
-          name: voke-go-windows-amd64
+          name: voke-windows-amd64
           path: poc/voke-go/voke.exe
           if-no-files-found: error

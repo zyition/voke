@@ -13,8 +13,7 @@
 package geometry
 
 const (
-	// PanelWidth 是面板宽度（DIP），与生产 voke 面板同宽
-	// （memory-footprint.md §2：680×472）。
+	// PanelWidth 是面板宽度（DIP）。
 	PanelWidth = 640
 	// PanelHeight 是面板高度（DIP）：mygo 的 chrome 由内容自然高度决定。
 	// 下表的 y 是**实测**值（Tester 探针给输入行/分隔线铺底色后从渲染结果

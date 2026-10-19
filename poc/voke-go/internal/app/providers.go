@@ -1,16 +1,12 @@
-// providers.go：装配层的**插件注册表**与 §7.3.3 前缀表 / picker 列表的产出。
+// providers.go：装配层的**插件注册表**、前缀表与分数据源。
 //
-// 这里是铁律①（「默认值只允许出现在 Descriptor 里」）在 main 侧的唯一落点：
-// apps 无前缀、picker 前缀 "#"、激活方式、权重、条数全都写在本文件的
-// Descriptor 中，engine / ui / platform 一处都不再抄第二份。
+// 这里是铁律①（「默认值只允许出现在 Descriptor 里」）在装配侧的唯一落点：
+// apps 无前缀、picker 前缀 "#"、各插件默认前缀/激活方式/权重/条数全都写在
+// 本文件的 Descriptor 中，engine / ui / platform 一处都不再抄第二份。
 //
-// 范围（PoC 文档 §10.2 待决策 5：本轮只做无争议的地基）：
-//   - 只注册 **apps + picker** 两条。calculator / base64 / windows 等真实
-//     provider 尚未落地，前缀直达、子模式这些机制的验证走测试 fake，
-//     不在这里凭空注册一个没有实现的插件；
-//   - **不接用户 TOML 覆盖**（§4.2：PoC 无配置系统 / 无设置窗）。
-//     config.Normalize 的第二个参数传 nil，语义就是「全部取 Descriptor 默认值」；
-//     将来接上配置读盘，只需把解码好的 []config.UserOverride 传进同一个函数。
+// 当前注册 10 个内置插件 + picker；用户覆盖由 appcfg 从 config.toml 解码后
+// 交给 config.Normalize 合并，再经 BuildTable 产出前缀表。前缀冲突（C2）、
+// 旧版 #b/#u/#t/#r 的自动修复都在这一层接线（见 loadConfigs / repairPrefixConflicts）。
 package app
 
 import (
@@ -289,8 +285,8 @@ func buildPrefixTable() (config.Configs, engine.Table, error) {
 }
 
 // configPathEnv / freqPathEnv 是覆盖默认落盘位置的环境变量钩子（主要给测试与「便携模式」
-// 换目录用）。未设 → 用生产同款数据目录 `platform.DataDir()`（Windows 上是
-// `%APPDATA%\voke-go\`，PoC 独立于生产 voke 的 `voke\`）下的 config.json / frequency.json。
+// 换目录用）。未设 → 用 `platform.DataDir()`（Windows 上是 `%APPDATA%\voke\`）下的
+// config.toml / frequency.toml。
 const (
 	configPathEnv = "VOKE_CONFIG"
 	freqPathEnv   = "VOKE_FREQ"

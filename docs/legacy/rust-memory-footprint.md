@@ -1,3 +1,7 @@
+> **历史存档（Rust/gpui 时代）**：本文描述 Go + mygo 重写之前的 Rust 实现，已不再是当前主线。
+> 当前文档：[README](../../README.md) · [架构](../architecture.md) · [贡献指南](../../CONTRIBUTING.md)。
+> 文内相对链接按移动前路径书写，可能失效；仅作历史参考。
+
 # voke 内存优化方案（探索 + 方案，不实施）
 
 > 给后续实现 agent 的**施工依据**。所有 gpui API / 常量 / 行号均已对

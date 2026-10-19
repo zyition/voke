@@ -5,7 +5,7 @@
 //   - ToPinyinMulti for char -> readings（Heteronym 模式，全部读音）
 //
 // 数据对齐处理（go-pinyin Normal 风格输出 → Rust plain 输出，差异详情记录在
-// docs/notes/voke-go-poc.md §10-9）：
+// docs/notes/matching.md）：
 //   - go-pinyin 把 ü 写作 v（ḿ 等鼻音两边一致），这里还原 v -> ü，
 //     保证 ASCII 查询 "lv" 与 Rust 侧一样打不中 "lüse" 键；
 //   - go-pinyin 的 phoneticSymbol 表缺 ê 系列预组合声调字符（ế/ề/ệ/ễ/ể），

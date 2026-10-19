@@ -2,9 +2,9 @@
 //
 // 本层只收「向 mygo 要一个对象 / 把对象交回事件循环」这两步构造，
 // **菜单项的字面量与它的回调留在 main**（理由见 SetTrayMenu 的注释）——
-// §7.2.2 给 tray.go 的定位是「托盘 + 菜单构造」，而 O3（生产侧靠子类化
-// WM_INITMENUPOPUP 在弹出前刷新 awake 条目）在 mygo 里根本不需要本层参与：
-// 菜单每次弹出用的是**当前 Menu 快照**，动态刷新天然成立（V7 验证项）。
+// §7.2.2 给 tray.go 的定位是「托盘 + 菜单构造」。动态刷新不在本层：
+// mygo 的 SetMenu 在**调用时**取菜单快照，菜单弹出不会现读；因此 app 层在
+// awake 状态变化 / 面板显隐时显式重建菜单（见 panel.go refreshTrayMenu）。
 // 构建标签不加（mygo 的 Tray 面每个平台都有后端：macOS 菜单栏 / Windows
 // 通知区各有 internal/{darwin,windows}/ 实现）。
 package platform

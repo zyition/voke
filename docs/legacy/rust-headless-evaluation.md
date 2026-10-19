@@ -1,3 +1,7 @@
+> **历史存档（Rust/gpui 时代）**：本文描述 Go + mygo 重写之前的 Rust 实现，已不再是当前主线。
+> 当前文档：[README](../../README.md) · [架构](../architecture.md) · [贡献指南](../../CONTRIBUTING.md)。
+> 文内相对链接按移动前路径书写，可能失效；仅作历史参考。
+
 # Headless 方案评估记录（gpui VSync 线程空转）
 
 > 评估日期：2026-10-12 ｜ 结论：**挂起**，记入 `docs/BACKLOG.md`，条件成熟再重评（见 §1）。

@@ -57,8 +57,8 @@ var procK32GetProcessMemoryInfo = syscall.NewLazyDLL("kernel32.dll").
 
 // SnapshotMem 打一条内存快照日志。主线程/后台线程均可调用：纯 SyscallN
 // 加 ReadMemStats，无 COM、无堆分配依赖（ReadMemStats 会 stop the world，
-// 但 30s 一条的量级无所谓）。标签体系见 docs/notes/memory-footprint.md §1
-// （进程启动 / 窗口创建完成 / 托盘创建完成 / 面板首次唤起 / 引擎索引完成）。
+// 但 30s 一条的量级无所谓）。标签体系与归因方法见 docs/notes/memory.md
+// （启动 / 面板首次唤起 / 引擎索引完成）。
 func SnapshotMem(tag string) {
 	ws, priv, err := processMemory()
 	if err != nil {

@@ -27,7 +27,7 @@ type MatchScore struct {
 // （"wx" vs "wx"）、弱匹配约 48；取 200 让满匹配接近 1.0 同时保留区分度。
 // 本包 1:1 移植了 nucleo 的评分公式，原始分量级不变（用 voke-core 实测语料
 // 逐条断言相等，见 matcher_test.go），因此标定值维持 200.0。
-// 重新标定的逻辑与结论记录在 docs/notes/voke-go-poc.md §10-8。
+// 重新标定的逻辑与结论记录在 docs/notes/matching.md。
 const scoreSaturation float32 = 200.0
 
 // ScoreEntry 对应 matcher.rs 的 score_entry。

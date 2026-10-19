@@ -55,8 +55,9 @@ const (
 //	  -ldflags="-s -w -H windowsgui -X github.com/zyition/voke/poc/voke-go/internal/platform.logMaxLinesRaw=20000" \
 //	  -o voke-go.exe .
 //
-// 交付构建命令（docs/notes/voke-go-poc.md §2.1）**不带**这条 -X：空串 = 未注入
-// = 沿用 [logcap.DefaultMaxLines]（9999），默认口径与生产逐字相同。
+// 交付构建命令（见 CONTRIBUTING.md）**不带**这条 -X：空串 = 未注入
+// = 沿用 [logcap.DefaultMaxLines]（9999）。本地安装器脚本会把 VOKE_LOG_MAX_LINES
+// 映射到这条 -X。
 var logMaxLinesRaw string
 
 // resolveLogMaxLines 把注入的原始字符串解析成 [InitLog] 要用的上限，并可能带回

@@ -10,19 +10,18 @@
 
 ; 版本号：写进 AppVersion / 产物文件名。
 ;
-; AppVersion 是**编译期**选项。虽然可用 ISPP 的 GetVersionNumbersString 读
-; exe 的版本资源（voke-app/build.rs 已写 VERSIONINFO），但它返回的是 4 段数字
-; 形式（实测 "0.1.0.0"），而 exe 里的字符串版本是 3 段（"0.1.0"）。为拿到干净的
-; 3 段 AppVersion，这里用 #define 定；发版时与 Cargo 工作区版本一起改这一行。
+; Go exe 没有 VERSIONINFO 版本资源，故不从 exe 读版本；发版与本地打包都由
+; packaging/build-installer.sh / release.yml 通过 `-dVokeVersion` 传入 tag 版本。
+; 直接跑 ISCC 而不传 -d 时才会用下面的 0.0.0 兜底（仅供语法检查）。
 #ifndef VokeVersion
-  #define VokeVersion "0.1.0"
+  #define VokeVersion "0.0.0"
 #endif
 
-; 待打包的 exe：默认取 xwin msvc release 产物（唯一可实测的产物路径，
-; 见 docs/HISTORY.md「gnu debug 产物必崩」）。相对本 .iss 所在目录解析。
-; 可用 -dVokeExe="..." 覆盖（用于指向别处产物）。
+; 待打包的 exe。正式构建由脚本 / CI 用 `-dVokeExe` 指向本次 Go 产物；
+; 这里的默认值只是让直接跑 ISCC 时有一个明确路径，需先在 poc/voke-go 下
+; 构建出 voke.exe。
 #ifndef VokeExe
-  #define VokeExe "..\target\x86_64-pc-windows-msvc\release\voke.exe"
+  #define VokeExe "..\poc\voke-go\voke.exe"
 #endif
 
 [Setup]
@@ -96,7 +95,7 @@ Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.i
 
 [Files]
 ; voke.exe → {app}（= {localappdata}\Programs\Voke）。
-; ignoreversion：voke.exe 没有版本资源，别让 Setup 去做版本号比较。
+; ignoreversion：Go exe 没有 VERSIONINFO 版本资源，别让 Setup 做版本号比较。
 Source: "{#VokeExe}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
@@ -105,7 +104,8 @@ Source: "{#VokeExe}"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{autoprograms}\Voke"; Filename: "{app}\voke.exe"
 
 [Registry]
-; 自启的 HKCU\...\Run\voke 值由**应用自己在设置页**写/删（见 voke-sys/src/autostart.rs）；
+; 自启的 HKCU\...\Run\voke 值由**应用自己在设置页**写/删（见
+; internal/platform/autostart_windows.go）；
 ; 安装器不创建它。但卸载时必须清掉，否则会在 Run 里留一条指向已删 exe 的死项。
 ;
 ; 语义（官方 [Registry] 帮助核实）：
@@ -128,7 +128,7 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 ;     compiler:Languages\ChineseSimplified.isl 的 [CustomMessages] 里有
 ;     「LaunchProgram=运行 %1」（该 .isl 第 412 行），中文下显示「运行 Voke」。
 ;     故无需在 [CustomMessages] 里自定义。
-;   * {app}\voke.exe 启动后走单实例 + 托盘（single_instance.rs 的互斥体），
+;   * {app}\voke.exe 启动后走单实例 + 托盘（mygo 的 per-user socket 锁），
 ;     不弹主窗口是正常语义，不是没启动。
 ;   * 与 [UninstallRun] 无冲突：本段只在【安装】时执行，[UninstallRun] 只在【卸载】时
 ;     执行，二者时机互斥、互不影响。

@@ -16,6 +16,11 @@ indent_size = 4
 [*.rs]
 indent_size = 4
 
+# Go：gofmt 使用 tab（显示宽度 4）
+[*.go]
+indent_style = tab
+indent_size = 4
+
 # TOML / YAML / Markdown：2 空格缩进
 [*.{toml,yml,yaml,md}]
 indent_size = 2

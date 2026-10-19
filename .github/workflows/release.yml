@@ -27,7 +27,7 @@ permissions:
 jobs:
   # ---------------------------------------------------------------------
   # windows：出安装包 + portable zip。ISCC.exe 是 Windows 原生程序，必须跑
-  # windows runner（Go 本体仍可在 WSL 交叉构建，见 go-ci）。
+  # windows runner（Go 本体仍可在 WSL 交叉构建，见 ci.yml）。
   # ---------------------------------------------------------------------
   build:
     runs-on: windows-latest

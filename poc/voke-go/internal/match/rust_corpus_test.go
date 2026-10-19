@@ -1,7 +1,7 @@
 // 与 Rust 侧（voke-core + pinyin 0.11 + nucleo-matcher 0.3.1）的 1:1 语料比对。
 //
 // testdata/rust_corpus.tsv 由 Rust 侧真值程序生成（生成方式见
-// docs/notes/voke-go-poc.md §10-8/§10-9）：
+// docs/notes/matching.md）：
 //   - K 行：name \t 去重后的 full（逗号连接） \t 去重后的 initials
 //   - S 行：name \t query \t 原始分（u32，Pattern::score 求和）或 MISS
 //
