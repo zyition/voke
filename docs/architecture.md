@@ -138,7 +138,8 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
 ## 7. 生命周期与 UI
 
 - 启动即托盘常驻；面板窗口隐藏创建，热键 toggle、托盘双击、二次启动唤醒。
-- 失焦 / Esc 隐藏面板（保留查询与插件页）；Backspace 逐级回退作用域；Enter 执行选中项。
+- 失焦 / Esc 隐藏面板（保留查询与插件页）；Backspace 逐级回退作用域；Enter 执行选中项；
+  Ctrl+Backspace 手动清空查询并退回 Global（面板保持可见，焦点不在输入框时也生效）。
 - 重新显示时保留会话但**重跑当前查询**（对照 Rust 窗口激活观察者的 `refresh`）：
   窗口 / awake 等实时数据不冻结在隐藏前；random / uuid / timestamp 同输入跳过重跑，
   刚复制的值不会被唤回悄悄换掉。

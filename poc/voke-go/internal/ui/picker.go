@@ -38,7 +38,8 @@ type PluginRow struct {
 func PickerResults(c *goui.Context, rows []PluginRow, chosen *int, ls *goui.ListState, onOpen func(), onPick func(i int), emptyText string) {
 	t := c.Theme()
 	ls.Selected = chosen
-	ls.Key = func(i int) any { return rows[i].ID }
+	// 同 apps.go：不设 Key，避免 mygo 的 key-follow 在过滤词换掉旧选中行时
+	// 把 chosen 写成 -1。picker 的选中本来就随重建复位到第 0 行。
 	ls.Label = func(i int) string { return rows[i].Name }
 	list := goui.List(c, ls, len(rows), func(i int) { PickerRow(c, rows[i], i == *chosen, func() { onPick(i) }) }).
 		Grow(1).Padding(6).Children(func() {

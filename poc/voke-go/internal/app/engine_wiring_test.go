@@ -37,6 +37,7 @@ import (
 	"github.com/zyition/voke/poc/voke-go/internal/logic/engine"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/frequency"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/geometry"
+	"github.com/zyition/voke/poc/voke-go/internal/logic/panelstate"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/testutil"
 	"github.com/zyition/voke/poc/voke-go/internal/platform"
 	"github.com/zyition/voke/poc/voke-go/internal/providers"
@@ -1272,7 +1273,7 @@ func TestGlobalFrameHasNoTokenAndKeepsAppsRows(t *testing.T) {
 	if !tt.HasText("Chrome") {
 		t.Error("Chrome 行不可见")
 	}
-	if !tt.HasText("↑↓ 选择  单击/↵ 启动  esc 隐藏") {
+	if !tt.HasText("↑↓ 选择  单击/↵ 启动  Ctrl+Backspace 重置  esc 隐藏") {
 		t.Error("底部提示行文案变了")
 	}
 }
@@ -1343,9 +1344,9 @@ func TestModeCopyBranchesAreExact(t *testing.T) {
 		want string
 	}{
 		{"提示行/Global", &appState{engineState: engine.State{}},
-			(*appState).hintLine, "↑↓ 选择  单击/↵ 启动  esc 隐藏"},
+			(*appState).hintLine, "↑↓ 选择  单击/↵ 启动  Ctrl+Backspace 重置  esc 隐藏"},
 		{"提示行/PluginPicker", &appState{engineState: engine.NewState(engine.PluginPicker, "", "", "")},
-			(*appState).hintLine, "↑↓ 选择  单击/↵ 进入  esc 隐藏"},
+			(*appState).hintLine, "↑↓ 选择  单击/↵ 进入  Ctrl+Backspace 重置  esc 隐藏"},
 		{"占位/Global", &appState{engineState: engine.State{}},
 			(*appState).placeholder, "搜索应用"},
 		{"占位/PluginPicker", &appState{engineState: engine.NewState(engine.PluginPicker, "", "", "")},
@@ -1566,5 +1567,137 @@ func TestRefreshRowRerollsSameInput(t *testing.T) {
 	}
 	if !st.providerActive() {
 		t.Error("重掷后面板应保留（providerActive 仍为真）")
+	}
+}
+
+// TestFilteredResultsKeepFirstRowSelected 守「过滤后第一行默认选中」：过滤词变化时
+// panelstate.Filter 已把 Chosen 置 0，但 ui.ListState 若设了 Key，会按上一帧选中项
+// 的 Key 在新结果里追踪（mygo ui/list.go:424-442），追踪不到就写 -1——表现为无高亮、
+// 回车空操作，得先按一次 ↓。这里在真实帧里先选中一个随后被过滤掉的条目，再输入一个
+// 只命中另一条目的字符，选中必须被 Filter 复位到 0，且 model.Open 直接产出首行的
+// 启动意图（用户按回车即可启动）。
+func TestFilteredResultsKeepFirstRowSelected(t *testing.T) {
+	st := newWiredState(t, "Alpha", "Bravo")
+	tt := newViewTester(t, st)
+
+	tt.Type("a")
+	tt.Frame()
+	tt.Frame()
+	names := resultNames(st)
+	if !strings.Contains(names, "Alpha") || !strings.Contains(names, "Bravo") {
+		t.Fatalf("前置：查询 a 应同时命中 Alpha 与 Bravo，实得 %q", names)
+	}
+	// 选中 Bravo（下一个词只命中 Alpha，Bravo 会从结果里消失）。
+	bravo := strings.Index(names, "Bravo")
+	st.choose(strings.Count(names[:bravo], ","))
+
+	tt.Type("l")
+	tt.Frame()
+	tt.Frame()
+	if got := resultNames(st); got != "Alpha" {
+		t.Fatalf("前置：查询 al 应只剩 Alpha，实得 %q", got)
+	}
+	if st.model.Chosen != 0 {
+		t.Errorf("过滤后选中行 = %d，想要 0（mygo 的 key-follow 把选中写成 -1 会复现此错）", st.model.Chosen)
+	}
+	acts := st.model.Open()
+	if len(acts) != 1 || acts[0].Kind != panelstate.ActionLaunch || acts[0].Index != 0 {
+		t.Errorf("回车意图 = %+v，想要启动第 0 行（唯一结果）", acts)
+	}
+}
+
+// TestCtrlBackspaceResetsWhenInputFocused 守输入框聚焦时的 Ctrl+Backspace：编辑器
+// 本会把它当「删前一个词」（mygo keymap.go:305），必须被 OnTextKey 先拦下，清空查询
+// 并退回 Global，面板保持可见。顺带覆盖「空输入」分支顺序：进 picker 那一刻查询为空，
+// 重置不能被随后的「空 Backspace 逐级回退」分支抢走（两者效果同为回 Global，但空
+// picker 时逐级回退只退一层，而重置还必须清掉过滤词与结果）。
+func TestCtrlBackspaceResetsWhenInputFocused(t *testing.T) {
+	st := newWiredState(t, "Chrome", "Firefox", "VLC")
+	tt := newViewTester(t, st)
+
+	assertReset := func(label string) {
+		t.Helper()
+		tt.Frame()
+		tt.Frame()
+		wantState(t, st, label, engine.Global, "", "", "")
+		if st.pickerRows != nil {
+			t.Errorf("%s：pickerRows 未清空，实得 %d 条", label, len(st.pickerRows))
+		}
+		if got := resultNames(st); got != wantAll {
+			t.Errorf("%s：顶层结果 = %q，想要全量 %q", label, got, wantAll)
+		}
+		if !tt.HasText("Chrome") {
+			t.Errorf("%s：面板应保持可见并渲染结果（Chrome 行不可见）", label)
+		}
+	}
+
+	// 空查询进 picker，立刻重置——覆盖「空输入」路径。
+	tt.Type(wantPickerPrefix)
+	tt.Frame()
+	tt.Frame()
+	wantState(t, st, "前置：空查询进 picker", engine.PluginPicker, "", "", "")
+	tt.Key(ui.Ctrl, ui.KeyBackspace)
+	assertReset("空查询 picker 重置")
+
+	// 带过滤词进 picker，再重置——覆盖非空查询。
+	tt.Type(wantPickerPrefix)
+	tt.Frame()
+	tt.Frame()
+	tt.Type("y")
+	tt.Frame()
+	tt.Frame()
+	wantState(t, st, "前置：picker 过滤词", engine.PluginPicker, "", "y", "y")
+	if len(st.pickerRows) == 0 {
+		t.Fatal("前置：过滤词 y 应命中「应用」")
+	}
+	tt.Key(ui.Ctrl, ui.KeyBackspace)
+	assertReset("带过滤词 picker 重置")
+}
+
+// newUnfocusedViewTester 用生产 viewInput 建帧，但把输入框句柄置 nil——模拟
+// 「voke 在前台、焦点还没回到搜索框」（Toggle 唤起的首帧、或焦点被其他控件拿走）。
+// Bind(nil) 与 Handle.Focus 的 nil 接收者都是空操作（mygo ref.go:60-63/118-121），
+// 因此 Ctrl+Backspace 不会再走 OnTextKey，只能由窗口级 Shortcut 接住。
+func newUnfocusedViewTester(t *testing.T, st *appState) *ui.Tester {
+	t.Helper()
+	st.icons = appui.NewIconCache()
+	for _, a := range st.model.Apps {
+		st.icons.Put(a.Path, nil)
+	}
+	in := st.viewInput()
+	in.Input = nil
+	tt := ui.NewTester(func(c *ui.Context) { appui.View(c, in) }, geometry.PanelWidth, geometry.PanelHeight)
+	tt.Frame()
+	tt.Frame()
+	return tt
+}
+
+// TestCtrlBackspaceResetsWithoutInputFocus 守「面板在前台、焦点不在输入框」的
+// Ctrl+Backspace：输入框不消费该键，按键进入窗口 shortcut 队列，由 View 里注册的
+// c.Shortcut(Ctrl, KeyBackspace) 调 OnResetInput，复位语义与聚焦时一致。
+func TestCtrlBackspaceResetsWithoutInputFocus(t *testing.T) {
+	st := newWiredState(t, "Chrome", "Firefox", "VLC")
+	// 预置一个「上次唤回留下的」picker 会话；newUnfocusedViewTester 的首帧只渲染，
+	// 不触发 applyEngineState，状态保持原样。
+	st.engineState = engine.NewState(engine.PluginPicker, "", "", "y")
+	st.model.Query = "y"
+	st.pickerRows = []pluginRow{{ID: "random", Name: "随机"}}
+	tt := newUnfocusedViewTester(t, st)
+
+	tt.Key(ui.Ctrl, ui.KeyBackspace)
+	tt.Frame()
+	tt.Frame()
+
+	if st.engineState.Mode() != engine.Global || st.engineState.PluginID() != "" || st.engineState.Query() != "" {
+		t.Errorf("复位后 engineState = %+v，想要全新 Global", st.engineState)
+	}
+	if st.model.Query != "" {
+		t.Errorf("复位后输入框 = %q，想要空串", st.model.Query)
+	}
+	if st.pickerRows != nil {
+		t.Errorf("复位后 pickerRows 未清空，实得 %d 条", len(st.pickerRows))
+	}
+	if got := resultNames(st); got != wantAll {
+		t.Errorf("复位后顶层结果 = %q，想要全量 %q", got, wantAll)
 	}
 }

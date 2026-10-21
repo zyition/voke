@@ -63,6 +63,10 @@ type ViewInput struct {
 	// 退到顶级应原地不动、绝不关面板。这样回退链单一由 Backspace 按键驱动，无「删到空的
 	// 那一刻自动弹出」之类的状态猜测 hack。
 	OnBackspaceAtEmpty func() bool
+	// OnResetInput 在 Ctrl+Backspace 触发：清空查询并把作用域退回 Global
+	// （不隐藏面板）。输入框聚焦时经 OnTextKey 拦截（编辑器会把它当删词），
+	// 焦点不在输入框时经窗口级 Shortcut 路由；两路互斥，复位语义在 app 侧。
+	OnResetInput func()
 	// OnQuit 是 Ctrl+Q 退出（原 `mygo.App.Quit`）——App 生命周期留 main，这里只收回调。
 	OnQuit func()
 	// OnOpenSettings 是 Ctrl+, 打开设置窗（对照生产 search.rs on_key 的 Ctrl+, →
@@ -146,6 +150,12 @@ func View(c *goui.Context, in ViewInput) {
 	if c.Shortcut(0, goui.KeyEnter) {
 		in.OnOpen()
 	}
+	// Ctrl+Backspace：清空查询并回到 Global（不隐藏）。窗口级路由覆盖
+	// 「面板在前台、焦点还没回到输入框」的场景；输入框聚焦时这条不会触发，
+	// 由 TextInput 的 OnTextKey 接管——编辑器会先把这个组合键当删词吃掉。
+	if c.Shortcut(goui.Ctrl, goui.KeyBackspace) {
+		in.OnResetInput()
+	}
 	// 生产 panel 键位对齐（voke-app/src/search.rs on_key 的最小集 + 组合键别名）：
 	// Ctrl+N / Ctrl+P 等价 ↓ / ↑；Tab / Shift+Tab 亦等价 ↓ / ↑；Ctrl+, 打开设置窗。
 	// 用 goui.Ctrl（生产判 m.control，是 Ctrl 而非平台 super Cmd）。
@@ -206,6 +216,15 @@ func View(c *goui.Context, in ViewInput) {
 			input := goui.TextInputBase(c, in.Query).Bind(in.Input).Grow(1).FontSize(theme.InputSize).
 				Placeholder(in.Placeholder).Label(in.Placeholder).
 				OnTextKey(func(k goui.TextKey) bool {
+					// Ctrl+Backspace：一键重置（清查询 + 回 Global，不隐藏）。
+					// 输入框聚焦时编辑器会把它当「删前一个词」（mygo keymap.go:305）
+					// 先吃掉，所以必须在这里拦；焦点不在输入框时走上方的窗口级
+					// c.Shortcut。必须排在「空输入 Backspace」之前，否则空输入时
+					// 会被逐级回退分支先吃掉。
+					if k.Key == goui.KeyBackspace && k.Mods == goui.Ctrl && in.OnResetInput != nil {
+						in.OnResetInput()
+						return true
+					}
 					// 只在「空输入 + Backspace」时接管做逐级回退；其余键（含非空
 					// Backspace 的正常删字符）返回 false 交回编辑引擎，行为不变。
 					// 单行输入默认 leaveEmptyBackspace=false ⇒ wants(Backspace) 恒真，

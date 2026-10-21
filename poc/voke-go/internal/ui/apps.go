@@ -51,7 +51,10 @@ import (
 func AppsResults(c *goui.Context, m *panelstate.Model, icons *IconCache, ls *goui.ListState, onOpen func(), onClick func(i int)) {
 	t := c.Theme()
 	ls.Selected = &m.Chosen
-	ls.Key = func(i int) any { return m.Results[i].Path }
+	// 不设 ls.Key：mygo 的 ListState.sync 会按上一帧选中项的 Key 在新结果里
+	// 追踪，追踪不到就写 -1（mygo ui/list.go:435-442）。过滤后顶部项被换掉时，
+	// 这会覆盖 Filter() 刚落下的 Choose(0)，表现为无高亮且回车空操作。选中与
+	// 滚动都由 panelstate / app 侧显式复位，按索引选中正是这里要的语义。
 	ls.Label = func(i int) string { return m.Results[i].Name }
 	list := goui.List(c, ls, len(m.Results), func(i int) { Row(c, m, icons, i, onClick) }).Grow(1).Padding(6).Children(func() {
 		if len(m.Results) == 0 {

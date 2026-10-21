@@ -20,8 +20,9 @@
 // 行为对栅（生产 voke 面板 search.rs 只读参考）：
 //   - 680 DIP 宽面板，行高 48 DIP（search.rs:144 ROW_HEIGHT）；
 //   - Enter 启动选中项，↑↓ 移动选中；**Esc 在任何模式下都直接隐藏面板**（CmdPal 对齐，
-//     见本文件 onEsc）；逐级回退（SubMode→Plugin→PluginPicker→Global）改由 **Backspace**
-//     在查询词删空那一刻承担（onQueryChanged → engine.BackspaceBack）；
+//     见本文件 onEsc）；逐级回退（SubMode→Plugin→PluginPicker→Global）由 **Backspace**
+//     在输入框已空时承担（onEmptyBackspace → engine.BackspaceBack）；Ctrl+Backspace
+//     一键清空查询并回到 Global（onResetInput，不隐藏面板）。
 //   - 图标行：platform.AppIcon(path) 的 PNG，nil 时降级首字母占位（渲染在 internal/ui）。
 package app
 
@@ -48,7 +49,13 @@ import (
 // 的具体过程都在 internal/ui。键盘路由 / 输入框 / 令牌 / 提示行的布局与原 view() 逐字
 // 相同，只是搬进了 ui.View；副作用经回调回到本文件的执行器。
 func (st *appState) view(c *ui.Context) {
-	appui.View(c, appui.ViewInput{
+	appui.View(c, st.viewInput())
+}
+
+// viewInput 把 appState 组装成 internal/ui 的整帧输入。单独成方法是为了让帧测能
+// 改单个字段（如把 Input 置 nil 模拟焦点不在搜索框），复用的仍是生产装配。
+func (st *appState) viewInput() appui.ViewInput {
+	return appui.ViewInput{
 		Hotkey:             hotkeyShow,
 		Crumbs:             st.breadcrumbs(),
 		Query:              &st.model.Query,
@@ -60,11 +67,12 @@ func (st *appState) view(c *ui.Context) {
 		OnOpen:             st.open,
 		OnQueryChanged:     st.onQueryChanged,
 		OnBackspaceAtEmpty: st.onEmptyBackspace,
+		OnResetInput:       st.onResetInput,
 		OnQuit:             mygo.App.Quit,
 		OnOpenSettings:     st.openSettings,
 		DiagDone:           &st.gpuDiagOnce,
 		RenderResults:      st.renderResults,
-	})
+	}
 }
 
 // renderResults 按 mode 三选一渲染结果区——这段 switch 与原 view() 里的分支逐字对应，
@@ -113,9 +121,9 @@ func (st *appState) providerActive() bool {
 
 // placeholder / hintLine 是输入框占位与底部提示的按模式文案。
 //
-// Global 分支返回的字符串与接线前一致（"搜索应用" / "↑↓ 选择  单击/↵ 启动  esc 隐藏"）；
-// 只有命中过前缀的帧才会换文案。Esc 在任何模式下都只隐藏、不清空（复位只属于
-// 离开面板的动作），所以两处提示都写「esc 隐藏」。
+// Global 分支返回的字符串在原有提示上补了 Ctrl+Backspace 重置；
+// 只有命中过前缀的帧才会换文案。Esc 在任何模式下都只隐藏、不清空；清空查询与
+// 退出插件另由 Ctrl+Backspace 手动触发（onResetInput），所以提示仍写「esc 隐藏」。
 func (st *appState) placeholder() string {
 	switch st.engineState.Mode() {
 	case engine.PluginPicker:
@@ -136,9 +144,9 @@ func (st *appState) placeholder() string {
 
 func (st *appState) hintLine() string {
 	if st.engineState.Mode() == engine.PluginPicker {
-		return "↑↓ 选择  单击/↵ 进入  esc 隐藏"
+		return "↑↓ 选择  单击/↵ 进入  Ctrl+Backspace 重置  esc 隐藏"
 	}
-	return "↑↓ 选择  单击/↵ 启动  esc 隐藏"
+	return "↑↓ 选择  单击/↵ 启动  Ctrl+Backspace 重置  esc 隐藏"
 }
 
 // pluginPending 报告当前是否落在「表里有、但既非 apps 也未落地实现（不在 pluginReg）」
@@ -199,6 +207,14 @@ func (st *appState) onEmptyBackspace() bool {
 	next, _ := engine.BackspaceBack(st.engineState)
 	st.applyEngineState(next)
 	return true
+}
+
+// onResetInput 处理 Ctrl+Backspace：把会话复位到「全新 Global」——清空查询、
+// 退出插件、结果回顶，但**不隐藏面板**（Esc 仍是唯一隐藏键）。复位链直接复用
+// resetAfterAction（与离开动作后的复位同一份），区别只在窗口保持可见；因此这里
+// 不碰频率表，也不产生启动 / 复制等副作用。
+func (st *appState) onResetInput() {
+	st.resetAfterAction()
 }
 
 // applyEngineState 是模式状态的**唯一落点**：先同步输入框文本，再按 mode 派发。
