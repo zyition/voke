@@ -42,12 +42,11 @@ func Scan(table Table, cur State, input string) State {
 		if !hit {
 			continue
 		}
-		// 命中即压栈；前缀已消费，Global 帧不留残词。
-		base := cur.withQuery("")
+		// 命中即压栈；前缀已消费，压栈会同时清空 Global 帧的残词。
 		if e.PluginID == PickerPluginID {
-			return base.push(Scope{Kind: PluginPicker})
+			return cur.push(Scope{Kind: PluginPicker})
 		}
-		return base.push(Scope{Kind: Plugin, PluginID: e.PluginID})
+		return cur.push(Scope{Kind: Plugin, PluginID: e.PluginID})
 	}
 
 	return cur.withQuery(input)
@@ -56,14 +55,16 @@ func Scan(table Table, cur State, input string) State {
 // SelectPlugin 从插件列表选中/激活某插件：在**当前栈顶之上**压入该插件第一级。
 //
 // 关键：若当前栈顶是 PluginPicker（用户经 `#` 列表选中），picker 帧留在栈里——
-// 于是退格出栈自然回到列表（严格 LIFO、按进入路径回退）；若是从 Global 直接激活，
+// 于是退格出栈自然回到列表（严格 LIFO、按进入路径回退）；picker 的过滤词由
+// push 在入栈时丢弃，所以回到列表时是空输入、全量列表。若是从 Global 直接激活，
 // 则栈为 [Global, Plugin]，出栈回 Global。
 func SelectPlugin(cur State, pluginID string) State {
 	return cur.push(Scope{Kind: Plugin, PluginID: pluginID})
 }
 
 // EnterSubMode 在**当前栈顶之上**压入子命令层（父帧=所属插件保留在栈里）。
-// Query 置空由 push 保证；D1 的「只设 sub_mode、不设插件」在栈结构里不可能发生。
+// Query 置空与父层过滤词丢弃都由 push 保证；D1 的「只设 sub_mode、不设插件」
+// 在栈结构里不可能发生。
 func EnterSubMode(cur State, pluginID, subMode string) State {
 	return cur.push(Scope{Kind: SubMode, PluginID: pluginID, SubMode: subMode})
 }
@@ -72,7 +73,8 @@ func EnterSubMode(cur State, pluginID, subMode string) State {
 // 把回退链整个交给 Backspace）：
 //
 //   - 栈顶 Query 非空 → 只清空该层查询词，不动栈。
-//   - 栈顶 Query 已空 → **弹出一层**（回到上一层的 Query）；到栈底（Global）原地不动。
+//   - 栈顶 Query 已空 → **弹出一层**；上一层在入栈时已被清空，故落在空输入。
+//     到栈底（Global）原地不动。
 //   - Backspace **永不关面板**（close 恒 false）——关面板只由 Esc 负责。
 func BackspaceBack(cur State) (next State, close bool) {
 	if cur.Query() != "" {

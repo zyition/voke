@@ -627,6 +627,36 @@ func TestBackspaceEmptiesThenStepsDown(t *testing.T) {
 	wantState(t, st, "空退插件第一级", engine.Plugin, "base64", "", "")
 }
 
+// TestBackspaceAfterPickerEntryStartsEmpty 锁用户反馈的直觉：`#` → 过滤 `uu` →
+// Enter(uuid) 后，空输入 Backspace 回到 picker 时输入框必须是空的、列表是全量的。
+// picker 过滤词是临时输入，进入插件层时即丢弃，不跨作用域恢复。
+func TestBackspaceAfterPickerEntryStartsEmpty(t *testing.T) {
+	st := newWiredState(t, "Chrome", "Firefox", "VLC")
+
+	typeInto(st, wantPickerPrefix)
+	typeInto(st, "uu")
+	chosen := -1
+	for i, r := range st.pickerRows {
+		if r.ID == "uuid" {
+			chosen = i
+			break
+		}
+	}
+	if chosen < 0 {
+		t.Fatalf("picker 过滤 uu 后没有 uuid：%q", rowIDs(st.pickerRows))
+	}
+	st.pickerChosen = chosen
+	st.open()
+	wantState(t, st, "picker 选中 uuid", engine.Plugin, "uuid", "", "")
+
+	// 输入框空时的 Backspace 由 ui 层 OnTextKey 调到 onEmptyBackspace。
+	st.onEmptyBackspace()
+	wantState(t, st, "空退 picker", engine.PluginPicker, "", "", "")
+	if got, want := rowIDs(st.pickerRows), "apps,base64,uuid,timestamp,random,calculator,awake,windows,terminal,workspaces"; got != want {
+		t.Errorf("回 picker 后列表 = %q，想要全量 %q", got, want)
+	}
+}
+
 // TestEscChainFromSubModeWithFakePlugin 用一个**未注册实现**的 id（terminal：既不在
 // builtinDescriptors、也不在 builtinProviders）走「未接入插件」路径，锁两条护栏：不出
 // apps 结果、Enter 不启动。（base64/uuid/timestamp/random/calculator 已落地，不能再当未接入 fake。）

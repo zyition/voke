@@ -97,8 +97,9 @@ func (t Table) lookup(pluginID string) (PrefixEntry, bool) {
 
 // Scope 是作用域栈里的一层。
 //
-// 每层带**自己的** Query（该层的过滤词；前缀永远不进它）。出栈时上一层的 Query
-// 自然恢复，正是「严格 LIFO、按进入路径回退」所需的语义。
+// Query 只对**栈顶**有意义：进入子作用域（push）时，离开层的 Query 随之丢弃，
+// 因此栈里除栈顶外的帧 Query 恒为空。退格出栈回到的上一层总是空输入——
+// 过滤词是临时输入，不跨作用域恢复。
 type Scope struct {
 	Kind     Mode
 	PluginID string // Plugin / SubMode：所属插件；Global / PluginPicker 为空
@@ -113,6 +114,9 @@ type Scope struct {
 //   - 前缀直达插件：栈 [Global, Plugin] → 退格出栈到 Global；
 //   - 经插件列表选中：栈 [Global, PluginPicker, Plugin] → 退格出栈回 PluginPicker；
 //   - 子命令：栈 [..., Plugin, SubMode] → 退格回该 Plugin。
+//
+// 不变量：只有栈顶帧可能带 Query；出栈回到的上一层输入恒为空（父层过滤词在
+// 入栈时已丢弃）。
 type State struct {
 	scopes []Scope
 }
@@ -155,12 +159,15 @@ func (s State) withQuery(q string) State {
 }
 
 // push 压入一层新作用域（新层 Query 恒空——前缀/选择都不进输入框）。
+// 压栈同时**清空离开层（当前栈顶）的 Query**：进入子作用域即放弃该层的临时
+// 过滤词，由此保证「只有栈顶可能带 Query」。
 // 空栈时先补一个 Global 底帧，保证出栈有层可回。
 func (s State) push(sc Scope) State {
 	out := append([]Scope(nil), s.scopes...)
 	if len(out) == 0 {
 		out = append(out, Scope{Kind: Global})
 	}
+	out[len(out)-1].Query = ""
 	out = append(out, sc)
 	return State{scopes: out}
 }

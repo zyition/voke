@@ -200,9 +200,10 @@ func (st *appState) onQueryChanged() {
 }
 
 // onEmptyBackspace 处理「输入框已空时按 Backspace」：沿 SubMode→Plugin→PluginPicker→
-// Global 逐级回退一级；已在 Global 则原地不动。由 ui 层输入框的 OnTextKey 捕获该按键
-// 调入（非空 Backspace 交编辑引擎正常删字符）。返回 true 消费此键——绝无关面板分支
-// （关面板只由 Esc 负责，见 engine.BackspaceBack 契约 close 恒 false）。
+// Global 逐级回退一级；回到的上一层输入恒为空（父层过滤词在入栈时已丢弃）；已在
+// Global 则原地不动。由 ui 层输入框的 OnTextKey 捕获该按键调入（非空 Backspace 交
+// 编辑引擎正常删字符）。返回 true 消费此键——绝无关面板分支（关面板只由 Esc 负责，
+// 见 engine.BackspaceBack 契约 close 恒 false）。
 func (st *appState) onEmptyBackspace() bool {
 	next, _ := engine.BackspaceBack(st.engineState)
 	st.applyEngineState(next)

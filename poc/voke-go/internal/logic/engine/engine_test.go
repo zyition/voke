@@ -51,8 +51,9 @@ func mkViaPicker(pluginID, query string) State {
 		push(Scope{Kind: Plugin, PluginID: pluginID, Query: query})
 }
 
-// sameState 语义相等：四元组（栈顶口径）相等，且**非 Global 帧的种类/归属序列**相等
-// （据此区分「前缀直达」与「经 picker」两种进入路径）。底部 Global 帧物化与否不影响判等。
+// sameState 语义相等：四元组（栈顶口径）相等，且**非 Global 帧的种类/归属/过滤词序列**
+// 相等（据此区分「前缀直达」与「经 picker」两种进入路径，并守住「只有栈顶可能带
+// Query」的不变量）。底部 Global 帧物化与否不影响判等。
 func sameState(a, b State) bool {
 	if a.Mode() != b.Mode() || a.PluginID() != b.PluginID() || a.SubMode() != b.SubMode() || a.Query() != b.Query() {
 		return false
@@ -67,11 +68,13 @@ func pathSig(s State) string {
 			continue
 		}
 		b.WriteString(sc.Kind.String())
-		b.WriteByte(':')
+		b.WriteByte('\x00')
 		b.WriteString(sc.PluginID)
-		b.WriteByte(':')
+		b.WriteByte('\x00')
 		b.WriteString(sc.SubMode)
-		b.WriteByte(';')
+		b.WriteByte('\x00')
+		b.WriteString(sc.Query)
+		b.WriteByte('\x00')
 	}
 	return b.String()
 }
@@ -143,8 +146,9 @@ func TestScanStopsJudgingPrefixOnceActivated(t *testing.T) {
 func TestEnterSubModePushesAndClearsQuery(t *testing.T) {
 	cur := mk(Plugin, "base64", "", "残留查询词")
 	got := EnterSubMode(cur, "base64", "enc")
+	// sameState 现在也比对非顶层过滤词：父插件层的「残留查询词」必须被入栈丢弃。
 	if !sameState(got, mk(SubMode, "base64", "enc", "")) {
-		t.Errorf("EnterSubMode 应压入子模式层并清空查询词：得到 %+v", got)
+		t.Errorf("EnterSubMode 应压入子模式层、清空新层查询词并丢弃父层过滤词：得到 %+v", got)
 	}
 	// 换子模式：再压一层新的子模式（父插件层仍在栈里）。
 	got = EnterSubMode(got, "base64", "dec")
@@ -165,6 +169,11 @@ func TestSelectPluginKeepsEntryPath(t *testing.T) {
 	got = SelectPlugin(mk(PluginPicker, "", "", ""), "base64")
 	if !sameState(got, mkViaPicker("base64", "")) {
 		t.Errorf("SelectPlugin from Picker = %+v，想要 [Global, Picker, Plugin]", got)
+	}
+	// picker 带过滤词进入：过滤词属于离开层，入栈即丢弃（sameState 比对非顶层 Query）。
+	got = SelectPlugin(mk(PluginPicker, "", "", "uu"), "uuid")
+	if !sameState(got, mkViaPicker("uuid", "")) {
+		t.Errorf("SelectPlugin from filtered Picker = %+v，想要 picker 帧过滤词已清空", got)
 	}
 }
 
@@ -205,13 +214,12 @@ func TestBackspaceBack(t *testing.T) {
 		}
 	})
 
-	t.Run("出栈恢复上一层自己的过滤词", func(t *testing.T) {
-		// picker 带着过滤词 "uu"，选中 uuid 后出栈应回到带 "uu" 的 picker。
-		cur := State{}.withQuery("").push(Scope{Kind: PluginPicker, Query: "uu"}).
-			push(Scope{Kind: Plugin, PluginID: "uuid"})
-		next, _ := BackspaceBack(cur)
-		if next.Mode() != PluginPicker || next.Query() != "uu" {
-			t.Errorf("出栈应恢复 picker 过滤词 uu：得到 %+v", next)
+	t.Run("入栈即丢弃父层过滤词：出栈落在空输入", func(t *testing.T) {
+		// 用户场景：# → uu → Enter(uuid) 后按空 Backspace，回到的 picker 必须空输入。
+		cur := SelectPlugin(mk(PluginPicker, "", "", "uu"), "uuid")
+		next, close := BackspaceBack(cur)
+		if close || !sameState(next, mk(PluginPicker, "", "", "")) {
+			t.Errorf("出栈应回空输入的 picker：得到 %+v close=%v", next, close)
 		}
 	})
 
@@ -308,8 +316,7 @@ func TestScriptedTrace(t *testing.T) {
 				{"选中 base64（picker 留在栈下）", kindSelect, "base64", mkViaPicker("base64", "")},
 				{"插件内打字", kindType, "aB9", mkViaPicker("base64", "aB9")},
 				{"退格清词", kindBackspace, "", mkViaPicker("base64", "")},
-				{"退格回 picker（恢复其过滤词 ba）", kindBackspace, "", mk(PluginPicker, "", "", "ba")},
-				{"退格先清 picker 过滤词", kindBackspace, "", mk(PluginPicker, "", "", "")},
+				{"退格回 picker（过滤词 ba 已在入栈时丢弃）", kindBackspace, "", mk(PluginPicker, "", "", "")},
 				{"退格出 picker 回 Global", kindBackspace, "", mk(Global, "", "", "")},
 			},
 		},
