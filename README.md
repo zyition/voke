@@ -69,6 +69,7 @@ Win32 / COM，界面走 mygo 的 D3D11 后端；启动后 PrivateCommit 约 55MB
 | `Backspace` | 先清空当前层查询词，再逐级退出插件 / 子模式 |
 | `#` | 拉出插件选择列表（拼音 / 英文别名过滤） |
 | `Ctrl+,` | 打开设置页 |
+| `Ctrl+Delete` | 删除选中的剪贴板条目；选中窗口结果时关闭窗口（等同点击关闭按钮，应用可弹保存确认） |
 | `Ctrl+Shift+Delete` | 选中窗口结果时直接结束其所属进程（托盘 / 后台应用也会退出，未保存数据会丢失） |
 | 托盘左键双击 | 唤起面板（右键打开菜单） |
 
@@ -78,8 +79,8 @@ Win32 / COM，界面走 mygo 的 D3D11 后端；启动后 PrivateCommit 约 55MB
 |---|---|
 | `Enter` | 按原格式粘贴到唤起前的窗口（终端自动改用 `Shift+Insert`） |
 | `Ctrl+Enter` | 仅粘贴纯文本（图片条目无此动作） |
-| `Ctrl+Shift+P` | 置顶 / 取消置顶（最多 10 条，不占普通条数） |
-| `Ctrl+Shift+D` | 删除当前条目 |
+| `Ctrl+Shift+T` | 置顶 / 取消置顶（最多 10 条，不占普通条数） |
+| `Ctrl+Delete` | 删除当前条目 |
 
 粘贴目标是管理员窗口时，UIPI 会静默拦截普通按键模拟；此时会弹一次 UAC，由临时的
 提权辅助进程代为发送粘贴键。取消 UAC 或辅助进程失败时，内容已在剪贴板里，面板会
@@ -123,7 +124,6 @@ Win32 / COM，界面走 mygo 的 D3D11 后端；启动后 PrivateCommit 约 55MB
 完整的环境准备、分层纪律与验证命令见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。常用命令：
 
 ```bash
-cd poc/voke-go
 gofmt -l . && go vet ./... && go test -race -count=1 -shuffle=on ./...
 
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
@@ -136,7 +136,7 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
   构建 Go exe、注入版本、出安装包与便携 zip，并建立 GitHub Release；版本号以 tag 为
   唯一事实来源。
 
-技术栈：Go（版本见 `poc/voke-go/go.mod`）、mygo v0.6.2（D3D11 / DirectWrite）、
+技术栈：Go（版本见根目录 `go.mod`）、mygo v0.6.2（D3D11 / DirectWrite）、
 `go-pinyin`、nucleo-matcher 0.3.1 评分的 Go 移植、SQLite（Zed / VS Code 历史只读）、
 Inno Setup 7.1（打包）。Rust/gpui 旧实现已归档到 `legacy-rust` 分支与 `v0.1.x` tag，
 不在 main 树中。

@@ -1,0 +1,732 @@
+// settings.go：独立设置窗口（§7.2 / 设计文档「设置页」：880×600 普通窗，带标题栏、
+// 可缩放、不自动隐藏；面板完全不动）。
+//
+// 装顶层设置（**开机自启 / 界面主题 / 唤隐热键**）+ 每插件配置（设计文档 §385 的 Group：
+// **启用 / 参与全局搜索 / 权重 0–3 / 激活别名(prefix)**，加 §33 的 Direct/Indirect 下拉）。
+// 数据全走 appcfg 落盘 + platform 副作用，保存时尽量当场生效：
+//   - 开机自启：`platform.SetAutostart`；
+//   - 插件配置：写 config.toml 的 enabled/is_global/weight/prefix/activation 覆盖 +
+//     `reloadConfigs` 下发到 live 注册表（前缀先过 prefixSettingsError 的 C2/C3/C4，无效不落盘）；
+//   - 界面主题：`platform.SetThemeSource`（appcfg 码值 = mygo ThemeSource，即时换肤）；
+//   - 唤隐热键：`UnregisterHotkey(旧)` → `RegisterHotkey(新)`，失败回滚旧串（不留空窗）。
+//
+// 这些换肤 / 改键的**真机效果**仍需 V 跑确认（mygo 主线程 API，headless 到不了），但
+// 接线已落，不再推迟。
+//
+// mygo 是 immediate-mode：本窗 view 每帧整体重建，只读写 st.settings（绑定态），副作用
+// 集中在「保存」按钮点击那一次（saveSettings）。widget 只发意图（Clicked / 绑定指针被
+// 就地改写），判定与落盘在本文件末尾的执行器。
+package app
+
+import (
+	"fmt"
+	"log"
+	"path/filepath"
+	"runtime/debug"
+	"strings"
+	"time"
+	"unicode"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
+	"voke/internal/logic/appcfg"
+	"voke/internal/logic/cliphist"
+	"voke/internal/logic/config"
+	"voke/internal/logic/engine"
+	"voke/internal/platform"
+	"voke/internal/ui/theme"
+)
+
+// buildVersion 是发布流水线通过 `-ldflags -X .../internal/app.buildVersion=<tag 版本>`
+// 注入的版本号（与安装器 -dVokeVersion 同源）。本地 / 未注入构建为空串。
+var buildVersion string
+
+// aboutVersion 是「关于」区显示的版本串，对照生产 read_only_item("版本", CARGO_PKG_VERSION)。
+// 优先取构建期注入的 buildVersion；未注入时退回 debug.ReadBuildInfo（本地 `go build`
+// 给 "(devel)"，显示为「开发版」而不是把内部占位串直接甩给用户）。
+func aboutVersion() string {
+	if v := strings.TrimSpace(buildVersion); v != "" {
+		return v
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		if v := strings.TrimSpace(bi.Main.Version); v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return "开发版"
+}
+
+// aboutConfigPath 是「关于」区显示的配置文件位置，对照生产 config_path_label：拿不到有效
+// 落盘路径（非绝对 = DataDir 取不到且未设 env）时显示「未落盘…」而非半截相对路径。
+func aboutConfigPath() string {
+	p := configFilePath()
+	if !filepath.IsAbs(p) {
+		return "未落盘（取不到数据目录，且未设 VOKE_CONFIG）"
+	}
+	return p
+}
+
+// providerEdit 是「插件配置」区的一行（对照设计文档 §385 的每插件 Group：启用 /
+// 参与全局搜索 / 权重 0–3 / 激活别名(prefix)，外加 §33 的 Direct/Indirect 下拉）。
+// 各字段直接是绑定态（widget 就地改它），保存时逐个包成 *指针* 落 override。
+// 值从 st.providers（归一后的生效态）seed，故「不改直接存」是幂等写回；前缀改坏了
+// 由 prefixSettingsError 在落盘前拦下（冲突 / 空白 / 保留键），其余数值由 Normalize 兜底。
+type providerEdit struct {
+	id         string
+	name       string
+	enabled    bool
+	isGlobal   bool
+	weight     float64
+	prefix     string
+	activation string // 显示值 "Direct" / "Indirect"，save 时小写落码
+	hotkey     string // 插件全局快捷键；空 = 未绑定（无默认值）
+}
+
+// settingsWindow 是设置窗的绑定态（只在主线程、只在窗口存活期读写）。theme 存的是
+// Select 显示的中文标签，save 时经 themeCode 映射回 appcfg 的码值。
+type settingsWindow struct {
+	win          *mygo.Window
+	hotkey       string
+	autostart    bool
+	theme        string
+	clipboardMax float64 // 剪贴板历史上限（1–1000），落盘前转 int
+	edits        []providerEdit
+	// closed 防重复进入销毁流程：OnClose 与「完成」按钮可能先后触发；销毁本身
+	// 经 Window.Update 延到当前帧之后执行。
+	closed bool
+	// 热键录制器状态：recording 时用一个只读输入框接管按键（每帧回焦点），捕获到组合
+	// 即注册生效；Esc 取消并恢复旧键。recBuf 是只读框的绑定串（不承载实际内容）。
+	// recPluginID 是本次录制的目标插件 id；空串 = 主唤隐热键。
+	recording   bool
+	recPluginID string
+	hotkeyErr   string
+	// configErr 是插件前缀校验失败的中文提示（冲突 / 含空白 / 保留键）。
+	// 非空时 applySettings 不落盘、不重载，界面停留在上一次有效配置。
+	configErr string
+	recBuf    string
+	recHandle ui.Handle
+	// recGen 是录制超时的世代号：每次续期 +1；超时回调只在世代号未变且仍在录制时
+	// 才取消（旧定时器即使晚到也失效）。只主线程读写。
+	recGen int
+	// recTimer 是当前录制超时定时器；续期/取消/成功时 Stop 并置 nil，确保不残留
+	// 定时器、也不会在录制结束后再往主线程投递取消。
+	recTimer *time.Timer
+}
+
+// hotkeyRecTimeout 是录制态的短超时：用户忘了 / 组合被别的应用截走时，不至于一直
+// 停在「等待按键」。焦点回来或按了无效键会续期（类似短 TTL + 聚焦续期）。
+const hotkeyRecTimeout = 10 * time.Second
+
+// activationLabels 是激活方式下拉的显示值——中文，与设置页其余文案统一（早先直出
+// engine 的 "Direct"/"Indirect" 英文，风格突兀）。顺序与 direct/indirect 码一一对应。
+var activationLabels = []string{"直接", "间接"}
+
+// activationLabel 把 engine.Activation 映成下拉显示值（seed 用）。
+func activationLabel(a engine.Activation) string {
+	if a == engine.Indirect {
+		return activationLabels[1]
+	}
+	return activationLabels[0]
+}
+
+// activationCode 把下拉显示值映回落码（"direct"/"indirect"，交 config 归一）。
+func activationCode(label string) string {
+	if label == activationLabels[1] {
+		return "indirect"
+	}
+	return "direct"
+}
+
+// themeLabels 是 Select 选项（顺序与 themeCodes 一一对应）。
+var themeLabels = []string{"跟随系统", "深色", "浅色"}
+
+// themeCodes 是 themeLabels 对应的 appcfg 码值。
+var themeCodes = []string{"system", "dark", "light"}
+
+// themeLabel 把码值映成显示标签（未知 / 空 → 跟随系统）。
+func themeLabel(code appcfg.Theme) string {
+	for i, c := range themeCodes {
+		if string(code) == c {
+			return themeLabels[i]
+		}
+	}
+	return themeLabels[0]
+}
+
+// themeCode 把显示标签映回码值（找不到 → system）。
+func themeCode(label string) appcfg.Theme {
+	for i, l := range themeLabels {
+		if label == l {
+			return appcfg.Theme(themeCodes[i])
+		}
+	}
+	return appcfg.ThemeSystem
+}
+
+// seedSettings 用最近一次装配的 st.cfg（顶层）+ st.providers（插件启用态）把绑定态刷成
+// 当前真值。每次 openSettings 都重刷，避免隐藏期残留上一次未保存的编辑。
+func (st *appState) seedSettings(s *settingsWindow) {
+	s.configErr = ""
+	s.hotkey = st.cfg.Hotkey
+	if s.hotkey == "" {
+		s.hotkey = hotkeyShow
+	}
+	s.autostart = st.cfg.Autostart
+	s.theme = themeLabel(st.cfg.Theme)
+	s.clipboardMax = float64(clipboardMaxEntries(st.cfg))
+	s.edits = s.edits[:0]
+	for _, p := range st.providers.Providers {
+		s.edits = append(s.edits, providerEdit{
+			id: p.ID, name: p.Name, enabled: p.Enabled, isGlobal: p.IsGlobal,
+			weight: p.Weight, prefix: p.Prefix, activation: activationLabel(p.Activation),
+			hotkey: p.Hotkey,
+		})
+	}
+}
+
+// openSettings 懒建并唤出设置窗（托盘「设置…」点来，主线程）。已存在则重刷当前值 +
+// 唤回焦点；创建走 mygo.NewWindow（普通窗，非 Panel/Frameless）。
+//
+// 生命周期：**关闭 = 程序化销毁**（对照 Rust settings.rs 的 remove_window 处置）。
+// 设置窗 880×600 会新建一套 swapchain / 字体纹理，常驻约 20MB；若像面板一样隐藏复用，
+// 这部分资源在窗口对象存活期间不会归还。故 OnClose /「完成」都走 closeSettings：
+// 先拦截，再把 Destroy 投递到主循环下一次迭代（避免在渲染回调栈内释放原生窗口），
+// 下次打开重新建窗。与 Rust 的「HWND 存活期内销毁」同一目的。
+func (st *appState) openSettings() {
+	if st.settings != nil {
+		if st.settings.closed {
+			return // 正在销毁；等主循环落地后下一次点击再建新窗
+		}
+		st.seedSettings(st.settings)
+		st.settings.win.Show()
+		st.settings.win.Focus()
+		return
+	}
+	s := &settingsWindow{}
+	w := mygo.NewWindow(mygo.WindowOptions{
+		Title:   "Voke 设置",
+		Width:   880,
+		Height:  600,
+		Hidden:  true, // 先建后 Show：避开空白首帧
+		Content: ui.View(st.settingsView),
+	})
+	w.OnClose(func(e *mygo.CloseEvent) {
+		if st.quitting {
+			// 退出流程：放行真关闭（否则 veto 会让 App.Quit 的关窗循环中止）。
+			// 录制定时器仍要停掉并置 nil，且先清 recording，避免已在途的回调
+			// 在退出过程中再执行一次取消/注册热键。
+			s.recording = false
+			stopRecTimer(s)
+			return
+		}
+		e.PreventDefault()
+		st.closeSettings(s)
+	})
+	// 录制态的两道保险：聚焦续期（短 TTL + 聚焦续期，防「开了录制去干别的」），
+	// 失焦即取消（切到别的应用 / 组合被系统或他人截走时不再干等）。
+	w.OnFocus(func() {
+		if s.recording {
+			st.armHotkeyRecTimeout(s)
+		}
+	})
+	w.OnBlur(func() {
+		if s.recording {
+			st.cancelHotkeyRecording(s)
+		}
+	})
+	s.win = w
+	st.settings = s
+	st.seedSettings(s)
+	w.Show()
+	w.Focus()
+	log.Printf("设置窗口已打开")
+}
+
+// closeSettings 结束设置窗：放弃录制、停掉录制定时器，然后**销毁窗口**而不是隐藏。
+// Destroy 经 Window.Update 投递到主循环下一轮执行——「完成」按钮是在设置窗 view 的
+// 渲染回调里调进来的，立即销毁会在回调栈内释放原生窗口；投递后当前帧先正常收尾。
+func (st *appState) closeSettings(s *settingsWindow) {
+	if s == nil || s.closed {
+		return
+	}
+	s.closed = true
+	if s.recording {
+		st.cancelHotkeyRecording(s) // 关窗=放弃录制，恢复旧键（必须赶在销毁前）
+	}
+	stopRecTimer(s)
+	if st.settings == s {
+		st.settings = nil // 立即放掉 appState 对旧窗的引用，销毁回调不再持有它
+	}
+	s.win.Hide()
+	s.win.Update(func() {
+		s.win.Destroy()
+		log.Printf("设置窗口 -> 程序化销毁（释放渲染资源）")
+	})
+}
+
+// startHotkeyRecording 进入录制态：**先挂起所有全局热键**（主热键 + 插件热键）——
+// 否则按下旧组合会被系统当成既有热键触发，轮不到我们捕获。pluginID 为空 = 录制
+// 主唤隐热键；否则是目标插件 id。
+func (st *appState) startHotkeyRecording(s *settingsWindow, pluginID string) {
+	if s.recording {
+		return
+	}
+	s.recording = true
+	s.recPluginID = pluginID
+	s.hotkeyErr = ""
+	st.suspendHotkeys()
+	st.armHotkeyRecTimeout(s)
+}
+
+// armHotkeyRecTimeout 为录制设/续一个短超时。定时器在后台触发，但取消动作经
+// `Window.Update` 回主线程执行——录制态字段只在主线程读写，避免数据竞争；世代号
+// 让旧定时器晚到时自动失效。
+func (st *appState) armHotkeyRecTimeout(s *settingsWindow) {
+	if s.recTimer != nil {
+		s.recTimer.Stop() // 续期：先停旧的，避免定时器堆积
+	}
+	s.recGen++
+	gen := s.recGen
+	s.recTimer = time.AfterFunc(hotkeyRecTimeout, func() {
+		s.win.Update(func() {
+			if s.recording && s.recGen == gen {
+				s.recTimer = nil
+				st.cancelHotkeyRecording(s)
+			}
+		})
+	})
+}
+
+// stopRecTimer 停掉当前录制超时（取消 / 成功 / 关窗时调），保证定时器被回收、
+// 不会在录制结束后再投递一次取消。
+func stopRecTimer(s *settingsWindow) {
+	if s.recTimer != nil {
+		s.recTimer.Stop()
+		s.recTimer = nil
+	}
+}
+
+// cancelHotkeyRecording 退出录制并恢复全部热键（Esc 或关窗/完成时调）。
+func (st *appState) cancelHotkeyRecording(s *settingsWindow) {
+	if !s.recording {
+		return
+	}
+	s.recording = false
+	s.recPluginID = ""
+	s.hotkeyErr = ""
+	stopRecTimer(s)
+	st.resumeHotkeys()
+}
+
+// recordHotkeyInput 是录制框的 HandleInput 回调。不能用 OnTextKey：mygo 的
+// editor 把 Alt+字母 / 符号当作“会输入文本”的键跳过 OnTextKey，导致这些组合
+// 根本录不到（Alt+Space、Alt+` 等都会漏）。HandleInput 在文本处理之前拿到所有
+// KeyDown，只消费按下、忽略自动重复与抬起。
+func (st *appState) recordHotkeyInput(s *settingsWindow, ev ui.InputEvent) bool {
+	if ev.Kind != ui.InputKeyDown || ev.Repeat {
+		return false
+	}
+	return st.recordHotkey(s, ev.Key, ev.Mods)
+}
+
+// recordHotkey 在录制态处理一次按键：Esc 取消；合法组合则先查冲突与系统占用，
+// 通过后落盘并退出录制；无修饰键/不支持的键提示重按。
+func (st *appState) recordHotkey(s *settingsWindow, key ui.Key, mods ui.Modifiers) bool {
+	if !s.recording {
+		return false
+	}
+	if key == ui.KeyEscape && mods == 0 {
+		st.cancelHotkeyRecording(s)
+		return true
+	}
+	acc, ok := platform.AccelFromKey(key, mods)
+	if !ok {
+		s.hotkeyErr = "请按住 Ctrl / Alt / Shift 再按一个键"
+		st.armHotkeyRecTimeout(s) // 无效键也续期，给用户重试机会
+		return true
+	}
+
+	// 先写进编辑态，用统一校验查“与主热键 / 其它启用插件”的冲突；失败回滚。
+	target := s.recPluginID
+	oldMain := s.hotkey
+	var edit *providerEdit
+	var oldPlugin string
+	if target == "" {
+		s.hotkey = acc
+	} else {
+		edit = findProviderEdit(s.edits, target)
+		if edit == nil {
+			st.cancelHotkeyRecording(s)
+			return true
+		}
+		oldPlugin = edit.hotkey
+		edit.hotkey = acc
+	}
+	revert := func() {
+		if target == "" {
+			s.hotkey = oldMain
+		} else if edit != nil {
+			edit.hotkey = oldPlugin
+		}
+	}
+	if msg := hotkeySettingsError(s.edits, s.hotkey); msg != "" {
+		revert()
+		s.hotkeyErr = msg
+		st.armHotkeyRecTimeout(s)
+		return true
+	}
+	// 探测系统级占用：此刻所有热键都已挂起，注册成功即说明组合可用。
+	if err := platform.RegisterHotkey(acc, func() {}); err != nil {
+		log.Printf("voke 录制热键 %q 探测注册失败：%v", acc, err)
+		revert()
+		s.hotkeyErr = "该快捷键已被系统或其他程序占用，请换一个"
+		st.armHotkeyRecTimeout(s)
+		return true
+	}
+	platform.UnregisterHotkey(acc)
+
+	s.recording = false
+	s.recPluginID = ""
+	s.hotkeyErr = ""
+	stopRecTimer(s)
+	st.applySettings() // 落盘 + 重载（录制中插件热键同步会跳过）
+	st.resumeHotkeys() // 结束后按新配置统一重建
+	return true
+}
+
+// findProviderEdit 按插件 id 取设置页里的可变编辑项（找不到返回 nil）。
+func findProviderEdit(edits []providerEdit, id string) *providerEdit {
+	for i := range edits {
+		if edits[i].id == id {
+			return &edits[i]
+		}
+	}
+	return nil
+}
+
+// settingsView 是设置窗整帧视图。所有控件**即时生效**（无保存按钮）：开关/选择器改动
+// 当帧落盘应用，文本框改动即应用；底部只留「完成」关窗。
+func (st *appState) settingsView(c *ui.Context) {
+	s := st.settings
+	if s == nil {
+		return
+	}
+	t := c.Theme()
+	c.Root().Background(t.Background)
+
+	ui.Column(c).Fill().Children(func() {
+		// 标题栏：左标题，右「修改即时生效」提示，弱化但可读。
+		ui.Row(c).Padding(24, 18).Gap(12).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "设置").FontSize(theme.InputSize + 1).TextColor(t.Text).Grow(1)
+			ui.Text(c, "修改即时生效").FontSize(theme.HintSize).TextColor(t.TextMuted)
+		})
+		ui.Divider(c)
+
+		ui.Scroll(c).Grow(1).Padding(24, 18).Children(func() {
+			ui.Column(c).Gap(20).Children(func() {
+				// ── 通用 ──
+				ui.Fieldset(c, "通用", func() {
+					ui.Column(c).Gap(16).Children(func() {
+						ui.Field(c, "开机自启", func() {
+							ui.Text(c, "登录系统后自动启动 voke").FontSize(theme.HintSize).TextColor(t.TextMuted).Grow(1)
+							if ui.Switch(c, &s.autostart).Changed() {
+								st.applySettings()
+							}
+						})
+						ui.Field(c, "界面主题", func() {
+							if ui.Select(c, &s.theme, themeLabels).Grow(1).Changed() {
+								st.applySettings()
+							}
+						})
+					})
+				})
+
+				// ── 快捷键 ──
+				ui.Fieldset(c, "快捷键", func() {
+					ui.Column(c).Gap(6).Children(func() {
+						if s.recording && s.recPluginID == "" {
+							ui.Text(c, "请按下新的快捷键（Esc 取消）").FontSize(theme.HintSize).TextColor(t.TextMuted)
+							ui.TextInputBase(c, &s.recBuf).Bind(&s.recHandle).ReadOnly(true).Grow(1).
+								FontSize(theme.InputSize).Placeholder("等待按键…").Label("录制热键").
+								HandleInput(func(ev ui.InputEvent) bool { return st.recordHotkeyInput(s, ev) })
+							s.recHandle.Focus() // 每帧回焦点（点击会先落到按钮，下一帧拉回）
+						} else {
+							ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+								ui.Text(c, "全局显示 / 隐藏面板").FontSize(theme.HintSize).TextColor(t.TextMuted).Grow(1)
+								// 设置页保持规范英文键名（Alt+Space / Ctrl+Backspace），
+								// 中文缩写只用于启动器底栏键帽。
+								btn := ui.Button(c, s.hotkey)
+								btn.Disabled(s.recording)
+								if btn.Clicked() {
+									st.startHotkeyRecording(s, "")
+								}
+							})
+							ui.Text(c, "点击按键块后按下新组合，Esc 取消").FontSize(theme.HintSize).TextColor(t.TextMuted)
+						}
+						if s.hotkeyErr != "" && s.recPluginID == "" {
+							ui.Text(c, s.hotkeyErr).FontSize(theme.HintSize).TextColor(t.Danger)
+						}
+					})
+				})
+
+				// ── 插件 ──
+				ui.Text(c, "插件").FontSize(theme.TitleSize).TextColor(t.TextMuted).
+					Padding(2, 2)
+				if s.configErr != "" {
+					ui.Text(c, s.configErr).FontSize(theme.HintSize).TextColor(t.Danger)
+				}
+				for i := range s.edits {
+					p := &s.edits[i]
+					ui.Fieldset(c, p.name, func() {
+						ui.Column(c).Gap(12).Children(func() {
+							ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+								if ui.Checkbox(c, &p.enabled, "启用").Changed() {
+									st.applySettings()
+								}
+							})
+							if !p.enabled {
+								ui.Text(c, "插件已停用，以下配置不生效").FontSize(theme.HintSize).TextColor(t.TextMuted)
+							}
+							// 未启用时整组配置禁用：不可点、不可聚焦，避免改了一个当前不生效的值。
+							ui.Column(c).Gap(12).Disabled(!p.enabled).Children(func() {
+								ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+									ui.Spacer(c)
+									ui.Text(c, "参与全局搜索").FontSize(theme.HintSize).TextColor(t.TextMuted)
+									if ui.Switch(c, &p.isGlobal).Changed() {
+										st.applySettings()
+									}
+								})
+								ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+									ui.Text(c, "前缀").FontSize(theme.HintSize).TextColor(t.TextMuted)
+									if ui.TextInput(c, &p.prefix).Grow(1).FontSize(theme.InputSize).
+										Placeholder("如 @b；空=无").Label(p.name + " 前缀").Changed() {
+										st.applySettings()
+									}
+									ui.Text(c, "权重").FontSize(theme.HintSize).TextColor(t.TextMuted)
+									if ui.NumberInput(c, &p.weight, 0, 3, 0.1).Changed() {
+										st.applySettings()
+									}
+									if ui.Select(c, &p.activation, activationLabels).Changed() {
+										st.applySettings()
+									}
+								})
+								if p.id != engine.PickerPluginID {
+									ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+										ui.Text(c, "全局快捷键").FontSize(theme.HintSize).TextColor(t.TextMuted)
+										if s.recording && s.recPluginID == p.id {
+											ui.TextInputBase(c, &s.recBuf).Bind(&s.recHandle).ReadOnly(true).Grow(1).
+												FontSize(theme.InputSize).Placeholder("等待按键…").
+												Label(p.name + " 全局快捷键").
+												HandleInput(func(ev ui.InputEvent) bool { return st.recordHotkeyInput(s, ev) })
+											s.recHandle.Focus()
+										} else {
+											label := p.hotkey
+											if label == "" {
+												label = "未设置"
+											}
+											btn := ui.Button(c, label)
+											btn.Disabled(s.recording)
+											if btn.Clicked() {
+												st.startHotkeyRecording(s, p.id)
+											}
+											if p.hotkey != "" {
+												if ui.Button(c, "清除").Clicked() {
+													p.hotkey = ""
+													s.hotkeyErr = ""
+													st.applySettings()
+												}
+											}
+											ui.Text(c, "点击后按组合键；仅启用时注册").
+												FontSize(theme.HintSize).TextColor(t.TextMuted).Grow(1)
+										}
+									})
+									if s.recording && s.recPluginID == p.id && s.hotkeyErr != "" {
+										ui.Text(c, s.hotkeyErr).FontSize(theme.HintSize).TextColor(t.Danger)
+									}
+									if msg := st.pluginHotkeyError(p.id); msg != "" &&
+										!(s.recording && s.recPluginID == p.id) {
+										ui.Text(c, msg).FontSize(theme.HintSize).TextColor(t.Danger)
+									}
+								}
+								if p.id == providerClipboardID {
+									ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+										ui.Text(c, "历史条数").FontSize(theme.HintSize).TextColor(t.TextMuted)
+										if ui.NumberInput(c, &s.clipboardMax, 1, 1000, 1).Changed() {
+											st.applySettings()
+										}
+										ui.Text(c, "普通条目上限；置顶 10 条不计入").
+											FontSize(theme.HintSize).TextColor(t.TextMuted).Grow(1)
+									})
+								}
+							})
+						})
+					})
+				}
+
+				// ── 关于 ──
+				ui.Fieldset(c, "关于", func() {
+					ui.Column(c).Gap(16).Children(func() {
+						ui.Field(c, "版本", func() {
+							ui.Text(c, aboutVersion()).FontSize(theme.HintSize).TextColor(t.TextMuted).Grow(1)
+						})
+						ui.Field(c, "配置文件", func() {
+							ui.Text(c, aboutConfigPath()).FontSize(theme.HintSize).TextColor(t.TextMuted).Grow(1)
+						})
+					})
+				})
+			})
+		})
+
+		ui.Divider(c)
+		ui.Row(c).Padding(18).Gap(12).Children(func() {
+			ui.Spacer(c)
+			if ui.PrimaryButton(c, "完成").Clicked() {
+				st.closeSettings(s)
+			}
+		})
+	})
+}
+
+// applySettings 即时落盘 + 应用（实时生效，无“保存”按钮）：
+//   - 热键不可解析则沿用当前生效值、不写垃圾；开机自启成功才落配置、失败回弹；
+//   - 插件启用 / 前缀 / 权重 / 激活方式经 saveConfig + reloadConfigs 近即时生效；
+//   - 主题当场生效；热键变更则撤旧注新、失败回滚。
+//
+// 幂等：任一项变化后调用一次即可；不关窗（窗的显隐归按钮 / OnClose）。
+func (st *appState) applySettings() {
+	s := st.settings
+	if s == nil {
+		return
+	}
+	overrides := providerOverrides(s.edits)
+	if msg := prefixSettingsError(s.edits, overrides); msg != "" {
+		// 前缀无效时不落盘、不重载：界面与生效配置都停在上一次有效状态，
+		// 错误提示就地显示（见 settingsView 的「插件」区）。
+		s.configErr = msg
+		return
+	}
+	if msg := hotkeySettingsError(s.edits, s.hotkey); msg != "" {
+		// 与主热键 / 其它启用插件撞键：同样不落盘，避免“保存成功但没注册”。
+		s.configErr = msg
+		return
+	}
+	s.configErr = ""
+	hotkey := s.hotkey
+	if _, ok := config.ParseHotkey(hotkey); !ok {
+		fallback := st.cfg.Hotkey
+		if fallback == "" {
+			fallback = hotkeyShow
+		}
+		log.Printf("voke 设置热键 %q 不可解析，沿用 %s", hotkey, fallback)
+		hotkey = fallback
+	}
+
+	// 开机自启：注册表改成功才把新值落进配置，失败则配置与界面都回弹（对照 voke-app
+	// set_autostart「注册表改成功才落配置，失败就让它回弹」：先 set_enabled、成功后才
+	// 写 config）。安全软件拦 HKCU\Run 写入时，不能谎报 autostart 已按用户所 toggling——
+	// 否则下次启动 panel.go ready 会据 config 再试一次、UI 一直显示开着却实际没注册。
+	// 非 Windows 走 stub 恒返回 nil，autostart 保持 s.autostart，行为与改动前一致。
+	autostart := s.autostart
+	if err := platform.SetAutostart(autostart); err != nil {
+		log.Printf("voke 设置开机自启（=%v）失败，配置与界面回弹：%v", autostart, err)
+		autostart = st.cfg.Autostart
+		s.autostart = autostart
+	}
+
+	clipMax := int(s.clipboardMax)
+	if clipMax < cliphist.MinMaxEntries {
+		clipMax = cliphist.MinMaxEntries
+	}
+	if clipMax > cliphist.MaxMaxEntries {
+		clipMax = cliphist.MaxMaxEntries
+	}
+	top := appcfg.Top{Hotkey: hotkey, Autostart: autostart, Theme: themeCode(s.theme), ClipboardMaxEntries: clipMax}
+
+	if err := saveConfig(top, overrides); err != nil {
+		log.Printf("voke 写设置失败：%v", err)
+		return
+	}
+	// 历史上限即时生效：超出新上限的普通条目当场淘汰（置顶不计入）。
+	if st.hist != nil {
+		st.hist.SetMaxEntries(clipMax)
+		if st.isClipboardPlugin() {
+			st.refreshClipboardRows()
+		}
+	}
+	// 重载：插件启用 / 前缀近即时生效，并把新 loaded 回存到 st.cfg（下次 seed 一致）。
+	st.reloadConfigs()
+	// 主题当场生效：appcfg 码值 = mygo ThemeSource，透传即可（见 platform.SetThemeSource）。
+	platform.SetThemeSource(string(st.cfg.Theme))
+	// 改键当场生效：先撤旧串、再注新串；注新失败则回滚旧串（对照生产「注册失败回退」，
+	// 绝不留「新旧都没绑」的空窗）。撤/注都只在主线程（本函数由托盘 Click→saveSettings 走到）。
+	st.rebindMainHotkey(st.cfg.Hotkey)
+	// 插件启用 / 停用 / 改键后，同步实际的插件热键注册表。录制期间会跳过（热键已挂起），
+	// 录制结束后由 resumeHotkeys 统一重建。
+	st.syncPluginHotkeys()
+
+	s.hotkey = st.showHotkey // 回显实际生效的键（改键失败时即旧键）
+}
+
+// providerOverrides 把设置页的绑定态包成 UserOverride。除 hotkey 外所有字段都写成
+// 指针，保持「打开后不改、直接触发一次保存」也是幂等写回；hotkey 空 = 未绑定，
+// 没有默认值，故省略该键与写空串等价。
+func providerOverrides(edits []providerEdit) []config.UserOverride {
+	overrides := make([]config.UserOverride, 0, len(edits))
+	for _, p := range edits {
+		enabled, isGlobal, weight, prefix := p.enabled, p.isGlobal, p.weight, p.prefix
+		activation := activationCode(p.activation)
+		ov := config.UserOverride{
+			ID: p.id, Enabled: &enabled, IsGlobal: &isGlobal,
+			Weight: &weight, Prefix: &prefix, Activation: &activation,
+		}
+		if p.hotkey != "" {
+			// 空 = 未绑定；没有默认值，故省略该键与写空串等价，保持文件干净。
+			hk := p.hotkey
+			ov.Hotkey = &hk
+		}
+		overrides = append(overrides, ov)
+	}
+	return overrides
+}
+
+// hotkeySettingsError 校验插件快捷键：只检查**启用**的插件（停用时不注册），
+// 并同时与主唤隐热键比较。返回中文错误（空串 = 通过）。
+func hotkeySettingsError(edits []providerEdit, mainHotkey string) string {
+	owners := make(map[string]string) // 规范化热键 → 占用者描述
+	if mainHotkey != "" {
+		owners[config.CanonicalHotkey(mainHotkey)] = "显示/隐藏热键"
+	}
+	for _, p := range edits {
+		if !p.enabled || p.hotkey == "" || p.id == engine.PickerPluginID {
+			continue
+		}
+		if !config.HasModifier(p.hotkey) {
+			return fmt.Sprintf("%s 的快捷键 %s 无效：需至少一个修饰键", p.name, p.hotkey)
+		}
+		key := config.CanonicalHotkey(p.hotkey)
+		if owner, ok := owners[key]; ok {
+			if owner == "显示/隐藏热键" {
+				return fmt.Sprintf("%s 的快捷键 %s 与显示/隐藏热键冲突", p.name, p.hotkey)
+			}
+			return fmt.Sprintf("%s 的快捷键 %s 与%s冲突", p.name, p.hotkey, owner)
+		}
+		owners[key] = fmt.Sprintf("插件「%s」的快捷键", p.name)
+	}
+	return ""
+}
+
+// prefixSettingsError 在落盘前校验插件前缀，返回中文错误（空串 = 通过）：
+//   - 含空白：Normalize 的 C3 会静默置空，设置页必须当场拦住并说明原因；
+//   - Normalize 的 C2 / C4：触发串互为前缀（含相同）或撞上保留键（字母 / 数字），
+//     直接复用归一层的判定与消息，避免设置页与启动路径各有一套规则。
+func prefixSettingsError(edits []providerEdit, overrides []config.UserOverride) string {
+	for _, p := range edits {
+		if p.prefix != "" && strings.IndexFunc(p.prefix, unicode.IsSpace) >= 0 {
+			return fmt.Sprintf("%s 的前缀不能包含空白（间接模式由程序自动追加一个空格）", p.name)
+		}
+	}
+	if _, err := config.Normalize(builtinDescriptors(), overrides); err != nil {
+		return err.Error()
+	}
+	return ""
+}

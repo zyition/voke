@@ -12,7 +12,7 @@
 - **单 exe**：最终产物是一个独立的 `voke.exe`，不依赖 .NET、浏览器或外部运行时。
 - **无遥测、无服务端**：程序不联网、不上报任何数据（详见 `SECURITY.md`）。
 
-当前源码在 **`poc/voke-go/`**（历史上是 PoC 目录，现在是唯一生产实现）。
+当前源码在**仓库根目录**（`module voke`；历史上曾放在 PoC 子目录）。
 Rust/gpui 参考实现已归档到 `legacy-rust` 分支与 `v0.1.x` tag，不在 main 树中，
 也不参与 CI 与发版。
 
@@ -21,7 +21,7 @@ Rust/gpui 参考实现已归档到 `legacy-rust` 分支与 `v0.1.x` tag，不在
 - **Go**：版本以下面文件为准，不要依赖系统里恰好装了什么：
 
   ```bash
-  cat poc/voke-go/go.mod | head -3
+  cat go.mod | head -3
   ```
 
 - **CGO 不需要开**：Windows 交叉构建用 `CGO_ENABLED=0`。
@@ -30,7 +30,7 @@ Rust/gpui 参考实现已归档到 `legacy-rust` 分支与 `v0.1.x` tag，不在
 
 ## 三、常用命令
 
-在 `poc/voke-go` 下执行：
+在仓库根目录执行：
 
 ```bash
 # 格式、静态检查、race 测试（CI 同款）
@@ -101,14 +101,14 @@ bash packaging/build-installer.sh
 ## 七、目录结构
 
 ```text
-poc/voke-go/
-  main.go             入口（只调 app.Main）
-  internal/app/       装配、生命周期、面板/设置、意图执行
-  internal/logic/     引擎、配置、面板状态、搜索、频率、缓存、日志
-  internal/match/     拼音搜索键 + nucleo 评分移植
-  internal/providers/ Provider 契约与 10 个插件
-  internal/platform/  mygo / Win32 / COM 边界
-  internal/ui/        mygo 组件、主题、视图
+main.go               入口（只调 app.Main）
+go.mod / go.sum       module voke（不带域名的本地模块路径）
+internal/app/         装配、生命周期、面板/设置、意图执行
+internal/logic/       引擎、配置、面板状态、搜索、频率、缓存、日志
+internal/match/       拼音搜索键 + nucleo 评分移植
+internal/providers/   Provider 契约与 10 个插件
+internal/platform/    mygo / Win32 / COM 边界
+internal/ui/          mygo 组件、主题、视图
 packaging/            安装器脚本与 Inno Setup 脚本
 docs/                 当前文档 + docs/legacy 历史存档
 ```

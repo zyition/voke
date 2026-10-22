@@ -18,10 +18,10 @@
 #endif
 
 ; 待打包的 exe。正式构建由脚本 / CI 用 `-dVokeExe` 指向本次 Go 产物；
-; 这里的默认值只是让直接跑 ISCC 时有一个明确路径，需先在 poc/voke-go 下
+; 这里的默认值只是让直接跑 ISCC 时有一个明确路径，需先在仓库根目录
 ; 构建出 voke.exe。
 #ifndef VokeExe
-  #define VokeExe "..\poc\voke-go\voke.exe"
+  #define VokeExe "..\voke.exe"
 #endif
 
 [Setup]

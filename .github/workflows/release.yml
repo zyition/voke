@@ -37,8 +37,8 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: poc/voke-go/go.mod
-          cache-dependency-path: poc/voke-go/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       # 事件字段一律经 env 传入再校验，不直接插值进 shell（防注入）。
       - name: 解析版本号
@@ -60,13 +60,12 @@ jobs:
           Write-Host "版本：$ver"
 
       - name: go build（Windows GUI，含 exe 图标 syso 与版本注入）
-        working-directory: poc/voke-go
         shell: pwsh
         # buildVersion 经 -ldflags -X 注入（设置页「关于」显示）；与安装器
         # -dVokeVersion 同源，均取 tag。Go 没有 build.rs，链接器只改写 string 变量。
         run: |
           $ErrorActionPreference = 'Stop'
-          $ldflags = "-s -w -H windowsgui -X github.com/zyition/voke/poc/voke-go/internal/app.buildVersion=$env:VOKE_VERSION"
+          $ldflags = "-s -w -H windowsgui -X voke/internal/app.buildVersion=$env:VOKE_VERSION"
           go build -tags mygo_noinspector -ldflags="$ldflags" -o voke.exe .
           if ($LASTEXITCODE -ne 0) { throw "go build 失败（exit=$LASTEXITCODE）" }
 
@@ -77,7 +76,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $goExe = (Resolve-Path 'poc\voke-go\voke.exe').Path
+          $goExe = (Resolve-Path 'voke.exe').Path
           & $env:ISCC_PATH 'packaging\voke.iss' "-dVokeVersion=$env:VOKE_VERSION" "-dVokeExe=$goExe"
           if ($LASTEXITCODE -ne 0) { throw "ISCC 失败（exit=$LASTEXITCODE）" }
           Get-ChildItem 'packaging\dist'
@@ -88,7 +87,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path 'dist' | Out-Null
           Copy-Item 'packaging\dist\voke-setup-*.exe' -Destination 'dist\'
-          Compress-Archive -Path 'poc\voke-go\voke.exe' `
+          Compress-Archive -Path 'voke.exe' `
             -DestinationPath "dist\voke-$env:VOKE_TAG-windows-x86_64.zip"
           Get-ChildItem 'dist'
 

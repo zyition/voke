@@ -1,25 +1,31 @@
-# Go 版 Voke 的 CI：只在改动 Go 主线（poc/voke-go/**）时跑（Rust CI 已退役）。
+# Go 版 Voke 的 CI：改动 Go 主线（仓库根模块 voke）时跑（Rust CI 已退役）。
 # 门禁：gofmt / go mod tidy 自检 / go vet / race 测试 / Windows 交叉 vet + 构建。
 name: ci
 
 on:
   push:
     paths:
-      - 'poc/voke-go/**'
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'rsrc_windows_amd64.syso'
+      - 'assets/**'
+      - 'packaging/**'
       - '.github/workflows/ci.yml'
       - '.github/actions/**'
   pull_request:
     paths:
-      - 'poc/voke-go/**'
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'rsrc_windows_amd64.syso'
+      - 'assets/**'
+      - 'packaging/**'
       - '.github/workflows/ci.yml'
       - '.github/actions/**'
 
 permissions:
   contents: read
-
-defaults:
-  run:
-    working-directory: poc/voke-go
 
 jobs:
   test:
@@ -30,8 +36,8 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: poc/voke-go/go.mod
-          cache-dependency-path: poc/voke-go/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
       - name: go mod tidy 自检（go.mod/go.sum 必须与源码同步）
         run: |
@@ -72,5 +78,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: voke-windows-amd64
-          path: poc/voke-go/voke.exe
+          path: voke.exe
           if-no-files-found: error

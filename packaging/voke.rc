@@ -1,0 +1,4 @@
+// 生成 exe 图标资源（在仓库根目录执行）：
+// x86_64-w64-mingw32-windres -I assets -i packaging/voke.rc -O coff -o rsrc_windows_amd64.syso
+// 源图标为仓库根 assets/voke.ico（与 Rust 版/安装器同一张）。
+1 ICON "voke.ico"

@@ -1,6 +1,6 @@
 # Voke 架构（Go + mygo）
 
-> 当前实现位于 [`poc/voke-go/`](../poc/voke-go)，产品形态是单 exe、托盘常驻的
+> 当前实现位于仓库根目录（`module voke`），产品形态是单 exe、托盘常驻的
 > Windows 启动器。Rust/gpui 版代码已归档到 `legacy-rust` 分支与 `v0.1.x` tag，
 > 不在 main 树中，也不参与 CI 与发版；其架构文档见
 > [`docs/legacy/rust-architecture.md`](legacy/rust-architecture.md)。
@@ -53,7 +53,7 @@ main.go
   - **Direct**：输入原文 == 前缀；
   - **Indirect**：输入原文 == 前缀 + 一个空格。
 - 输入只在 Global 态判前缀；已进入插件/子模式后，文字只作为该层查询词。
-- `#` 是「列出所有插件」入口（picker，Direct）。
+- `#` 是「插件列表」入口（picker，Direct）。
 - 默认二级前缀：`@b` / `@u` / `@t` / `@r`（全部 Indirect）；calculator 是 `=`（Direct）。
 
 **冲突判定（C2）**：把每条前缀展开成触发串（Direct = 前缀本身，Indirect = 前缀 + 空格），
@@ -92,7 +92,7 @@ type Provider interface {
 | id | 触发 | 说明 |
 |---|---|---|
 | `apps` | 无前缀（全局） | 开始菜单 Applications 文件夹（含桌面程序快捷方式与 packaged 应用） |
-| `windows` | 无前缀（全局） | 枚举并激活已打开窗口；行内「结束任务」直接 TerminateProcess |
+| `windows` | 无前缀（全局） | 枚举并激活已打开窗口；行内「关闭窗口」发 WM_CLOSE、「结束任务」直接 TerminateProcess |
 | `awake` | 无前缀（全局） | 保持唤醒 / 取消，支持连屏幕 |
 | `terminal` | 无前缀（全局） | Windows Terminal profile；行内「以管理员身份打开」走 runas |
 | `workspaces` | 无前缀（全局） | Zed / VS Code 最近工作区 |
@@ -101,7 +101,7 @@ type Provider interface {
 | `uuid` | `@u `（Indirect） | UUID v4 |
 | `timestamp` | `@t `（Indirect） | 时间戳 ⇄ 可读时间 |
 | `random` | `@r `（Indirect） | 随机整数 / 字符串 |
-| `clipboard` | `@c `（Indirect） | 剪贴板历史：文本 / HTML / RTF / 图片；Enter 粘贴、Ctrl+Enter 纯文本、置顶、删除 |
+| `clipboard` | `@c `（Indirect） | 剪贴板历史：文本 / HTML / RTF / 图片；Enter 粘贴、Ctrl+Enter 纯文本、Ctrl+Shift+T 置顶、Ctrl+Delete 删除 |
 
 Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可编辑**。
 
@@ -160,17 +160,24 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
 - 启动即托盘常驻；面板窗口隐藏创建，主热键 toggle、托盘双击、二次启动唤醒。
 - 插件全局快捷键：只注册“已启用 + 配置了 hotkey”的插件；停用即注销，启用后重注。
   交互对齐主流启动器的 per-plugin hotkey——隐藏时唤起并 `enterPlugin` 直达，已在
-  该插件时只聚焦（保留过滤词），其它状态则切换；不做“再按一次隐藏”。录制期间主热键
-  与所有插件热键统一挂起，结束后按新配置重建（`internal/app/hotkeys.go`）。录制输入走
-  `HandleInput` 而非 `OnTextKey`：mygo 会把带 Alt 的字母/符号当作可输入文本而跳过后者。
-- 失焦 / Esc 隐藏面板（保留查询与插件页）；Backspace 逐级回退作用域，回到上层时输入
-  恒为空（过滤词在入栈时丢弃，不跨层恢复）；Enter 执行选中项；Ctrl+Backspace 手动清空
-  查询并退回 Global（面板保持可见，焦点不在输入框时也生效）。
-- 重新显示时保留会话但**重跑当前查询**（对照 Rust 窗口激活观察者的 `refresh`）：
-  窗口 / awake 等实时数据不冻结在隐藏前；random / uuid / timestamp 同输入跳过重跑，
-  刚复制的值不会被唤回悄悄换掉。
+  该插件时只聚焦（保留过滤词），其它状态则切换；不做“再按一次隐藏”。插件热键同时是
+  “立即执行”：每次从干净的插件第一级进入，不读取也不覆盖主会话快照（方案 C，
+  `internal/app/session.go`）。录制期间主热键与所有插件热键统一挂起，结束后按新配置
+  重建（`internal/app/hotkeys.go`）。录制输入走 `HandleInput` 而非 `OnTextKey`：
+  mygo 会把带 Alt 的字母/符号当作可输入文本而跳过后者。
+- 失焦 / Esc 隐藏面板（主入口会话保留查询与插件页；插件热键会话不写快照，下次热键
+  全新进入）；
+  Backspace 逐级回退作用域，回到上层时输入恒为空（过滤词在入栈时丢弃，不跨层恢复）；
+  Enter 执行选中项；Ctrl+Backspace 手动清空查询并退回 Global（面板保持可见，焦点不在
+  输入框时也生效）。
+- 重新显示时，主入口（主热键 / 托盘双击 / 显示面板 / 二次启动）恢复主会话快照并
+  **重跑当前查询**（对照 Rust 窗口激活观察者的 `refresh`）；插件热键入口每次全新进入
+  插件，不污染主会话。窗口 / awake 等实时数据不冻结在隐藏前；random / uuid / timestamp
+  同输入跳过重跑，刚复制的值不会被唤回悄悄换掉。
 - 启动应用 / 切窗口 / 保持唤醒等「离开面板」动作成功后：先隐藏，再复位输入与插件页
-  （对照 Rust `reset_after_action`）；Copy 类动作只隐藏、保留输入与结果供再次复制。
+  （对照 Rust `reset_after_action`）；主会话复位后同步覆盖主快照（下次主入口从干净
+  Global 开始），插件热键会话复位不影响主快照。Copy 类动作只隐藏、保留输入与结果供
+  再次复制。
 - 设置窗独立 880×600，关闭时**程序化销毁**（`Window.Update` 里 `Destroy`），
   避免渲染资源常驻；再次打开重建。
 - 面板隐藏 10 秒后把解码图标缓存裁到 64 条（设置窗打开时跳过）。
@@ -181,7 +188,6 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
 ## 8. 构建、测试与发版
 
 ```bash
-cd poc/voke-go
 gofmt -l . && go vet ./... && go test -race -count=1 -shuffle=on ./...
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
   -tags mygo_noinspector -ldflags="-s -w -H windowsgui" -o /tmp/voke.exe .

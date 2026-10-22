@@ -21,7 +21,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GO_DIR="$REPO_ROOT/poc/voke-go"
+GO_DIR="$REPO_ROOT"
 ISS="$REPO_ROOT/packaging/voke.iss"
 DIST="$REPO_ROOT/packaging/dist"
 BUILD_DIR="$DIST/build"
@@ -48,14 +48,14 @@ fi
 echo "== [1/3] 构建 voke.exe（Go，windows/amd64）=="
 mkdir -p "$BUILD_DIR"
 LDFLAGS="-s -w -H windowsgui"
-LDFLAGS="$LDFLAGS -X github.com/zyition/voke/poc/voke-go/internal/app.buildVersion=$VERSION"
+LDFLAGS="$LDFLAGS -X voke/internal/app.buildVersion=$VERSION"
 if [ -n "${VOKE_LOG_MAX_LINES:-}" ]; then
   if ! [[ "$VOKE_LOG_MAX_LINES" =~ ^[0-9]+$ ]] || [ "$VOKE_LOG_MAX_LINES" -le 0 ]; then
     echo "错误：VOKE_LOG_MAX_LINES 必须是正整数，当前为 '$VOKE_LOG_MAX_LINES'。" >&2
     exit 1
   fi
   echo "   日志行数上限 = $VOKE_LOG_MAX_LINES"
-  LDFLAGS="$LDFLAGS -X github.com/zyition/voke/poc/voke-go/internal/platform.logMaxLinesRaw=$VOKE_LOG_MAX_LINES"
+  LDFLAGS="$LDFLAGS -X voke/internal/platform.logMaxLinesRaw=$VOKE_LOG_MAX_LINES"
 else
   echo "   日志行数上限 = 9999（默认）"
 fi

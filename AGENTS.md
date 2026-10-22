@@ -3,7 +3,7 @@
 给人看的架构/上手看 [`README.md`](README.md)；当前架构看 [`docs/architecture.md`](docs/architecture.md)。
 本文件只写**非通用**的纪律与踩坑。正文一律简体中文。
 
-当前生产实现是 **`poc/voke-go/` 的 Go + mygo**。main 历史从首个 Go 提交起算；
+当前生产实现是仓库根目录的 **Go + mygo** 模块（`module voke`）。main 历史从首个 Go 提交起算；
 Rust/gpui 参考实现已归档到 **`legacy-rust` 分支与 `v0.1.x` tag**，不在当前工作树，
 也不参与 CI 与发版。Rust 时代文档在 [`docs/legacy/`](docs/legacy/README.md)；Go 注释里
 引用的 `voke-core/` / `voke-sys/` 路径与行号是迁移时的对照 oracle，对应 `legacy-rust` 分支。
@@ -14,7 +14,7 @@ Rust/gpui 参考实现已归档到 **`legacy-rust` 分支与 `v0.1.x` tag**，�
 - commit message 走 **Conventional Commits**：`feat:` / `fix:` / `perf:` / `refactor:` /
   `test:` / `docs:` 等英文前缀 + 中文描述。CHANGELOG 由 git-cliff 按前缀生成，
   `style|build|ci|chore|revert` 不会进 CHANGELOG。
-- **格式统一 `gofmt`**：提交前在 `poc/voke-go` 下跑 `gofmt -l .`（应为空）或
+- **格式统一 `gofmt`**：提交前在仓库根目录跑 `gofmt -l .`（应为空）或
   `gofmt -w`；CI 强制检查。不要顺手格式化与本次改动无关的文件。
 - **严禁编造 API**：mygo 签名查模块缓存
   `~/go/pkg/mod/github.com/egoist/mygo@<version>/` 或官网文档；Win32/标准库用
@@ -54,7 +54,6 @@ Rust/gpui 参考实现已归档到 **`legacy-rust` 分支与 `v0.1.x` tag**，�
 Go（当前主线，与 CI 同款）：
 
 ```bash
-cd poc/voke-go
 gofmt -l . && go vet ./... && go test -race -count=1 -shuffle=on ./...
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
   -tags mygo_noinspector -ldflags="-s -w -H windowsgui" -o /tmp/voke.exe .
@@ -75,7 +74,7 @@ Rust/gpui 参考实现已归档到 `legacy-rust` 分支与 `v0.1.x` tag；main �
 ## 发版流程
 
 推 `vX.Y.Z` tag 即触发 **Go 版**发版：`git tag v0.2.3 && git push origin v0.2.3` →
-`.github/workflows/release.yml` 在 windows-latest 用 Go 构建 `poc/voke-go`，出安装包
+`.github/workflows/release.yml` 在 windows-latest 用 Go 构建根目录模块，出安装包
 （`voke-setup-<ver>.exe`）与 portable zip（`voke-vX.Y.Z-windows-x86_64.zip`）；ubuntu job
 用 git-cliff 把本版本前置到 `CHANGELOG.md`（保留已归档版本的旧条目）并回推默认分支，
 建 GitHub Release 挂上两个产物。
@@ -83,7 +82,7 @@ Rust 时代的 CI / 发版流水线已随代码归档到 `legacy-rust` 分支；
 `.github/workflows/ci.yml`，发版为 `release.yml`。
 
 版本号以 **tag 为唯一事实来源**：release 构建用
-`-ldflags -X github.com/zyition/voke/poc/voke-go/internal/app.buildVersion=<ver>` 把版本注入
+`-ldflags -X voke/internal/app.buildVersion=<ver>` 把版本注入
 设置页「关于」（本地未注入显示「开发版」）；Go exe 的 VERSIONINFO 仍未注入（已知差距）。
 ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 `workflow_dispatch`
 只出 artifacts、不建 Release。
@@ -96,8 +95,9 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 
   `internal/platform/hotkey.go`、`internal/app/settings.go`。
 - 插件全局快捷键：无默认值，用户逐插件录制；只注册已启用插件，停用即注销。录制时
   主热键与所有插件热键统一挂起（否则旧组合被系统先吃掉），结束后重建。插件热键是
-  “直达/切换”而非显隐 toggle（隐藏仍归主热键 / Esc）——`internal/app/hotkeys.go`、
-  `internal/app/settings.go`。
+  “直达/切换”而非显隐 toggle（隐藏仍归主热键 / Esc），同时是“立即执行”：每次全新
+  进入插件，不读取也不覆盖主会话快照；主热键 / 托盘双击 / 二次启动才恢复主会话
+  （方案 C）——`internal/app/hotkeys.go`、`internal/app/session.go`、`internal/app/settings.go`。
 - 托盘：mygo `Tray`；左键双击显示面板，右键菜单；菜单是 `SetMenu` 快照，awake
   状态变化与面板显隐时重建——`internal/app/panel.go`。
 - 设置窗「关闭 = 程序化销毁」：`Window.Update` 里 `Destroy`，回收渲染资源——
@@ -109,7 +109,7 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 
   条（Wox 同款，设置窗打开时跳过）。
 - 日志容量：`%APPDATA%\voke\voke.log`，跨启动追加，超过上限从头部删一批
   （`max(1, N/10)`，默认 N=9999）。构建期注入：
-  `-ldflags -X github.com/zyition/voke/poc/voke-go/internal/platform.logMaxLinesRaw=20000`；
+  `-ldflags -X voke/internal/platform.logMaxLinesRaw=20000`；
   本地安装器脚本会把 `VOKE_LOG_MAX_LINES` 映射到该参数。逻辑在 `internal/logic/logcap`。
 - 剪贴板历史（`@c`）：内存态、不持久化；后台每 500ms 轮询 `GetClipboardSequenceNumber`，
   变化后回主线程经 mygo `Clipboard.Read` 采文本/HTML/RTF/PNG，跳过敏感标记与文件列表。
@@ -124,10 +124,12 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 
   `internal/app/elevated.go`、`internal/app/clipboard.go`。
 - 设置页热键录制必须用 `HandleInput`，不能用 `OnTextKey`：mygo 会把 Alt+字母/符号当作
   “会输入文本”的按键跳过 `OnTextKey`，导致这些组合录不到。
-- 窗口结束任务：窗口 provider 行尾操作 + `Ctrl+Shift+Delete`（输入框会消费 Delete，
-  必须在 `OnTextKey` 截住）。直接 `TerminateProcess` 窗口所属进程（不先关窗口，
+- 窗口动作：窗口 provider 行尾有「关闭窗口」（`WM_CLOSE`，等同点关闭按钮，应用可弹
+  保存确认，`Ctrl+Delete`）与「结束任务」（`Ctrl+Shift+Delete`；输入框会消费 Delete，
+  必须在 `OnTextKey` 截住）。结束任务直接 `TerminateProcess` 窗口所属进程（不先关窗口，
   托盘 / 后台应用也会退出）；自身 / 核心系统进程在 `platform/endtask.go` 拒绝。
-  结束的是窗口所属进程，子进程不递归。
+  结束的是窗口所属进程，子进程不递归。实现见 `providers/windows`、
+  `platform/window_windows.go`、`app/closewindow.go`、`app/endtask.go`。
 - 前缀冲突（C2）：触发串（Direct=前缀，Indirect=前缀+空格）双向互为前缀即冲突；
   默认二级前缀 `@b/@u/@t/@r`，`#` 归 picker。旧配置加载时只丢弃冲突项的 Prefix
   覆盖，设置页保存前同一套校验——`internal/logic/config/prefix.go`、
