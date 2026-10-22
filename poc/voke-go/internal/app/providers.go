@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/zyition/voke/poc/voke-go/internal/logic/appcfg"
+	"github.com/zyition/voke/poc/voke-go/internal/logic/cliphist"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/config"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/engine"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/frequency"
@@ -29,6 +30,7 @@ import (
 	"github.com/zyition/voke/poc/voke-go/internal/providers/awake"
 	"github.com/zyition/voke/poc/voke-go/internal/providers/base64"
 	"github.com/zyition/voke/poc/voke-go/internal/providers/calculator"
+	clipboardprovider "github.com/zyition/voke/poc/voke-go/internal/providers/clipboard"
 	"github.com/zyition/voke/poc/voke-go/internal/providers/random"
 	"github.com/zyition/voke/poc/voke-go/internal/providers/terminal"
 	"github.com/zyition/voke/poc/voke-go/internal/providers/timestamp"
@@ -101,6 +103,16 @@ func builtinDescriptors() []config.Descriptor {
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
+			// clipboard：`@c` 二级前缀、Indirect。历史数据只在内存，退出即清；
+			// 条数上限走顶层 `[clipboard] max_entries`，不占 provider Count（后者
+			// 上限 50，且历史本身已有自己的淘汰规则）。
+			ID: clipboardprovider.ID, Name: "剪贴板", Description: "剪贴板历史（文本 / 富文本 / 图片）",
+			Aliases:        []string{"clip", "nbt", "jqb"},
+			DefaultEnabled: true, DefaultIsGlobal: false,
+			DefaultPrefix: "@c", DefaultActivation: engine.Indirect,
+			DefaultWeight: 1.0, DefaultCount: 5,
+		},
+		{
 			ID: calculator.ID, Name: "计算器", Description: "算术表达式求值，如 1+1",
 			Aliases:        []string{"calc", "jsq", "c"},
 			DefaultEnabled: true, DefaultIsGlobal: false,
@@ -158,7 +170,23 @@ func builtinDescriptors() []config.Descriptor {
 // providers.Provider 契约的条目）分开：apps 走 panelstate 老路径、picker 是哨兵，
 // 都不进这张表。表里有的插件命中前缀后能真出结果；没有又非 apps = 未接入占位。
 func builtinProviders() *providers.Registry {
-	return providers.NewRegistry(base64.New(), uuid.New(), timestamp.New(), random.New(), calculator.New(), awakeProvider(), windowsProvider(), terminalProvider(), workspacesProvider())
+	return builtinProvidersWithClipboard(nil)
+}
+
+// builtinProvidersWithClipboard 是生产装配用的版本：剪贴板 provider 接真实历史
+// 快照（每次查询现取）。fetch=nil 时与 builtinProviders 等价（测试 / 非 Windows）。
+func builtinProvidersWithClipboard(fetch clipboardprovider.Fetcher) *providers.Registry {
+	return providers.NewRegistry(base64.New(), uuid.New(), timestamp.New(), random.New(), calculator.New(),
+		clipboardprovider.New(fetch, nil), awakeProvider(), windowsProvider(), terminalProvider(), workspacesProvider())
+}
+
+// clipboardFetch 返回剪贴板历史的只读快照闭包。st.hist 为 nil（未初始化 / 测试）
+// 时恒空，provider 行为与空数据源一致。
+func (st *appState) clipboardFetch() []cliphist.Item {
+	if st.hist == nil {
+		return nil
+	}
+	return st.hist.Items()
 }
 
 // awakeProvider 让 awake provider 反映 platform 的真实保持唤醒状态：active 时一级首条

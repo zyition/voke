@@ -9,6 +9,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/appcfg"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/appsmodel"
+	"github.com/zyition/voke/poc/voke-go/internal/logic/cliphist"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/config"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/engine"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/frequency"
@@ -120,6 +121,23 @@ type appState struct {
 	// GPU 设备类型归因加）：由 view.go 根元素的 Draw 回调在首帧绘制时
 	// 落位，见该处注释为何不能复用 shownOnce。
 	gpuDiagOnce bool
+	// hist 是剪贴板内存历史（主线程专用）。ready() 建，退出即清，不持久化。
+	hist *cliphist.Store
+	// clipSeq 是最近一次已处理的剪贴板序列号；程序化写入后同步置位，用于抑制
+	// 自己写剪贴板又被监控采集（例如「纯文本粘贴」降级出的新条目）。
+	clipSeq uint32
+	// clipTarget 是唤起面板前的前台窗口快照，粘贴时恢复它并发送按键。
+	clipTarget platform.ClipTarget
+	// clipNotice 是剪贴板操作的一次性提示（粘贴失败 / 置顶已满），显示在底部
+	// 提示行；clipNoticeAt 用于下次唤起时判断是否过期。
+	clipNotice   string
+	clipNoticeAt time.Time
+	// clipSuppress / clipSuppressUntil 是程序化写入的内容指纹与有效期。仅靠序列号
+	// 不够：Windows 的延迟渲染会让序列号在 OleSetClipboard 之后再次递增，若只对齐
+	// 一次，粘贴「纯文本」写回的降级内容会被当成一次新复制。有效期内读到相同内容
+	// 就跳过；内容不同则立即解除抑制（用户真复制了新东西）。
+	clipSuppress      platform.ClipPayload
+	clipSuppressUntil time.Time
 }
 
 // ready 在应用就绪后创建面板、注册热键、搭托盘。
@@ -157,9 +175,11 @@ func (st *appState) ready() {
 	// 防止长会话里不同 exe 路径把堆无限推高；隐藏 10s 后另裁到 64 条。
 	// 只主线程读写，见 internal/ui/iconcache.go。
 	st.icons = appui.NewIconCache()
-	// 已落地 provider 注册表 + 进程内频率表（装配一次）。局部变量 `providers` 遮蔽了
-	// 包名，故经 builtinProviders() 助手拿注册表。
-	st.pluginReg = builtinProviders()
+	// 剪贴板内存历史：条数上限来自顶层 `[clipboard] max_entries`，未写则默认 100。
+	st.hist = cliphist.New(clipboardMaxEntries(loaded))
+	// 已落地 provider 注册表 + 进程内频率表（装配一次）。剪贴板 provider 接
+	// 真实历史快照闭包；局部变量 `providers` 遮蔽了包名，故经助手函数拿注册表。
+	st.pluginReg = builtinProvidersWithClipboard(st.clipboardFetch)
 	applyProviderConfigs(providers, st.pluginReg) // 归一后的 weight/count/enabled 下发到实例
 	st.freq = loadFrequency()
 	st.model.Freq = st.freq // apps-only 全局排序吃频率加成（同一张 map，Record 就地自增）
@@ -265,6 +285,8 @@ func (st *appState) ready() {
 		st.filter()
 		st.refreshGlobalAgg() // apps 首次加载完成后，用最新 Results 重算全局合并行
 	})
+	// 剪贴板监控：后台只轮询序列号，变化后回主线程读内容并写入内存历史。
+	st.startClipboardWatcher()
 	platform.SnapshotMem("启动")
 	log.Printf("voke 就绪（版本 %s，热键 %s）", aboutVersion(), showHotkey)
 	// 启动自检（对照生产 WhenReady 里的 VOKe_SELFTEST 分支）：env=1 时跑一轮进程内关键
@@ -348,6 +370,27 @@ func (st *appState) ready() {
 // 实测留 V5。
 func (st *appState) showPanel() {
 	st.stopIconTrimTimer()
+	// 唤起前记住前台窗口（剪贴板历史「粘贴」要回到这里）。只在面板原本不可见时
+	// 捕获：重复唤起 / 第二实例通知不能把面板自己当成目标。托盘点击时前台可能
+	// 仍是上一次的应用（任务栏通常不抢前台），捕获不到有效目标时粘贴会回退为
+	// 「已复制，请手动粘贴」。
+	if !st.panel.IsVisible() {
+		t := platform.ForegroundTarget()
+		own := t.Hwnd == st.panel.NativeHandle() ||
+			(st.settings != nil && !st.settings.closed && t.Hwnd == st.settings.win.NativeHandle())
+		switch t.Class {
+		case "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "NotifyIconOverflowWindow", "Progman", "WorkerW":
+			own = true // 托盘 / 桌面：不是可粘贴的应用窗口
+		}
+		if own {
+			st.clipTarget = platform.ClipTarget{}
+		} else if t.Valid() {
+			st.clipTarget = t
+		}
+	}
+	if st.clipNotice != "" && !st.clipNoticeAt.IsZero() && time.Since(st.clipNoticeAt) > clipNoticeTTL {
+		st.clipNotice = ""
+	}
 	d := mygo.Screen.PrimaryDisplay()
 	w, h := st.panel.Size()
 	x, y := geometry.PanelTopLeft(d.WorkArea.X, d.WorkArea.Y, d.WorkArea.Width, d.WorkArea.Height, w, h)

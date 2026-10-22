@@ -41,6 +41,13 @@ type input struct {
 	_   [8]byte // 补齐到 MOUSEINPUT 的联合体尺寸
 }
 
+// 编译期钉住 x64 INPUT 的 40 字节布局（SendInput 按 cbSize 解释数组，错一字节
+// 就会静默丢掉按键）。两条断言一上一下，任何方向偏差都直接编译失败。
+var (
+	_ = [unsafe.Sizeof(input{}) - 40]byte{}
+	_ = [40 - unsafe.Sizeof(input{})]byte{}
+)
+
 var (
 	procGetClipboardSequenceNumber = user32.NewProc("GetClipboardSequenceNumber")
 	procGetForegroundWindow        = user32.NewProc("GetForegroundWindow")

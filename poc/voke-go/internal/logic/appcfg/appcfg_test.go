@@ -230,3 +230,39 @@ func TestEncodeFromTOMLRoundtripAllProviderFields(t *testing.T) {
 		t.Errorf("base64 覆盖往返错：%+v", base)
 	}
 }
+
+func TestClipboardMaxEntriesRoundtrip(t *testing.T) {
+	// 未写：HasClipboardMaxEntries=false，上层回落默认 100。
+	plain, err := FromTOML([]byte("hotkey = \"ctrl+space\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.HasClipboardMaxEntries || plain.ClipboardMaxEntries != 0 {
+		t.Fatalf("未写 [clipboard] 时不应有值：%+v", plain)
+	}
+
+	// 写入 → 回读：值原样保留。
+	data, err := Encode(Top{Hotkey: "ctrl+space", ClipboardMaxEntries: 250}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "[clipboard]") || !strings.Contains(string(data), "max_entries = 250") {
+		t.Fatalf("落盘应有 [clipboard] max_entries：\n%s", data)
+	}
+	back, err := FromTOML(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !back.HasClipboardMaxEntries || back.ClipboardMaxEntries != 250 {
+		t.Fatalf("回读值不对：%+v", back)
+	}
+
+	// 0 = 不写该节（迁移 / 非设置页路径不凭空加配置）。
+	data, err = Encode(Top{Hotkey: "ctrl+space"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "[clipboard]") {
+		t.Fatalf("MaxEntries=0 时不应写 [clipboard]：\n%s", data)
+	}
+}

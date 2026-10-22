@@ -129,6 +129,12 @@ func TestBuildPrefixTableHappyPath(t *testing.T) {
 			Prefix: "@r", Activation: engine.Indirect, Weight: 1.0, Count: 5,
 		},
 		{
+			ID: "clipboard", Name: "剪贴板", Description: "剪贴板历史（文本 / 富文本 / 图片）",
+			Aliases: []string{"clip", "nbt", "jqb"},
+			Enabled: true, IsGlobal: false,
+			Prefix: "@c", Activation: engine.Indirect, Weight: 1.0, Count: 5,
+		},
+		{
 			ID: "calculator", Name: "计算器", Description: "算术表达式求值，如 1+1",
 			Aliases: []string{"calc", "jsq", "c"},
 			Enabled: true, IsGlobal: false,
@@ -165,14 +171,14 @@ func TestBuildPrefixTableHappyPath(t *testing.T) {
 	if !reflect.DeepEqual(cfg.Providers, wantProviders) {
 		t.Errorf("归一后的 ProviderConfig 与 Descriptor 默认值不一致\n得到：%+v\n想要：%+v", cfg.Providers, wantProviders)
 	}
-	if got := strings.Join(cfg.IDs(), ","); got != "apps,"+wantPickerID+",base64,uuid,timestamp,random,calculator,awake,windows,terminal,workspaces" {
-		t.Errorf("注册 id 序列（= 表优先级 = picker 列表顺序）= %q，想要 \"apps,%s,base64,uuid,timestamp,random,calculator,awake,windows,terminal,workspaces\"", got, wantPickerID)
+	if got := strings.Join(cfg.IDs(), ","); got != "apps,"+wantPickerID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces" {
+		t.Errorf("注册 id 序列（= 表优先级 = picker 列表顺序）= %q，想要 \"apps,%s,base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces\"", got, wantPickerID)
 	}
 	if got := strings.Join(cfg.Providers[0].Aliases, ","); got != wantAppsAliases {
 		t.Errorf("apps 别名 = %q，想要 %q（别名走 bonus 通道，改掉会让 yy/app 命中失效）", got, wantAppsAliases)
 	}
-	if len(cfg.Enabled()) != 11 {
-		t.Errorf("启用插件数 = %d，想要 11（apps/picker/base64/uuid/timestamp/random/calculator/awake/windows/terminal/workspaces）", len(cfg.Enabled()))
+	if len(cfg.Enabled()) != 12 {
+		t.Errorf("启用插件数 = %d，想要 12（apps/picker/base64/uuid/timestamp/random/clipboard/calculator/awake/windows/terminal/workspaces）", len(cfg.Enabled()))
 	}
 
 	// 三处「哪一处坏了要命」单独再钉一遍（DeepEqual 只说「不一样」）：
@@ -201,13 +207,14 @@ func TestBuildPrefixTableHappyPath(t *testing.T) {
 		{Prefix: "@u", PluginID: "uuid", Activation: engine.Indirect},
 		{Prefix: "@t", PluginID: "timestamp", Activation: engine.Indirect},
 		{Prefix: "@r", PluginID: "random", Activation: engine.Indirect},
+		{Prefix: "@c", PluginID: "clipboard", Activation: engine.Indirect},
 		{Prefix: "=", PluginID: "calculator", Activation: engine.Direct},
 	}
 	if !reflect.DeepEqual(table, wantTable) {
 		t.Errorf("engine.Table 全量内容不一致\n得到：%+v\n想要：%+v", table, wantTable)
 	}
-	if len(table) != 6 {
-		t.Errorf("前缀表条目数 = %d，想要 6（picker/base64/uuid/timestamp/random/calculator；apps 无前缀不进表）", len(table))
+	if len(table) != 7 {
+		t.Errorf("前缀表条目数 = %d，想要 7（picker/base64/uuid/timestamp/random/clipboard/calculator；apps 无前缀不进表）", len(table))
 	}
 	var prefixes []string
 	for _, e := range table {
@@ -216,8 +223,8 @@ func TestBuildPrefixTableHappyPath(t *testing.T) {
 			t.Errorf("前缀表里出现了 apps 条目 {Prefix:%q}：apps 必须无前缀，否则裸查询词会被劫持（Global 回归）", e.Prefix)
 		}
 	}
-	if got := strings.Join(prefixes, ","); got != "#,@b,@u,@t,@r,=" {
-		t.Errorf("前缀集合（表序）= %q，想要 \"#,@b,@u,@t,@r,=\"", got)
+	if got := strings.Join(prefixes, ","); got != "#,@b,@u,@t,@r,@c,=" {
+		t.Errorf("前缀集合（表序）= %q，想要 \"#,@b,@u,@t,@r,@c,=\"", got)
 	}
 
 	// ── 这张真实表喂给 engine 的判定结果（装配产物的可用性闭环）──
@@ -325,7 +332,7 @@ func TestBuiltinDescriptorsInvariants(t *testing.T) {
 		}
 	}
 
-	if got := strings.Join(prefixed, ","); got != "#,@b,@u,@t,@r,=" {
+	if got := strings.Join(prefixed, ","); got != "#,@b,@u,@t,@r,@c,=" {
 		t.Errorf("带前缀的 Descriptor 的前缀序列 = %q，想要 \"#,@b,@u,@t,@r=\"（picker #、base64 @b、uuid @u、timestamp @t、random @r、calculator =）", got)
 	}
 
@@ -380,7 +387,7 @@ func TestBuiltinDescriptorsReturnFreshSlice(t *testing.T) {
 	ds := builtinDescriptors()
 	// 前置形状（真实形状由 Invariants / HappyPath 两条钉）：这里要索引 ds[0]，
 	// 条数不对就干净地停下，别以 panic 的形式把整个测试二进制带走。
-	if len(ds) != 11 || len(ds[0].Aliases) != 2 {
+	if len(ds) != 12 || len(ds[0].Aliases) != 2 {
 		t.Fatalf("注册表形状与期望不符（%d 条：%s），本用例的写入点无法定位", len(ds), strings.Join(idsOf(ds), ","))
 	}
 	ds[0].ID = "被改坏的 id"
@@ -389,7 +396,7 @@ func TestBuiltinDescriptorsReturnFreshSlice(t *testing.T) {
 	ds[0].Aliases[0] = "被改坏的别名"
 
 	again := builtinDescriptors()
-	if len(again) != 11 || len(again[0].Aliases) != 2 {
+	if len(again) != 12 || len(again[0].Aliases) != 2 {
 		t.Fatalf("第二次取到的注册表形状不对（%d 条：%s）", len(again), strings.Join(idsOf(again), ","))
 	}
 	if again[0].ID != wantAppsID || again[0].Name != wantAppsName ||
@@ -400,7 +407,7 @@ func TestBuiltinDescriptorsReturnFreshSlice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("污染后 buildPrefixTable 报错（注册表被写脏了）：%v", err)
 	}
-	if len(table) != 6 || len(cfg.Providers) != 11 {
+	if len(table) != 7 || len(cfg.Providers) != 12 {
 		t.Fatalf("污染后装配产物条数不对：table=%+v providers=%+v", table, cfg.Providers)
 	}
 	if table[0].Prefix != "#" || cfg.Providers[0].Name != wantAppsName {

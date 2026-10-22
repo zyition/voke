@@ -110,6 +110,11 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 
   （`max(1, N/10)`，默认 N=9999）。构建期注入：
   `-ldflags -X github.com/zyition/voke/poc/voke-go/internal/platform.logMaxLinesRaw=20000`；
   本地安装器脚本会把 `VOKE_LOG_MAX_LINES` 映射到该参数。逻辑在 `internal/logic/logcap`。
+- 剪贴板历史（`@c`）：内存态、不持久化；后台每 500ms 轮询 `GetClipboardSequenceNumber`，
+  变化后回主线程经 mygo `Clipboard.Read` 采文本/HTML/RTF/PNG，跳过敏感标记与文件列表。
+  粘贴写回后先恢复唤起前的窗口，再发 `Ctrl+V`（终端用 `Shift+Insert`）；失败时保留面板并
+  提示手动粘贴。历史存储 `internal/logic/cliphist`，采集/按键 `internal/platform/clipboard*`，
+  监控与自我写入抑制 `internal/app/clipboard.go`。
 - 前缀冲突（C2）：触发串（Direct=前缀，Indirect=前缀+空格）双向互为前缀即冲突；
   默认二级前缀 `@b/@u/@t/@r`，`#` 归 picker。旧配置加载时只丢弃冲突项的 Prefix
   覆盖，设置页保存前同一套校验——`internal/logic/config/prefix.go`、

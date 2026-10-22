@@ -37,7 +37,11 @@ type Loaded struct {
 	Autostart    bool
 	HasAutostart bool
 	Theme        Theme // 未写 / 非法 → 空串（上层回落 System）
-	Overrides    []config.UserOverride
+	// ClipboardMaxEntries 是剪贴板历史的普通条目上限；HasClipboardMaxEntries=false
+	// 表示没写，由调用方回落 cliphist.DefaultMaxEntries。
+	ClipboardMaxEntries    int
+	HasClipboardMaxEntries bool
+	Overrides              []config.UserOverride
 }
 
 // providerPatch 是单个 provider 的部分覆盖（指针字段：nil = 没写；omitempty 让没写的不落盘）。
@@ -57,7 +61,13 @@ type configFile struct {
 	Hotkey    *string                  `json:"hotkey" toml:"hotkey"`
 	Autostart *bool                    `json:"autostart" toml:"autostart"`
 	Theme     *string                  `json:"theme" toml:"theme"`
+	Clipboard *clipboardPatch          `json:"clipboard,omitempty" toml:"clipboard"`
 	Providers map[string]providerPatch `json:"providers" toml:"providers"`
+}
+
+// clipboardPatch 是 `[clipboard]` 表（目前只有历史条数上限）。
+type clipboardPatch struct {
+	MaxEntries *int `json:"max_entries,omitempty" toml:"max_entries,omitempty"`
 }
 
 // FromJSON 解码配置字节。坏 JSON → 返回 error（调用方据此回落默认，对照 Rust
@@ -99,6 +109,9 @@ func decodeFile(f configFile) Loaded {
 		if t, ok := normalizeTheme(*f.Theme); ok {
 			out.Theme = t
 		}
+	}
+	if f.Clipboard != nil && f.Clipboard.MaxEntries != nil {
+		out.ClipboardMaxEntries, out.HasClipboardMaxEntries = *f.Clipboard.MaxEntries, true
 	}
 
 	// provider 覆盖按 id 稳定序输出（map 无序 → 排序保证 Normalize 的警告 / 错误确定）。
@@ -159,6 +172,9 @@ type Top struct {
 	Hotkey    string
 	Autostart bool
 	Theme     Theme
+	// ClipboardMaxEntries > 0 时落 `[clipboard] max_entries`；0 = 不写该节
+	// （旧配置迁移 / 非设置页路径保持文件原样）。
+	ClipboardMaxEntries int
 }
 
 // Encode 把顶层设置 + provider 覆盖序列化回 **TOML**（与生产 config.toml 同形：
@@ -175,6 +191,10 @@ func Encode(top Top, overrides []config.UserOverride) ([]byte, error) {
 		Autostart: &autostart,
 		Theme:     &themeStr,
 		Providers: map[string]providerPatch{},
+	}
+	if top.ClipboardMaxEntries > 0 {
+		maxEntries := top.ClipboardMaxEntries
+		file.Clipboard = &clipboardPatch{MaxEntries: &maxEntries}
 	}
 	for _, ov := range overrides {
 		patch := providerPatch{

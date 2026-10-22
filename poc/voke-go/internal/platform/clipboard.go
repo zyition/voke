@@ -9,15 +9,23 @@
 package platform
 
 import (
+	"bytes"
 	"errors"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
 )
 
-// rtfFormat 是 Windows 的 CF_RTF 注册格式名（Word / WordPad / 浏览器写富文本用的名字）。
-// mygo 对未内建的格式按名字注册与读取，故读写两端都用这一个常量。
-const rtfFormat transfer.Format = "Rich Text Format"
+// RTF 的读写格式名在 mygo 0.6.2 里不对称（已核对 internal/windows/surface_drag.go）：
+//   - 读：oleFormat 把原生 "Rich Text Format" 归一成 transfer.Format("text/rtf")；
+//   - 写：setTransferProviders 对未内建格式按**字符串本身** registerClipboardFormat，
+//     所以要写原生 CF_RTF 必须传 "Rich Text Format"。
+//
+// 两端各用一个常量，别合并——合并任一侧都会得到一个对方看不见的私有格式。
+const (
+	rtfReadFormat  transfer.Format = "text/rtf"
+	rtfWriteFormat transfer.Format = "Rich Text Format"
+)
 
 // clipExcludeFormat 是密码管理器等敏感来源设置的「不要进剪贴板历史」标记；
 // 只要它出现（不论值）就跳过本次采集。
@@ -38,6 +46,12 @@ type ClipPayload struct {
 // Empty 表示没有任何可保存的表示。
 func (p ClipPayload) Empty() bool {
 	return p.Text == "" && len(p.HTML) == 0 && len(p.RTF) == 0 && len(p.PNG) == 0
+}
+
+// Equal 比较两份内容的全部表示（用于识别「这次序列号变化就是自己刚写的」）。
+func (p ClipPayload) Equal(q ClipPayload) bool {
+	return p.Text == q.Text && bytes.Equal(p.HTML, q.HTML) &&
+		bytes.Equal(p.RTF, q.RTF) && bytes.Equal(p.PNG, q.PNG)
 }
 
 // ReadClipboardPayload 读取当前系统剪贴板的文本 / HTML / RTF / PNG 四种表示。
@@ -65,21 +79,24 @@ func ReadClipboardPayload() (ClipPayload, bool) {
 		}
 	}
 
-	data, err := mygo.Clipboard.Read(transfer.Text, transfer.HTML, rtfFormat, transfer.PNG)
-	if err != nil {
-		return ClipPayload{}, false
-	}
+	// 逐格式读取而不是一次 Read 全部：任一表示损坏 / 超大（如畸形 CF_HTML、
+	// 超过 mygo 64MiB 上限的位图）时，只丢那一种格式，不连累文本等其它表示。
 	var p ClipPayload
-	if b, err := data.Read(transfer.Text); err == nil {
+	if b, err := mygo.Clipboard.ReadFormat(transfer.Text); err == nil {
 		p.Text = string(b)
 	}
-	if b, err := data.Read(transfer.HTML); err == nil {
+	if b, err := mygo.Clipboard.ReadFormat(transfer.HTML); err == nil {
 		p.HTML = b
 	}
-	if b, err := data.Read(rtfFormat); err == nil {
+	// 两个 RTF 名字都试：别人的 CF_RTF 读作 text/rtf，而本程序自己写回时
+	// 数据键是 "Rich Text Format"（见上面的不对称说明）。只试一个会在
+	// 「粘贴富文本后监控回读」时丢掉 RTF，导致自我写入抑制识别失败。
+	if b, err := mygo.Clipboard.ReadFormat(rtfReadFormat); err == nil {
+		p.RTF = b
+	} else if b, err := mygo.Clipboard.ReadFormat(rtfWriteFormat); err == nil {
 		p.RTF = b
 	}
-	if b, err := data.Read(transfer.PNG); err == nil {
+	if b, err := mygo.Clipboard.ReadFormat(transfer.PNG); err == nil {
 		p.PNG = b
 	}
 	if p.Empty() {
@@ -104,7 +121,7 @@ func containsFormat(formats []transfer.Format, want transfer.Format) bool {
 func WriteClipboardPayload(p ClipPayload) error {
 	var reps []transfer.Representation
 	if len(p.RTF) > 0 {
-		reps = append(reps, transfer.Bytes(rtfFormat, p.RTF))
+		reps = append(reps, transfer.Bytes(rtfWriteFormat, p.RTF))
 	}
 	if len(p.HTML) > 0 {
 		reps = append(reps, transfer.Bytes(transfer.HTML, p.HTML))

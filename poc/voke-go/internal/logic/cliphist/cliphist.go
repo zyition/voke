@@ -357,9 +357,12 @@ func thumbnail(data []byte) ([]byte, int, int, bool) {
 	if err != nil {
 		return nil, 0, 0, false
 	}
+	// 缩略图统一放进 ThumbSize 的**正方形透明画布**（等比缩放后居中），
+	// 这样 UI 按固定 24×24 DIP 渲染时不会被拉伸（长图、宽图都不变形）。
 	w, h := scaledSize(cfg.Width, cfg.Height, ThumbSize)
-	dst := image.NewRGBA(image.Rect(0, 0, w, h))
-	xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, img.Bounds(), xdraw.Over, nil)
+	dst := image.NewRGBA(image.Rect(0, 0, ThumbSize, ThumbSize))
+	rect := image.Rect((ThumbSize-w)/2, (ThumbSize-h)/2, (ThumbSize+w)/2, (ThumbSize+h)/2)
+	xdraw.CatmullRom.Scale(dst, rect, img, img.Bounds(), xdraw.Over, nil)
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, dst); err != nil {
 		return nil, 0, 0, false

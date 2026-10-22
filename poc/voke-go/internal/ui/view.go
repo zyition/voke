@@ -54,10 +54,17 @@ type ViewInput struct {
 
 	// OnEsc / OnMove / OnOpen / OnQueryChanged 是键盘路由落点（原 `st.onEsc` /
 	// `st.moveSelection` / `st.open` / `st.onQueryChanged`）。OnMove 收 delta（↓=+1 / ↑=-1）。
-	OnEsc          func()
-	OnMove         func(delta int)
-	OnOpen         func()
-	OnQueryChanged func()
+	OnEsc  func()
+	OnMove func(delta int)
+	OnOpen func()
+	// OnOpenPlain 是 Ctrl+Enter：剪贴板插件里把当前条目按纯文本粘贴。返回 true
+	// 表示已消费；false（其它模式）时回落普通 OnOpen，保持原有 Ctrl+Enter 行为。
+	OnOpenPlain func() bool
+	// OnPinToggle / OnDeleteSelected 是 Ctrl+Shift+P / Ctrl+Shift+D，同样只对
+	// 剪贴板插件生效（main 侧判定），UI 只转交按键。
+	OnPinToggle      func()
+	OnDeleteSelected func()
+	OnQueryChanged   func()
 	// OnBackspaceAtEmpty 在「输入框已空时按 Backspace」触发（经输入框 OnTextKey 捕获，
 	// 非空时交编辑引擎正常删字符）。返回 true 表示已被消费（逐级回退），编辑器不再处理；
 	// 退到顶级应原地不动、绝不关面板。这样回退链单一由 Backspace 按键驱动，无「删到空的
@@ -175,6 +182,15 @@ func View(c *goui.Context, in ViewInput) {
 	if c.Shortcut(goui.Ctrl, goui.KeyComma) {
 		in.OnOpenSettings()
 	}
+	// 剪贴板插件：Ctrl+Shift+P / Ctrl+Shift+D 置顶 / 删除。
+	// Ctrl+Enter 被输入框当成一次提交（Submitted），在下面 input.Submitted()
+	// 分支里按按住的修饰键区分——不在窗口级再挂一遍，避免两路都触发。
+	if c.Shortcut(goui.Ctrl|goui.Shift, goui.KeyP) {
+		in.OnPinToggle()
+	}
+	if c.Shortcut(goui.Ctrl|goui.Shift, goui.KeyD) {
+		in.OnDeleteSelected()
+	}
 	// Ctrl+Q 退出（调试期便利快捷键，生产 voke 无此键）。
 	c.OnShortcut(goui.Cmd, goui.KeyQ, in.OnQuit)
 
@@ -238,7 +254,13 @@ func View(c *goui.Context, in ViewInput) {
 				in.OnQueryChanged()
 			}
 			if input.Submitted() {
-				in.OnOpen()
+				// 输入框会吞掉 Enter（含组合键），提交时按当前按住的修饰键区分：
+				// Ctrl+Enter = 纯文本粘贴（只有剪贴板插件消费），其余仍是普通打开。
+				if c.Modifiers()&goui.Ctrl != 0 && in.OnOpenPlain != nil && in.OnOpenPlain() {
+					// 剪贴板插件已消费（纯文本粘贴）。
+				} else {
+					in.OnOpen()
+				}
 			}
 		})
 		goui.Divider(c)

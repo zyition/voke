@@ -145,8 +145,9 @@ func TestImageThumbnailAndPlainAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Width > ThumbSize || cfg.Height > ThumbSize {
-		t.Fatalf("缩略图尺寸 %dx%d 超过 %d", cfg.Width, cfg.Height, ThumbSize)
+	if cfg.Width != ThumbSize || cfg.Height != ThumbSize {
+		t.Fatalf("缩略图应为 %d×%d 正方形画布（等比居中，避免 UI 拉伸），得到 %dx%d",
+			ThumbSize, ThumbSize, cfg.Width, cfg.Height)
 	}
 	if !it.HasPlainAction() {
 		t.Fatal("富文本/图片 + 文本应显示纯文本粘贴")

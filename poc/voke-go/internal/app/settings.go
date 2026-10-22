@@ -30,6 +30,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/appcfg"
+	"github.com/zyition/voke/poc/voke-go/internal/logic/cliphist"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/config"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/engine"
 	"github.com/zyition/voke/poc/voke-go/internal/platform"
@@ -83,11 +84,12 @@ type providerEdit struct {
 // settingsWindow 是设置窗的绑定态（只在主线程、只在窗口存活期读写）。theme 存的是
 // Select 显示的中文标签，save 时经 themeCode 映射回 appcfg 的码值。
 type settingsWindow struct {
-	win       *mygo.Window
-	hotkey    string
-	autostart bool
-	theme     string
-	edits     []providerEdit
+	win          *mygo.Window
+	hotkey       string
+	autostart    bool
+	theme        string
+	clipboardMax float64 // 剪贴板历史上限（1–1000），落盘前转 int
+	edits        []providerEdit
 	// closed 防重复进入销毁流程：OnClose 与「完成」按钮可能先后触发；销毁本身
 	// 经 Window.Update 延到当前帧之后执行。
 	closed bool
@@ -168,6 +170,7 @@ func (st *appState) seedSettings(s *settingsWindow) {
 	}
 	s.autostart = st.cfg.Autostart
 	s.theme = themeLabel(st.cfg.Theme)
+	s.clipboardMax = float64(clipboardMaxEntries(st.cfg))
 	s.edits = s.edits[:0]
 	for _, p := range st.providers.Providers {
 		s.edits = append(s.edits, providerEdit{
@@ -376,6 +379,13 @@ func (st *appState) settingsView(c *ui.Context) {
 								st.applySettings()
 							}
 						})
+						ui.Field(c, "剪贴板历史条数", func() {
+							ui.Text(c, "内存中保留的普通条目上限（1–1000，置顶 10 条不计入）").
+								FontSize(theme.HintSize).TextColor(t.TextMuted).Grow(1)
+							if ui.NumberInput(c, &s.clipboardMax, 1, 1000, 1).Changed() {
+								st.applySettings()
+							}
+						})
 					})
 				})
 
@@ -506,11 +516,25 @@ func (st *appState) applySettings() {
 		s.autostart = autostart
 	}
 
-	top := appcfg.Top{Hotkey: hotkey, Autostart: autostart, Theme: themeCode(s.theme)}
+	clipMax := int(s.clipboardMax)
+	if clipMax < cliphist.MinMaxEntries {
+		clipMax = cliphist.MinMaxEntries
+	}
+	if clipMax > cliphist.MaxMaxEntries {
+		clipMax = cliphist.MaxMaxEntries
+	}
+	top := appcfg.Top{Hotkey: hotkey, Autostart: autostart, Theme: themeCode(s.theme), ClipboardMaxEntries: clipMax}
 
 	if err := saveConfig(top, overrides); err != nil {
 		log.Printf("voke 写设置失败：%v", err)
 		return
+	}
+	// 历史上限即时生效：超出新上限的普通条目当场淘汰（置顶不计入）。
+	if st.hist != nil {
+		st.hist.SetMaxEntries(clipMax)
+		if st.isClipboardPlugin() {
+			st.refreshClipboardRows()
+		}
 	}
 	// 重载：插件启用 / 前缀近即时生效，并把新 loaded 回存到 st.cfg（下次 seed 一致）。
 	st.reloadConfigs()

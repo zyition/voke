@@ -314,18 +314,19 @@ func TestBuildPrefixTableShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildPrefixTable 失败：%v", err)
 	}
-	// apps 无前缀 → BuildTable 不为它生成条目；表里有 picker(#)/base64(@b)/uuid(@u)/timestamp(@t)/random(@r)/calculator(=) 六条，表序即优先级。
-	if len(table) != 6 ||
+	// apps 无前缀 → BuildTable 不为它生成条目；表里有 picker(#)/base64(@b)/uuid(@u)/timestamp(@t)/random(@r)/clipboard(@c)/calculator(=) 七条，表序即优先级。
+	if len(table) != 7 ||
 		table[0] != (engine.PrefixEntry{Prefix: "#", PluginID: engine.PickerPluginID, Activation: engine.Direct}) ||
 		table[1] != (engine.PrefixEntry{Prefix: "@b", PluginID: "base64", Activation: engine.Indirect}) ||
 		table[2] != (engine.PrefixEntry{Prefix: "@u", PluginID: "uuid", Activation: engine.Indirect}) ||
 		table[3] != (engine.PrefixEntry{Prefix: "@t", PluginID: "timestamp", Activation: engine.Indirect}) ||
 		table[4] != (engine.PrefixEntry{Prefix: "@r", PluginID: "random", Activation: engine.Indirect}) ||
-		table[5] != (engine.PrefixEntry{Prefix: "=", PluginID: "calculator", Activation: engine.Direct}) {
-		t.Errorf("前缀表 = %+v，想要六条 [{# __picker Direct}, {@b base64 Indirect}, {@u uuid Indirect}, {@t timestamp Indirect}, {@r random Indirect}, {= calculator Direct}]", table)
+		table[5] != (engine.PrefixEntry{Prefix: "@c", PluginID: "clipboard", Activation: engine.Indirect}) ||
+		table[6] != (engine.PrefixEntry{Prefix: "=", PluginID: "calculator", Activation: engine.Direct}) {
+		t.Errorf("前缀表 = %+v，想要七条 [{# __picker Direct}, {@b base64 Indirect}, {@u uuid Indirect}, {@t timestamp Indirect}, {@r random Indirect}, {@c clipboard Indirect}, {= calculator Direct}]", table)
 	}
-	if got := strings.Join(cfg.IDs(), ","); got != "apps,__picker,base64,uuid,timestamp,random,calculator,awake,windows,terminal,workspaces" {
-		t.Errorf("注册 id 序列（注册顺序）= %q，想要 \"apps,__picker,base64,uuid,timestamp,random,calculator,awake,windows,terminal,workspaces\"", got)
+	if got := strings.Join(cfg.IDs(), ","); got != "apps,__picker,base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces" {
+		t.Errorf("注册 id 序列（注册顺序）= %q，想要 \"apps,__picker,base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces\"", got)
 	}
 	apps, ok := cfg.Lookup(wantAppsID)
 	if !ok {
@@ -416,11 +417,11 @@ func TestTypingPickerPrefixEntersPluginPicker(t *testing.T) {
 
 	wantState(t, st, "打 #", engine.PluginPicker, "", "", "")
 	wantToken(t, st, "打 #", wantPickerPrefix)
-	if got := rowIDs(st.pickerRows); got != wantAppsID+",base64,uuid,timestamp,random,calculator,awake,windows,terminal,workspaces" {
-		t.Errorf("picker 列表 = %q，想要 %q（已启用插件 apps+base64+uuid+timestamp，picker 哨兵自己不算候选）", got, wantAppsID+",base64,uuid,timestamp,random,calculator,awake,windows,terminal,workspaces")
+	if got := rowIDs(st.pickerRows); got != wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces" {
+		t.Errorf("picker 列表 = %q，想要 %q（已启用插件 apps+base64+uuid+timestamp，picker 哨兵自己不算候选）", got, wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces")
 	}
-	if len(st.pickerRows) != 10 {
-		t.Fatalf("picker 列表行数 = %d，想要 10（下面的行内容断言按首行=apps 写死）", len(st.pickerRows))
+	if len(st.pickerRows) != 11 {
+		t.Fatalf("picker 列表行数 = %d，想要 11（下面的行内容断言按首行=apps 写死）", len(st.pickerRows))
 	}
 	if r := st.pickerRows[0]; r.Name != wantAppsName || r.Description != wantAppsDesc {
 		t.Errorf("picker 首行 = %+v，想要 {%s %s}", r, wantAppsName, wantAppsDesc)
@@ -449,7 +450,7 @@ func TestRankPluginsUsesBothScoringChannels(t *testing.T) {
 		want  string
 		why   string
 	}{
-		{"", wantAppsID + ",base64,uuid,timestamp,random,calculator,awake,windows,terminal,workspaces", "空过滤词不过滤任何行（十个已启用插件都列出）"},
+		{"", wantAppsID + ",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces", "空过滤词不过滤任何行（十一个已启用插件都列出）"},
 		{"yy", wantAppsID, "别名 yy 全等 → TierExact"},
 		{"app", wantAppsID + ",awake", "apps 别名 app 全等在前；awake 经别名 a 前缀 bonus 托底在后"},
 		{"yingyong", wantAppsID, "名称全拼走 fuzzy 通道命中"},
@@ -511,8 +512,8 @@ func TestPickerEnterThenAppsSearchEqualsGlobal(t *testing.T) {
 	st.onEmptyBackspace() // 空 + Backspace → PluginPicker
 	wantState(t, st, "空退 picker", engine.PluginPicker, "", "", "")
 	wantToken(t, st, "空退 picker", wantPickerPrefix)
-	if got := rowIDs(st.pickerRows); got != wantAppsID+",base64,uuid,timestamp,random,calculator,awake,windows,terminal,workspaces" {
-		t.Errorf("回 picker 后列表 = %q，想要 %q", got, wantAppsID+",base64,uuid,timestamp,random,calculator,awake,windows,terminal,workspaces")
+	if got := rowIDs(st.pickerRows); got != wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces" {
+		t.Errorf("回 picker 后列表 = %q，想要 %q", got, wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces")
 	}
 	typeInto(st, "z")     // picker 打过滤词
 	typeInto(st, "")      // 删空：停在 PluginPicker 空
@@ -613,8 +614,8 @@ func TestBackspaceEmptiesThenStepsDown(t *testing.T) {
 	st.onEmptyBackspace()
 	wantState(t, st, "空退 picker", engine.PluginPicker, "", "", "")
 	wantToken(t, st, "空退 picker", wantPickerPrefix)
-	if got := rowIDs(st.pickerRows); got != wantAppsID+",base64,uuid,timestamp,random,calculator,awake,windows,terminal,workspaces" {
-		t.Errorf("插件态空退后 picker 列表 = %q，想要 %q", got, wantAppsID+",base64,uuid,timestamp,random,calculator,awake,windows,terminal,workspaces")
+	if got := rowIDs(st.pickerRows); got != wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces" {
+		t.Errorf("插件态空退后 picker 列表 = %q，想要 %q", got, wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces")
 	}
 
 	// 子模式（fake）：删空停在子模式，再空 Backspace 退插件第一级（清 SubMode、留 PluginID）。
@@ -652,7 +653,7 @@ func TestBackspaceAfterPickerEntryStartsEmpty(t *testing.T) {
 	// 输入框空时的 Backspace 由 ui 层 OnTextKey 调到 onEmptyBackspace。
 	st.onEmptyBackspace()
 	wantState(t, st, "空退 picker", engine.PluginPicker, "", "", "")
-	if got, want := rowIDs(st.pickerRows), "apps,base64,uuid,timestamp,random,calculator,awake,windows,terminal,workspaces"; got != want {
+	if got, want := rowIDs(st.pickerRows), "apps,base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces"; got != want {
 		t.Errorf("回 picker 后列表 = %q，想要全量 %q", got, want)
 	}
 }

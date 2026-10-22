@@ -65,6 +65,9 @@ func (st *appState) viewInput() appui.ViewInput {
 		OnEsc:              st.onEsc,
 		OnMove:             st.moveSelection,
 		OnOpen:             st.open,
+		OnOpenPlain:        st.pasteSelectedPlain,
+		OnPinToggle:        st.toggleSelectedPin,
+		OnDeleteSelected:   st.deleteSelected,
 		OnQueryChanged:     st.onQueryChanged,
 		OnBackspaceAtEmpty: st.onEmptyBackspace,
 		OnResetInput:       st.onResetInput,
@@ -143,8 +146,15 @@ func (st *appState) placeholder() string {
 }
 
 func (st *appState) hintLine() string {
+	// 剪贴板操作的一次性提示优先（粘贴失败 / 置顶已满），下一次唤起时按 TTL 清掉。
+	if st.clipNotice != "" {
+		return st.clipNotice
+	}
 	if st.engineState.Mode() == engine.PluginPicker {
 		return "↑↓ 选择  单击/↵ 进入  Ctrl+Backspace 重置  esc 隐藏"
+	}
+	if st.isClipboardPlugin() {
+		return "↵ 粘贴  Ctrl+↵ 纯文本  Ctrl+Shift+P 置顶  Ctrl+Shift+D 删除  esc 隐藏"
 	}
 	return "↑↓ 选择  单击/↵ 启动  Ctrl+Backspace 重置  esc 隐藏"
 }
@@ -534,6 +544,16 @@ func (st *appState) runProviderIntent(m providers.Match, providerID string) {
 		// （热更 / 重新显示）防抖用的，这里是用户显式点了重掷，必须真再算一遍出新批次。
 		st.provLastKey = ""
 		st.refreshProviderResults()
+	case providers.IntentPaste:
+		st.pasteClipboardItem(intent.Ref, false)
+	case providers.IntentPastePlain:
+		st.pasteClipboardItem(intent.Ref, true)
+	case providers.IntentPin:
+		st.toggleClipboardPin(intent.Ref)
+	case providers.IntentUnpin:
+		st.toggleClipboardPin(intent.Ref)
+	case providers.IntentDelete:
+		st.deleteClipboardItem(intent.Ref)
 	case providers.IntentPlatformAction:
 		if st.execPlatformAction(m.Action) {
 			if st.freq != nil {

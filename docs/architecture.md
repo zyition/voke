@@ -38,7 +38,7 @@ main.go
 |---|---|---|
 | `internal/logic/**` | 查询引擎、配置归一、面板状态、搜索/频率、图标缓存、日志滚动、几何 | **纯 Go**，零 mygo、零 syscall；Linux 原生可测 |
 | `internal/match` | 拼音键、模糊匹配（nucleo 0.3.1 评分移植） | 纯 Go，可 Linux 测 |
-| `internal/providers/**` | Provider 契约 + 10 个内置插件实现 | 纯查询，无 IO / 无 mygo；副作用以 `Action` 值返回 |
+| `internal/providers/**` | Provider 契约 + 11 个内置插件实现 | 纯查询，无 IO / 无 mygo；副作用以 `Action` 值返回 |
 | `internal/platform/**` | **唯一**封装 mygo 平台模块（Shell / Screen / Tray / Clipboard / GlobalShortcut / 单实例）与 Win32/COM 的层 | 每项标注主线程约束；Windows 专属文件配 `_stub.go` |
 | `internal/ui/**` | mygo `ui` 组件、主题、面板/插件/设置视图 | 只做视图；不持有业务状态、不直接调平台模块 |
 | `internal/app/**` | 进程装配、生命周期、主线程状态与意图执行 | 可用 mygo App/Window 生命周期 API；平台能力经 `platform` |
@@ -100,13 +100,24 @@ type Provider interface {
 | `uuid` | `@u `（Indirect） | UUID v4 |
 | `timestamp` | `@t `（Indirect） | 时间戳 ⇄ 可读时间 |
 | `random` | `@r `（Indirect） | 随机整数 / 字符串 |
+| `clipboard` | `@c `（Indirect） | 剪贴板历史：文本 / HTML / RTF / 图片；Enter 粘贴、Ctrl+Enter 纯文本、置顶、删除 |
 
 Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可编辑**。
+
+剪贴板历史的运行时分工：
+- `internal/logic/cliphist`：内存态有界存储（默认 100 条、上限 1000、置顶最多 10 条
+  不占普通名额、总预算 64MiB、单图 16MiB、富文本 1MiB），SHA-256 去重、FIFO 淘汰、
+  48px 缩略图；
+- `internal/providers/clipboard`：纯查询与行文案 / 动作声明；
+- `internal/platform/clipboard*.go`：序列号轮询、多格式读写、敏感标记与文件列表跳过、
+  前台窗口捕获与 `Ctrl+V` / `Shift+Insert` 按键模拟；
+- `internal/app/clipboard.go`：监控生命周期、自我写入抑制、粘贴失败回退提示。
+历史**不持久化**，退出即清；`[clipboard] max_entries` 在设置页可改。
 
 ## 5. 配置
 
 - 路径：`%APPDATA%\voke\config.toml`（与旧 Rust 版同格式，可互相读取）。
-- 顶层：`hotkey` / `autostart` / `theme`。
+- 顶层：`hotkey` / `autostart` / `theme` / `[clipboard] max_entries`（默认 100，范围 1–1000）。
 - 插件节：`[providers.<id>]`，字段 `enabled` / `is_global` / `weight` / `prefix` /
   `activation` / `count`；未写字段回落 Descriptor 默认。
 - 归一（`internal/logic/config`）：C1 未知 id、C2 触发串冲突、C3 前缀不含空白、
