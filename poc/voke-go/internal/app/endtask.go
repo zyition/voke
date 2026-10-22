@@ -1,21 +1,16 @@
-// endtask.go：窗口 provider 的「结束任务」动作——快捷键选取、执行与无响应兜底。
+// endtask.go：窗口 provider 的「结束任务」动作——快捷键选取与执行。
 //
-// 语义对齐 Windows 任务栏「结束任务」：先 WM_CLOSE 让应用自己退出（可弹保存
-// 提示）；后台等待宽限期后，仅当窗口仍存在且被系统判定无响应时才 TerminateProcess。
-// 响应正常的应用不会被强杀。
+// 语义是直接结束窗口所属进程（TerminateProcess），不是只关窗口：带托盘 / 后台
+// 常驻的应用也会被彻底结束。因此不会给应用保存机会，未保存数据会丢失。
 package app
 
 import (
 	"log"
-	"time"
 
 	"github.com/zyition/voke/poc/voke-go/internal/platform"
 	"github.com/zyition/voke/poc/voke-go/internal/providers"
 	"github.com/zyition/voke/poc/voke-go/internal/providers/windows"
 )
-
-// endTaskHungGrace 覆盖 IsHungAppWindow 的 5 秒无响应判定阈值，留一点余量。
-const endTaskHungGrace = 6 * time.Second
 
 // endTaskSelected 是 Ctrl+Shift+Delete 的入口：只有当前选中行是窗口结果时才动作；
 // 其它模式 / 其它插件行静默忽略，不抢占按键语义。
@@ -55,25 +50,14 @@ func (st *appState) selectedWindowMatch() (providers.Match, bool) {
 	return providers.Match{}, false
 }
 
-// endTask 发起结束任务。返回 true 表示 WM_CLOSE 已投递（调用方隐藏面板并复位）；
-// false 表示请求失败，面板保留并显示提示。
-//
-// 强杀兜底在后台 goroutine：它要等满宽限期，绝不能占用主线程。goroutine 只写日志，
-// 不触碰 appState。
+// endTask 直接结束窗口所属进程。返回 true 表示已提交终止（调用方隐藏面板并复位）；
+// false 表示失败，面板保留并显示提示。
 func (st *appState) endTask(hwnd uintptr, title string) bool {
-	if err := platform.RequestEndTask(hwnd); err != nil {
+	if err := platform.EndTask(hwnd); err != nil {
 		log.Printf("voke：结束任务失败（窗口 %q，hwnd=%#x）：%v", title, hwnd, err)
 		st.setNotice("无法结束任务（窗口可能受保护或权限不足）")
 		return false
 	}
-	go func() {
-		forced, err := platform.ForceEndTaskIfHung(hwnd, endTaskHungGrace)
-		switch {
-		case err != nil:
-			log.Printf("voke：结束任务兜底失败（窗口 %q，hwnd=%#x）：%v", title, hwnd, err)
-		case forced:
-			log.Printf("voke：窗口 %q 无响应，已强制结束", title)
-		}
-	}()
+	log.Printf("voke：已结束任务 %q（hwnd=%#x）", title, hwnd)
 	return true
 }

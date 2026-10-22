@@ -559,7 +559,7 @@ func (st *appState) runProviderIntent(m providers.Match, providerID string) {
 	case providers.IntentDelete:
 		st.deleteClipboardItem(intent.Ref)
 	case providers.IntentEndTask:
-		// 成功投递 WM_CLOSE 后面板立即收起；强杀兜底在后台等宽限期。
+		// 直接结束进程；成功后面板收起。
 		if st.endTask(intent.Hwnd, m.Title) {
 			st.hidePanel()
 			st.resetAfterAction()

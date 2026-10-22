@@ -1,5 +1,5 @@
 // endtask.go：窗口「结束任务」的跨平台判定（纯数据 / 纯函数，Linux 可测）。
-// Win32 的 WM_CLOSE / TerminateProcess 在 endtask_windows.go。
+// Win32 的 TerminateProcess 实现在 endtask_windows.go。
 package platform
 
 import (

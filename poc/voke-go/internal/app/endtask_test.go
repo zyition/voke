@@ -20,7 +20,7 @@ func windowTaskMatch(hwnd uintptr) providers.Match {
 	}
 }
 
-// Linux 上 platform.RequestEndTask 是占位错误；用它验证「选中窗口行 → 发结束意图 →
+// Linux 上 platform.EndTask 是占位错误；用它验证「选中窗口行 → 发结束意图 →
 // 失败时保留面板并提示」这条无副作用的链路。
 func TestEndTaskSelectedPluginMode(t *testing.T) {
 	st := &appState{pluginReg: builtinProviders()}
