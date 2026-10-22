@@ -182,9 +182,13 @@ func View(c *goui.Context, in ViewInput) {
 	if c.Shortcut(goui.Ctrl, goui.KeyComma) {
 		in.OnOpenSettings()
 	}
-	// 剪贴板插件：Ctrl+Shift+P / Ctrl+Shift+D 置顶 / 删除。
-	// Ctrl+Enter 被输入框当成一次提交（Submitted），在下面 input.Submitted()
-	// 分支里按按住的修饰键区分——不在窗口级再挂一遍，避免两路都触发。
+	// 剪贴板插件：Ctrl+Enter 纯文本粘贴；Ctrl+Shift+P / Ctrl+Shift+D 置顶 / 删除。
+	// 注意 Ctrl+Enter **不能**依赖输入框的 Submitted()：mygo 的 editor.wants 对
+	// KeyEnter 只在 mods==0 时返回 true（Shift 被剥掉），带 Ctrl 的 Enter 直接走
+	// 快捷键路由，不会进入输入框。故这里必须挂窗口级 Shortcut。
+	if c.Shortcut(goui.Ctrl, goui.KeyEnter) {
+		in.OnOpenPlain()
+	}
 	if c.Shortcut(goui.Ctrl|goui.Shift, goui.KeyP) {
 		in.OnPinToggle()
 	}
@@ -254,13 +258,9 @@ func View(c *goui.Context, in ViewInput) {
 				in.OnQueryChanged()
 			}
 			if input.Submitted() {
-				// 输入框会吞掉 Enter（含组合键），提交时按当前按住的修饰键区分：
-				// Ctrl+Enter = 纯文本粘贴（只有剪贴板插件消费），其余仍是普通打开。
-				if c.Modifiers()&goui.Ctrl != 0 && in.OnOpenPlain != nil && in.OnOpenPlain() {
-					// 剪贴板插件已消费（纯文本粘贴）。
-				} else {
-					in.OnOpen()
-				}
+				// 只有无修饰键（或仅 Shift）的 Enter 会被编辑器接收；Ctrl+Enter
+				// 走上方的窗口级 Shortcut（见该处注释）。
+				in.OnOpen()
 			}
 		})
 		goui.Divider(c)
