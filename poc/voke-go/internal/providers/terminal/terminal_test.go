@@ -261,6 +261,15 @@ func TestActionIsWtAppActivationWithGUID(t *testing.T) {
 	if hits[0].Interact.Kind != providers.InteractExecute {
 		t.Errorf("应 Execute：%+v", hits[0].Interact)
 	}
+	if len(hits[0].Actions) != 1 {
+		t.Fatalf("应带一条管理员打开行内动作：%+v", hits[0].Actions)
+	}
+	admin := hits[0].Actions[0]
+	if admin.ID != "open-admin" || admin.Shortcut != "Ctrl+Enter" || admin.Icon != "shield" ||
+		admin.Action.Kind != providers.ActionLaunchTerminalProfile || !admin.Action.Elevated ||
+		admin.Action.Profile != a.Profile || admin.Action.FallbackPath != a.FallbackPath {
+		t.Errorf("管理员动作应复用 profile 并带 Elevated：%+v", admin)
+	}
 }
 
 func TestActionFallsBackToNameWhenNoGUID(t *testing.T) {

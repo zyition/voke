@@ -9,6 +9,7 @@ package app
 
 import (
 	"log"
+	"os"
 
 	"github.com/egoist/mygo"
 	"github.com/zyition/voke/poc/voke-go/internal/platform"
@@ -25,6 +26,11 @@ const (
 
 func Main() {
 	platform.InitLog()
+	// 提权粘贴辅助进程：必须在单实例锁 / mygo App 初始化之前分流，否则会去抢
+	// 首实例的锁、或在后台建托盘。它只发一次粘贴按键就退出。
+	if handled, code := HandleElevatedPaste(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	// 启动早期纠正自身工作目录（对照生产 main.rs 在 log init 后、相对路径解析前调
 	// voke_sys::fix_own_cwd）：开机自启继承到 System32 时改到 %USERPROFILE%，避免继承
 	// cwd 启动的子进程拿错起始目录；用户显式指定的 cwd 不动。

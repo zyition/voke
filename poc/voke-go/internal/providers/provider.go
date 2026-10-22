@@ -51,7 +51,9 @@ type Action struct {
 	Args []string
 	// Launch：子进程工作目录（空 = 不设置）。
 	WorkingDir string
-	// Launch：以管理员权限启动。
+	// Launch / LaunchTerminalProfile：以管理员权限启动。
+	// 终端 profile 的 Elevated=true 会改用 ShellExecuteEx(runas) 直接拉起 wt.exe
+	// （App Activation 不能提权），对应行内“以管理员身份打开”。
 	Elevated bool
 	// Launch：来自开始菜单 .lnk 的快捷方式本体路径（非空则走 shell 路线，忽略
 	// Path/Args/WorkingDir）。

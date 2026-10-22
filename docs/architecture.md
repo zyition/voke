@@ -93,7 +93,7 @@ type Provider interface {
 | `apps` | 无前缀（全局） | 开始菜单 Applications 文件夹（含桌面程序快捷方式与 packaged 应用） |
 | `windows` | 无前缀（全局） | 枚举并激活已打开窗口；行内「结束任务」直接 TerminateProcess |
 | `awake` | 无前缀（全局） | 保持唤醒 / 取消，支持连屏幕 |
-| `terminal` | 无前缀（全局） | Windows Terminal profile |
+| `terminal` | 无前缀（全局） | Windows Terminal profile；行内「以管理员身份打开」走 runas |
 | `workspaces` | 无前缀（全局） | Zed / VS Code 最近工作区 |
 | `calculator` | `=`（Direct） | 算术表达式 |
 | `base64` | `@b `（Indirect） | 编码 / 解码 |
@@ -112,6 +112,11 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
 - `internal/platform/clipboard*.go`：序列号轮询、多格式读写、敏感标记与文件列表跳过、
   前台窗口捕获与 `Ctrl+V` / `Shift+Insert` 按键模拟；
 - `internal/app/clipboard.go`：监控生命周期、自我写入抑制、粘贴失败回退提示。
+- 管理员窗口：`platform.IsProcessElevated` 判定目标进程权限；目标更高时 UIPI 会
+  **静默**吞掉 SendInput，故改由 `ShellExecuteEx(runas)` 拉起临时提权辅助进程
+  （`voke.exe --elevated-paste <hwnd> <gui|terminal>`）代为粘贴。辅助进程只发粘贴键、
+  不发送回车，并复核目标确为管理员进程；UAC 取消或辅助进程失败时回退为“已复制，
+  请手动粘贴”。同一套 `platform.RunElevated` 也用于终端的“以管理员身份打开”。
 历史**不持久化**，退出即清；`[clipboard] max_entries` 在设置页可改。
 
 ## 5. 配置

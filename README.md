@@ -47,7 +47,8 @@ Win32 / COM，界面走 mygo 的 D3D11 后端；启动后 PrivateCommit 约 55MB
 - 插件快捷键写在 `[providers.<id>]` 的 `hotkey` 字段（如 ``hotkey = "Alt+`"``）；
   没有默认值，留空即不绑定。
   只有**已启用**的插件才会注册，停用会立即注销；与主热键或其它启用插件重复时设置页
-  会就地提示且不落盘。
+  会就地提示且不落盘。组合也可能被系统或其它程序占用，提示“占用”时换一个即可
+  （例如 `Alt+\`` 在部分机器上已被其它工具注册）。
 - 前缀冲突、含空白或占用字母/数字保留键时，设置页会就地提示且不落盘。
 
 ## 键盘用法
@@ -75,6 +76,17 @@ Win32 / COM，界面走 mygo 的 D3D11 后端；启动后 PrivateCommit 约 55MB
 | `Ctrl+Shift+P` | 置顶 / 取消置顶（最多 10 条，不占普通条数） |
 | `Ctrl+Shift+D` | 删除当前条目 |
 
+粘贴目标是管理员窗口时，UIPI 会静默拦截普通按键模拟；此时会弹一次 UAC，由临时的
+提权辅助进程代为发送粘贴键。取消 UAC 或辅助进程失败时，内容已在剪贴板里，面板会
+重新显示并提示手动粘贴。
+
+终端配置插件（`terminal`）内另有：
+
+| 快捷键 | 动作 |
+|---|---|
+| `Enter` | 按 profile 打开 Windows Terminal |
+| `Ctrl+Enter` | 以管理员身份打开该 profile（UAC） |
+
 ## 插件
 
 内置 11 个插件。**无前缀**的 5 个插件直接出现在全局结果里；其余需输入对应前缀
@@ -85,7 +97,7 @@ Win32 / COM，界面走 mygo 的 D3D11 后端；启动后 PrivateCommit 约 55MB
 | `apps` | 启动应用（开始菜单 Applications：桌面程序快捷方式 + packaged 应用） | 无（全局结果） |
 | `windows` | 窗口切换（枚举并激活已开窗口；行内可结束任务） | 无（全局结果） |
 | `awake` | 保持唤醒（系统 / 连屏幕，到期自动失效） | 无（全局结果） |
-| `terminal` | Windows Terminal 配置（按 profile 启动） | 无（全局结果） |
+| `terminal` | Windows Terminal 配置（按 profile 启动；Ctrl+Enter 管理员打开） | 无（全局结果） |
 | `workspaces` | 工作区（读 Zed / VS Code 最近工作区历史） | 无（全局结果） |
 | `calculator` | 计算器 | `=`（输入即路由） |
 | `timestamp` | 时间戳转换 | `@t` + 空格 |

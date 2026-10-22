@@ -164,16 +164,29 @@ func (p *Provider) toMatch(prof indexedProfile, score float64) providers.Match {
 	if prof.entry.IsDefault {
 		subtitle = fmt.Sprintf("默认配置 · %s", subtitle)
 	}
+	action := providers.Action{
+		Kind:         providers.ActionLaunchTerminalProfile,
+		Aumid:        prof.entry.AUMID,
+		Profile:      profileID,
+		FallbackPath: p.wtPath,
+	}
+	admin := action
+	admin.Elevated = true
 	return providers.Match{
 		ProviderID: ID,
 		Title:      prof.entry.Name,
 		Subtitle:   subtitle,
-		Action: providers.Action{
-			Kind:         providers.ActionLaunchTerminalProfile,
-			Aumid:        prof.entry.AUMID,
-			Profile:      profileID,
-			FallbackPath: p.wtPath,
-		},
+		Action:     action,
+		// 行内“以管理员身份打开”：Ctrl+Enter（与剪贴板纯文本粘贴同一物理键，
+		// 由 app 层按当前插件分派）。App Activation 不能提权，执行层会直启 wt.exe。
+		Actions: []providers.RowAction{{
+			ID:       "open-admin",
+			Label:    "以管理员身份打开",
+			Shortcut: "Ctrl+Enter",
+			Tooltip:  "以管理员身份打开 · Ctrl+Enter",
+			Icon:     "shield",
+			Action:   admin,
+		}},
 		Score:    score,
 		Interact: providers.InteractSpec{Kind: providers.InteractExecute},
 	}

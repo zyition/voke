@@ -6,10 +6,11 @@ import (
 	goui "github.com/egoist/mygo/ui"
 )
 
-// Ctrl+Enter 是剪贴板插件的纯文本粘贴键，必须在**真实帧**里验证：
-// mygo 的 editor.wants 对带 Ctrl 的 Enter 返回 false（不进入输入框），所以它
-// 只能由窗口级 Shortcut 消费。本用例锁住「触发 OnOpenPlain、不触发 OnOpen」。
-func TestCtrlEnterTriggersPlainOpen(t *testing.T) {
+// Ctrl+Enter 由 app 层按插件分派（剪贴板纯文本 / 终端管理员打开），必须在
+// **真实帧**里验证：mygo 的 editor.wants 对带 Ctrl 的 Enter 返回 false（不进入
+// 输入框），所以它只能由窗口级 Shortcut 消费。本用例锁住「触发 OnCtrlEnter、
+// 不触发 OnOpen」。
+func TestCtrlEnterTriggersHandler(t *testing.T) {
 	var query string
 	var input goui.Handle
 	var plain, open int
@@ -18,7 +19,7 @@ func TestCtrlEnterTriggersPlainOpen(t *testing.T) {
 		View(c, ViewInput{
 			Hotkey: "Alt+Space", Query: &query, Input: &input, Placeholder: "搜索",
 			OnEsc: func() {}, OnMove: func(int) {}, OnOpen: func() { open++ },
-			OnOpenPlain: func() bool { plain++; return true },
+			OnCtrlEnter: func() bool { plain++; return true },
 			OnPinToggle: func() {}, OnDeleteSelected: func() {},
 			OnQueryChanged: func() {}, OnBackspaceAtEmpty: func() bool { return false },
 			OnResetInput: func() {}, OnQuit: func() {}, OnOpenSettings: func() {},
@@ -51,7 +52,7 @@ func TestEndTaskShortcutReachesWindow(t *testing.T) {
 		View(c, ViewInput{
 			Hotkey: "Alt+Space", Query: &query, Input: &input, Placeholder: "搜索",
 			OnEsc: func() {}, OnMove: func(int) {}, OnOpen: func() {},
-			OnOpenPlain: func() bool { return true },
+			OnCtrlEnter: func() bool { return true },
 			OnPinToggle: func() {}, OnDeleteSelected: func() {}, OnEndTask: func() { end++ },
 			OnQueryChanged: func() {}, OnBackspaceAtEmpty: func() bool { return false },
 			OnResetInput: func() {}, OnQuit: func() {}, OnOpenSettings: func() {},
@@ -77,7 +78,7 @@ func TestClipboardShortcutKeysReachWindow(t *testing.T) {
 		View(c, ViewInput{
 			Hotkey: "Alt+Space", Query: &query, Input: &input, Placeholder: "搜索",
 			OnEsc: func() {}, OnMove: func(int) {}, OnOpen: func() {},
-			OnOpenPlain: func() bool { return true },
+			OnCtrlEnter: func() bool { return true },
 			OnPinToggle: func() { pin++ }, OnDeleteSelected: func() { del++ },
 			OnQueryChanged: func() {}, OnBackspaceAtEmpty: func() bool { return false },
 			OnResetInput: func() {}, OnQuit: func() {}, OnOpenSettings: func() {},

@@ -8,5 +8,8 @@ func ClipboardSequence() uint32 { return 0 }
 // ForegroundTarget 非 Windows 占位：返回零值，粘贴动作回退为「已复制」。
 func ForegroundTarget() ClipTarget { return ClipTarget{} }
 
+// WindowProcessID 非 Windows 占位：恒 0。
+func WindowProcessID(uintptr) uint32 { return 0 }
+
 // PasteToTarget 非 Windows 占位：恒 false（不可用）。
 func PasteToTarget(ClipTarget, bool) bool { return false }

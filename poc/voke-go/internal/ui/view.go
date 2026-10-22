@@ -57,9 +57,9 @@ type ViewInput struct {
 	OnEsc  func()
 	OnMove func(delta int)
 	OnOpen func()
-	// OnOpenPlain 是 Ctrl+Enter：剪贴板插件里把当前条目按纯文本粘贴。返回 true
-	// 表示已消费；false（其它模式）时回落普通 OnOpen，保持原有 Ctrl+Enter 行为。
-	OnOpenPlain func() bool
+	// OnCtrlEnter 是 Ctrl+Enter：按当前插件分派——剪贴板纯文本粘贴、终端
+	// “以管理员身份打开”等。返回 true 表示已消费。
+	OnCtrlEnter func() bool
 	// OnPinToggle / OnDeleteSelected 是 Ctrl+Shift+P / Ctrl+Shift+D，同样只对
 	// 剪贴板插件生效（main 侧判定），UI 只转交按键。
 	OnPinToggle      func()
@@ -185,12 +185,12 @@ func View(c *goui.Context, in ViewInput) {
 	if c.Shortcut(goui.Ctrl, goui.KeyComma) {
 		in.OnOpenSettings()
 	}
-	// 剪贴板插件：Ctrl+Enter 纯文本粘贴；Ctrl+Shift+P / Ctrl+Shift+D 置顶 / 删除。
-	// 注意 Ctrl+Enter **不能**依赖输入框的 Submitted()：mygo 的 editor.wants 对
-	// KeyEnter 只在 mods==0 时返回 true（Shift 被剥掉），带 Ctrl 的 Enter 直接走
-	// 快捷键路由，不会进入输入框。故这里必须挂窗口级 Shortcut。
+	// Ctrl+Enter 按插件分派（剪贴板纯文本 / 终端管理员打开 / 行内动作快捷键）。
+	// 注意它**不能**依赖输入框的 Submitted()：mygo 的 editor.wants 对 KeyEnter
+	// 只在 mods==0 时返回 true（Shift 被剥掉），带 Ctrl 的 Enter 直接走快捷键路由，
+	// 不会进入输入框。故这里必须挂窗口级 Shortcut。
 	if c.Shortcut(goui.Ctrl, goui.KeyEnter) {
-		in.OnOpenPlain()
+		in.OnCtrlEnter()
 	}
 	if c.Shortcut(goui.Ctrl|goui.Shift, goui.KeyP) {
 		in.OnPinToggle()

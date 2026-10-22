@@ -65,6 +65,17 @@ func ClipboardSequence() uint32 {
 	return uint32(n)
 }
 
+// WindowProcessID 返回窗口所属进程 id；窗口无效或取不到时返回 0。
+// 提权粘贴辅助进程用它复核目标确实是管理员进程。
+func WindowProcessID(hwnd uintptr) uint32 {
+	if hwnd == 0 {
+		return 0
+	}
+	var pid uint32
+	procGetWindowThreadProcId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+	return pid
+}
+
 // ForegroundTarget 取当前前台窗口的信息。主线程调用（唤起面板前）。
 // 取不到进程名不算失败——类名足以识别控制台类终端。
 func ForegroundTarget() ClipTarget {
@@ -78,6 +89,7 @@ func ForegroundTarget() ClipTarget {
 	exe := strings.ToLower(ProcessNameFromPath(processPathForPid(pid)))
 	return ClipTarget{
 		Hwnd:     hwnd,
+		PID:      pid,
 		Class:    class,
 		Exe:      exe,
 		Terminal: IsTerminalWindow(class, exe),

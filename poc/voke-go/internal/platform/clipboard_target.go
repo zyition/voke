@@ -7,6 +7,8 @@ import "strings"
 // ClipTarget 是唤起面板时的前台窗口快照；零值 = 没记住（粘贴动作应回退为「已复制」）。
 type ClipTarget struct {
 	Hwnd uintptr
+	// PID 是窗口所属进程；粘贴前据此判断目标是否以管理员权限运行（UIPI）。
+	PID uint32
 	// Class 是窗口类名（ConsoleWindowClass / CASCADIA_HOSTING_WINDOW_CLASS / …）。
 	Class string
 	// Exe 是进程文件名（小写，如 windowsterminal.exe / code.exe）。

@@ -27,7 +27,9 @@
 package app
 
 import (
+	"errors"
 	"log"
+	"strings"
 	"time"
 
 	appui "github.com/zyition/voke/poc/voke-go/internal/ui"
@@ -65,7 +67,7 @@ func (st *appState) viewInput() appui.ViewInput {
 		OnEsc:              st.onEsc,
 		OnMove:             st.moveSelection,
 		OnOpen:             st.open,
-		OnOpenPlain:        st.pasteSelectedPlain,
+		OnCtrlEnter:        st.ctrlEnterSelected,
 		OnPinToggle:        st.toggleSelectedPin,
 		OnDeleteSelected:   st.deleteSelected,
 		OnEndTask:          st.endTaskSelected,
@@ -159,6 +161,9 @@ func (st *appState) hintLine() string {
 	}
 	if st.providerActive() && st.engineState.PluginID() == providerWindowsID {
 		return "↵ 切换  Ctrl+Shift+Delete 结束任务  Ctrl+Backspace 重置  esc 隐藏"
+	}
+	if st.providerActive() && st.engineState.PluginID() == terminal.ID {
+		return "↵ 打开  Ctrl+↵ 以管理员身份打开  Ctrl+Backspace 重置  esc 隐藏"
 	}
 	return "↑↓ 选择  单击/↵ 启动  Ctrl+Backspace 重置  esc 隐藏"
 }
@@ -521,6 +526,55 @@ func (st *appState) providerAction(i int, id string) {
 	}
 }
 
+// ctrlEnterSelected 是 Ctrl+Enter 的统一入口：剪贴板历史优先走纯文本粘贴；
+// 其它插件按当前选中行的 RowAction.Shortcut 分派（如终端“以管理员身份打开”）。
+func (st *appState) ctrlEnterSelected() bool {
+	if st.pasteSelectedPlain() {
+		return true
+	}
+	return st.runSelectedRowShortcut("Ctrl+Enter")
+}
+
+// runSelectedRowShortcut 在当前选中行（插件态或全局合并态、非 apps 行）的
+// RowAction 里找展示快捷键等于 shortcut 的项并执行。找不到返回 false，不抢占按键。
+func (st *appState) runSelectedRowShortcut(shortcut string) bool {
+	m, ok := st.selectedProviderMatch()
+	if !ok {
+		return false
+	}
+	for _, a := range m.Actions {
+		if !strings.EqualFold(a.Shortcut, shortcut) {
+			continue
+		}
+		m.Action = a.Action
+		st.runProviderIntent(m, m.ProviderID)
+		return true
+	}
+	return false
+}
+
+// selectedProviderMatch 取当前选中行的 provider Match：插件态直接取 provRows；
+// 全局合并态只在选中非 apps 行时取 globalProvRows（apps 走自己的启动链路）。
+func (st *appState) selectedProviderMatch() (providers.Match, bool) {
+	if st.providerActive() {
+		if st.provChosen < 0 || st.provChosen >= len(st.provRows) {
+			return providers.Match{}, false
+		}
+		return st.provRows[st.provChosen].Match, true
+	}
+	if st.globalActive() {
+		if st.globalChosen < 0 || st.globalChosen >= len(st.globalRows) {
+			return providers.Match{}, false
+		}
+		r := st.globalRows[st.globalChosen]
+		if r.apps || r.provIdx < 0 || r.provIdx >= len(st.globalProvRows) {
+			return providers.Match{}, false
+		}
+		return st.globalProvRows[r.provIdx].Match, true
+	}
+	return providers.Match{}, false
+}
+
 // runProviderIntent 是 provider 结果行「执行」的唯一实现（IntentFor 分流）：
 // Copy→写剪贴板+记频率+隐藏（**不复位**，下次唤回可再复制）；EnterSubMode→进
 // 子模式并刷新；ActivatePlugin→切插件；PlatformAction→其余副作用（execPlatformAction，
@@ -601,6 +655,9 @@ func (st *appState) execPlatformAction(a providers.Action) bool {
 	case providers.ActionLaunch:
 		return platform.Launch(a.Path, a.Args, a.NoConsole) == nil
 	case providers.ActionLaunchTerminalProfile:
+		if a.Elevated {
+			return st.launchTerminalElevated(a)
+		}
 		// WT profile：先 App Activation（对齐 CmdPal / 生产，可带 `--profile "<guid>"`），
 		// 失败（如 WT 非 MSIX 安装的解包版）回退 wt.exe 直启 `-p <profile>`。对照
 		// voke-app dispatcher 的 n_profile（activate_app → 失败兜底 CreateProcess）。
@@ -622,6 +679,46 @@ func (st *appState) execPlatformAction(a providers.Action) bool {
 		log.Printf("voke：provider 动作类型 %v 未接入执行", a.Kind)
 		return false
 	}
+}
+
+// launchTerminalElevated 以管理员身份打开 WT profile。App Activation 不能提权，
+// 直接对 wt.exe 走 ShellExecuteEx(runas)，由 UAC 决定是否放行。
+func (st *appState) launchTerminalElevated(a providers.Action) bool {
+	exe := a.FallbackPath
+	if exe == "" {
+		exe = "wt.exe"
+	}
+	err := platform.RunElevated(exe, []string{"-p", a.Profile}, false, nil)
+	if err != nil {
+		if errors.Is(err, platform.ErrElevationCanceled) {
+			st.showNoticePanel("已取消管理员权限请求")
+		} else {
+			log.Printf("voke：以管理员身份启动终端失败（%s profile=%s）：%v", exe, a.Profile, err)
+			st.showNoticePanel("以管理员身份启动失败")
+		}
+		return false
+	}
+	log.Printf("voke：已请求以管理员身份启动终端 profile=%s", a.Profile)
+	return true
+}
+
+// showNoticePanel 在提权交互被取消 / 失败后把面板拉回并显示提示。UAC 会抢焦点，
+// OnBlur 可能排在消息队列里、回到主循环后才把面板藏起来，故稍后再确认一次可见性。
+func (st *appState) showNoticePanel(msg string) {
+	st.setNotice(msg)
+	if st.panel == nil || st.panel.IsDestroyed() {
+		return
+	}
+	st.showPanel()
+	time.AfterFunc(60*time.Millisecond, func() {
+		mygo.RunOnMain(func() {
+			if st.quitting || st.panel == nil || st.panel.IsDestroyed() || st.panel.IsVisible() {
+				return
+			}
+			st.showPanel()
+			st.setNotice(msg)
+		})
+	})
 }
 
 // execLaunch 执行「可能含启动动作」的意图序列，保持原 clickRow/open 的时序：

@@ -119,6 +119,14 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 
   粘贴写回后先恢复唤起前的窗口，再发 `Ctrl+V`（终端用 `Shift+Insert`）；失败时保留面板并
   提示手动粘贴。历史存储 `internal/logic/cliphist`，采集/按键 `internal/platform/clipboard*`，
   监控与自我写入抑制 `internal/app/clipboard.go`。
+- 管理员窗口粘贴：UIPI 会静默拦截 SendInput（可能仍返回成功），不能靠返回值判断。
+  `platform.TargetNeedsElevation` 先检测目标进程权限；更高时经 `ShellExecuteEx(runas)`
+  拉起 `voke.exe --elevated-paste` 辅助进程代发粘贴键（UAC）。辅助进程在单实例锁之前
+  分流，只粘贴、不发回车，并复核目标为管理员进程。同一 `platform.RunElevated` 供终端
+  “以管理员身份打开”（Ctrl+Enter）使用——实现见 `internal/platform/elevate*.go`、
+  `internal/app/elevated.go`、`internal/app/clipboard.go`。
+- 设置页热键录制必须用 `HandleInput`，不能用 `OnTextKey`：mygo 会把 Alt+字母/符号当作
+  “会输入文本”的按键跳过 `OnTextKey`，导致这些组合录不到。
 - 窗口结束任务：窗口 provider 行尾操作 + `Ctrl+Shift+Delete`（输入框会消费 Delete，
   必须在 `OnTextKey` 截住）。直接 `TerminateProcess` 窗口所属进程（不先关窗口，
   托盘 / 后台应用也会退出）；自身 / 核心系统进程在 `platform/endtask.go` 拒绝。

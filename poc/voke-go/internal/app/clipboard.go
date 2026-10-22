@@ -7,7 +7,10 @@
 package app
 
 import (
+	"errors"
 	"log"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -145,6 +148,12 @@ func (st *appState) pasteClipboardItem(ref string, plain bool) {
 		st.setNotice("内容已复制，请手动粘贴")
 		return
 	}
+	// 管理员窗口：UIPI 会静默吞掉 SendInput（连失败都拿不到），必须改走临时
+	// 提权辅助进程（UAC），否则就会出现“没粘贴、也没提示”。
+	if platform.TargetNeedsElevation(target) {
+		st.pasteElevated(target)
+		return
+	}
 	st.hidePanel()
 	time.AfterFunc(clipboardPasteDelay, func() {
 		mygo.RunOnMain(func() {
@@ -156,13 +165,68 @@ func (st *appState) pasteClipboardItem(ref string, plain bool) {
 	})
 }
 
+// pasteElevated 通过管理员辅助进程把 Ctrl+V / Shift+Insert 送进目标窗口。
+// 内容此时已经写好：UAC 被拒或辅助进程失败时，用户仍可手动粘贴。
+func (st *appState) pasteElevated(target platform.ClipTarget) {
+	exe, err := os.Executable()
+	if err != nil {
+		log.Printf("voke：提权粘贴无法定位 voke.exe：%v", err)
+		st.showPasteFallback("粘贴失败：内容已复制，请手动粘贴")
+		return
+	}
+	mode := "gui"
+	if target.Terminal {
+		mode = "terminal"
+	}
+	args := []string{elevatedPasteFlag, strconv.FormatUint(uint64(target.Hwnd), 10), mode}
+
+	// 先隐藏面板，把前台让回目标窗口；UAC 结束后辅助进程才能把目标切到前台。
+	st.hidePanel()
+	err = platform.RunElevated(exe, args, true, func(code uint32) {
+		if code == 0 {
+			return
+		}
+		mygo.RunOnMain(func() {
+			if st.quitting || st.panel == nil || st.panel.IsDestroyed() {
+				return
+			}
+			st.showPasteFallback("粘贴失败：内容已复制，请手动粘贴")
+		})
+	})
+	if err == nil {
+		log.Printf("voke：已请求管理员权限粘贴（hwnd=%#x terminal=%v）",
+			target.Hwnd, target.Terminal)
+		return
+	}
+	msg := "管理员粘贴启动失败：内容已复制，请手动粘贴"
+	if errors.Is(err, platform.ErrElevationCanceled) {
+		msg = "未获得管理员权限，内容已复制，请手动粘贴"
+	}
+	log.Printf("voke：提权粘贴启动失败（hwnd=%#x）：%v", target.Hwnd, err)
+	st.showPasteFallback(msg)
+}
+
 // showPasteFallback 重新显示面板并提示用户手动粘贴。保留原目标窗口，
 // 避免这次显示把「粘贴目标」覆盖成面板自身。
+//
+// 提权路径（UAC 取消 / 辅助进程失败）会先隐藏面板再 ShellExecuteEx：UAC 夺焦
+// 让 OnBlur 排在消息队列里，回到主循环后可能把刚显示的面板再次隐藏。故稍后
+// 再确认一次可见性——用户已主动收起则不打扰。
 func (st *appState) showPasteFallback(msg string) {
 	target := st.clipTarget
 	st.showPanel()
 	st.clipTarget = target
 	st.setNotice(msg)
+	time.AfterFunc(60*time.Millisecond, func() {
+		mygo.RunOnMain(func() {
+			if st.quitting || st.panel == nil || st.panel.IsDestroyed() || st.panel.IsVisible() {
+				return
+			}
+			st.clipTarget = target
+			st.showPanel()
+			st.setNotice(msg)
+		})
+	})
 }
 
 // toggleClipboardPin 置顶 / 取消置顶当前条目。置顶已满时给提示、不改历史。
