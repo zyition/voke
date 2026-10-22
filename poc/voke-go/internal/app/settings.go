@@ -318,17 +318,28 @@ func (st *appState) cancelHotkeyRecording(s *settingsWindow) {
 	st.resumeHotkeys()
 }
 
-// recordHotkey 在录制态处理一次按键（输入框 OnTextKey 回调）：Esc 取消；合法组合则
-// 先查冲突与系统占用，通过后落盘并退出录制；无修饰键/不支持的键提示重按。
-func (st *appState) recordHotkey(s *settingsWindow, k ui.TextKey) bool {
+// recordHotkeyInput 是录制框的 HandleInput 回调。不能用 OnTextKey：mygo 的
+// editor 把 Alt+字母 / 符号当作“会输入文本”的键跳过 OnTextKey，导致这些组合
+// 根本录不到（Alt+Space、Alt+` 等都会漏）。HandleInput 在文本处理之前拿到所有
+// KeyDown，只消费按下、忽略自动重复与抬起。
+func (st *appState) recordHotkeyInput(s *settingsWindow, ev ui.InputEvent) bool {
+	if ev.Kind != ui.InputKeyDown || ev.Repeat {
+		return false
+	}
+	return st.recordHotkey(s, ev.Key, ev.Mods)
+}
+
+// recordHotkey 在录制态处理一次按键：Esc 取消；合法组合则先查冲突与系统占用，
+// 通过后落盘并退出录制；无修饰键/不支持的键提示重按。
+func (st *appState) recordHotkey(s *settingsWindow, key ui.Key, mods ui.Modifiers) bool {
 	if !s.recording {
 		return false
 	}
-	if k.Key == ui.KeyEscape && k.Mods == 0 {
+	if key == ui.KeyEscape && mods == 0 {
 		st.cancelHotkeyRecording(s)
 		return true
 	}
-	acc, ok := platform.AccelFromKey(k.Key, k.Mods)
+	acc, ok := platform.AccelFromKey(key, mods)
 	if !ok {
 		s.hotkeyErr = "请按住 Ctrl / Alt / Shift 再按一个键"
 		st.armHotkeyRecTimeout(s) // 无效键也续期，给用户重试机会
@@ -366,6 +377,7 @@ func (st *appState) recordHotkey(s *settingsWindow, k ui.TextKey) bool {
 	}
 	// 探测系统级占用：此刻所有热键都已挂起，注册成功即说明组合可用。
 	if err := platform.RegisterHotkey(acc, func() {}); err != nil {
+		log.Printf("voke 录制热键 %q 探测注册失败：%v", acc, err)
 		revert()
 		s.hotkeyErr = "该快捷键已被系统或其他程序占用，请换一个"
 		st.armHotkeyRecTimeout(s)
@@ -436,7 +448,7 @@ func (st *appState) settingsView(c *ui.Context) {
 							ui.Text(c, "请按下新的快捷键（Esc 取消）").FontSize(theme.HintSize).TextColor(t.TextMuted)
 							ui.TextInputBase(c, &s.recBuf).Bind(&s.recHandle).ReadOnly(true).Grow(1).
 								FontSize(theme.InputSize).Placeholder("等待按键…").Label("录制热键").
-								OnTextKey(func(k ui.TextKey) bool { return st.recordHotkey(s, k) })
+								HandleInput(func(ev ui.InputEvent) bool { return st.recordHotkeyInput(s, ev) })
 							s.recHandle.Focus() // 每帧回焦点（点击会先落到按钮，下一帧拉回）
 						} else {
 							ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
@@ -503,7 +515,7 @@ func (st *appState) settingsView(c *ui.Context) {
 											ui.TextInputBase(c, &s.recBuf).Bind(&s.recHandle).ReadOnly(true).Grow(1).
 												FontSize(theme.InputSize).Placeholder("等待按键…").
 												Label(p.name + " 全局快捷键").
-												OnTextKey(func(k ui.TextKey) bool { return st.recordHotkey(s, k) })
+												HandleInput(func(ev ui.InputEvent) bool { return st.recordHotkeyInput(s, ev) })
 											s.recHandle.Focus()
 										} else {
 											label := p.hotkey
