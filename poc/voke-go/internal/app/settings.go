@@ -379,13 +379,6 @@ func (st *appState) settingsView(c *ui.Context) {
 								st.applySettings()
 							}
 						})
-						ui.Field(c, "剪贴板历史条数", func() {
-							ui.Text(c, "内存中保留的普通条目上限（1–1000，置顶 10 条不计入）").
-								FontSize(theme.HintSize).TextColor(t.TextMuted).Grow(1)
-							if ui.NumberInput(c, &s.clipboardMax, 1, 1000, 1).Changed() {
-								st.applySettings()
-							}
-						})
 					})
 				})
 
@@ -447,6 +440,16 @@ func (st *appState) settingsView(c *ui.Context) {
 									st.applySettings()
 								}
 							})
+							if p.id == providerClipboardID {
+								ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+									ui.Text(c, "历史条数").FontSize(theme.HintSize).TextColor(t.TextMuted)
+									if ui.NumberInput(c, &s.clipboardMax, 1, 1000, 1).Changed() {
+										st.applySettings()
+									}
+									ui.Text(c, "普通条目上限；置顶 10 条不计入").
+										FontSize(theme.HintSize).TextColor(t.TextMuted).Grow(1)
+								})
+							}
 						})
 					})
 				}

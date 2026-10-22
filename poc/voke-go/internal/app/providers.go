@@ -44,6 +44,9 @@ import (
 // 因此逐字相同（这是「Global 零回归」的结构依据）。
 const providerAppsID = "apps"
 
+// providerClipboardID 是剪贴板插件 id 的 app 侧别名（设置页按它挂专属配置项）。
+const providerClipboardID = clipboardprovider.ID
+
 // builtinDescriptors 是内置注册表。**注册顺序 = 前缀表优先级顺序 = picker 列表顺序**
 // （engine.Scan 按表序做首个全等命中，config.BuildTable 不排序）。
 //

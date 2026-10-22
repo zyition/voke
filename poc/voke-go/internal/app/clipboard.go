@@ -14,7 +14,6 @@ import (
 	"github.com/zyition/voke/poc/voke-go/internal/logic/appcfg"
 	"github.com/zyition/voke/poc/voke-go/internal/logic/cliphist"
 	"github.com/zyition/voke/poc/voke-go/internal/platform"
-	clipboardprovider "github.com/zyition/voke/poc/voke-go/internal/providers/clipboard"
 )
 
 const (
@@ -93,7 +92,7 @@ func (st *appState) captureClipboard() {
 
 // isClipboardPlugin 报告当前是否落在剪贴板插件态。
 func (st *appState) isClipboardPlugin() bool {
-	return st.providerActive() && st.engineState.PluginID() == clipboardprovider.ID
+	return st.providerActive() && st.engineState.PluginID() == providerClipboardID
 }
 
 // refreshClipboardRows 重跑剪贴板查询，并尽量保持当前选中行。
