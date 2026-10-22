@@ -8,6 +8,8 @@
 package ui
 
 import (
+	"log"
+
 	"github.com/zyition/voke/poc/voke-go/internal/providers"
 	"github.com/zyition/voke/poc/voke-go/internal/ui/theme"
 
@@ -31,15 +33,24 @@ type ProviderRow struct {
 //   - ls/chosen：选择态由调用方持有（每插件一套），ListState 驱动键盘导航；
 //   - onOpen：Enter / list.Submitted；onClick(i)：单击第 i 行（选中+执行都交给回调）；
 //   - hintText：无结果时展示的文案（提示行或占位说明）；
+//   - onAction：行尾操作图标被点击（i = 行号，id = 动作 id）；actions 由 provider
+//     按条目类型给出，UI 不判断「图片没有纯文本粘贴」这类语义；
 //   - icons：与 apps 行共用的进程内图标缓存（按 Match.Icon 里的路径懒取；纯计算型 provider
 //     的 Match.Icon 为空串 → 该行不画图标，布局与原「标题+副标题」逐字不变）。
-func ProviderResults(c *goui.Context, rows []providers.RankedMatch, chosen *int, ls *goui.ListState, icons *IconCache, onOpen func(), onClick func(i int), hintText string) {
+func ProviderResults(c *goui.Context, rows []providers.RankedMatch, chosen *int, ls *goui.ListState, icons *IconCache, onOpen func(), onClick func(i int), onAction func(i int, id string), hintText string) {
 	t := c.Theme()
 	ls.Selected = chosen
 	ls.Key = func(i int) any { return i }
 	ls.Label = func(i int) string { return rows[i].Title }
-	list := goui.List(c, ls, len(rows), func(i int) { providerRow(c, rows[i], *chosen, icons, onClick, i) }).
-		Grow(1).Padding(6).Children(func() {
+	maxActions := 0
+	for _, r := range rows {
+		if n := len(r.Actions); n > maxActions {
+			maxActions = n
+		}
+	}
+	list := goui.List(c, ls, len(rows), func(i int) {
+		providerRow(c, rows[i], *chosen, maxActions, icons, onClick, onAction, i)
+	}).Grow(1).Padding(6).Children(func() {
 		if len(rows) == 0 && hintText != "" {
 			goui.Text(c, hintText).TextColor(t.TextMuted).Padding(16)
 		}
@@ -52,7 +63,7 @@ func ProviderResults(c *goui.Context, rows []providers.RankedMatch, chosen *int,
 // providerRow 画一行：可选图标（Match.Icon 非空时）+ 标题 + 副标题。三态配色与 hover
 // 逻辑与 apps Row 同口径。Match.Icon 为空串（base64/uuid 等纯计算 provider）→ 不画图标，
 // 行布局与改造前逐字一致。
-func providerRow(c *goui.Context, m providers.RankedMatch, chosen int, icons *IconCache, onClick func(i int), i int) {
+func providerRow(c *goui.Context, m providers.RankedMatch, chosen, maxActions int, icons *IconCache, onClick func(i int), onAction func(i int, id string), i int) {
 	t := c.Theme()
 	bg := goui.Transparent
 	if i == chosen {
@@ -64,14 +75,18 @@ func providerRow(c *goui.Context, m providers.RankedMatch, chosen int, icons *Ic
 	}
 	btn.Children(func() {
 		pill := bg
-		if pill == goui.Transparent && btn.Hovered() {
+		hovered := btn.Hovered()
+		if pill == goui.Transparent && hovered {
 			pill = t.SurfaceHover
 		}
 		goui.Row(c).Grow(1).Height(float32(theme.RowSlotH - theme.RowGap)).MarginX(theme.RowInsetX).
 			Radius(t.Radius).Background(pill).PaddingX(12).Gap(12).AlignItems(goui.Center).
 			Children(func() {
 				var bmp *goui.Bitmap
-				if m.Icon != "" {
+				if len(m.PreviewPNG) > 0 {
+					bmp = previewFor(icons, m)
+				}
+				if bmp == nil && m.Icon != "" {
 					bmp = iconForPath(icons, m.Icon, m.Title)
 				}
 				if bmp != nil {
@@ -87,6 +102,30 @@ func providerRow(c *goui.Context, m providers.RankedMatch, chosen int, icons *Ic
 						goui.Text(c, m.Subtitle).FontSize(theme.DetailSize).TextColor(t.TextMuted).SingleLine()
 					}
 				})
+				ActionBar(c, m.Actions, maxActions, i == chosen || hovered, func(id string) {
+					if onAction != nil {
+						onAction(i, id)
+					}
+				})
 			})
 	})
+}
+
+// previewFor 解码内存缩略图，并复用有界图标缓存；缓存键由 provider 提供
+// （剪贴板 item id），避免每帧重复解码。
+func previewFor(icons *IconCache, m providers.RankedMatch) *goui.Bitmap {
+	if icons == nil || len(m.PreviewPNG) == 0 || m.PreviewKey == "" {
+		return nil
+	}
+	if b, ok := icons.Get(m.PreviewKey); ok {
+		return b
+	}
+	b, err := goui.DecodeBitmap(m.PreviewPNG)
+	if err != nil {
+		log.Printf("解码结果行缩略图失败：%v", err)
+		icons.Put(m.PreviewKey, nil)
+		return nil
+	}
+	icons.Put(m.PreviewKey, b)
+	return b
 }

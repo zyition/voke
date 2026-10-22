@@ -24,12 +24,20 @@ const (
 	IntentRefresh
 	// IntentPlatformAction：其余副作用（Launch/ActivateWindow/SetAwake/…），交 platform/dispatcher 按 Match.Action 落地。
 	IntentPlatformAction
+	// IntentPaste / IntentPastePlain：把 Ref 指向的剪贴板历史项粘贴到原窗口。
+	IntentPaste
+	IntentPastePlain
+	// IntentPin / IntentUnpin / IntentDelete：置顶与删除历史项，面板保留。
+	IntentPin
+	IntentUnpin
+	IntentDelete
 )
 
 // Intent 是一条可执行意图（纯数据）。
 type Intent struct {
 	Kind IntentKind
 	Text string // Copy 文本 / 子模式标识 / 插件 id
+	Ref  string // 插件内部条目引用（剪贴板 item id）
 }
 
 // IntentFor 把一条 Match 摊平成意图，对照生产行为：
@@ -46,15 +54,30 @@ func IntentFor(m Match) Intent {
 	case InteractEnterSubquery:
 		return Intent{Kind: IntentEnterSubMode, Text: m.Interact.Sub}
 	default: // InteractExecute
-		switch m.Action.Kind {
-		case ActionCopy:
-			return Intent{Kind: IntentCopy, Text: m.Action.Text}
-		case ActionActivatePlugin:
-			return Intent{Kind: IntentActivatePlugin, Text: m.Action.PluginID}
-		case ActionRefresh:
-			return Intent{Kind: IntentRefresh}
-		default:
-			return Intent{Kind: IntentPlatformAction}
-		}
+		return IntentForAction(m.Action)
+	}
+}
+
+// IntentForAction 把单个 Action 摊平成意图；行内附加操作与默认动作共用。
+func IntentForAction(a Action) Intent {
+	switch a.Kind {
+	case ActionCopy:
+		return Intent{Kind: IntentCopy, Text: a.Text}
+	case ActionActivatePlugin:
+		return Intent{Kind: IntentActivatePlugin, Text: a.PluginID}
+	case ActionRefresh:
+		return Intent{Kind: IntentRefresh}
+	case ActionPaste:
+		return Intent{Kind: IntentPaste, Ref: a.Ref}
+	case ActionPastePlain:
+		return Intent{Kind: IntentPastePlain, Ref: a.Ref}
+	case ActionPin:
+		return Intent{Kind: IntentPin, Ref: a.Ref}
+	case ActionUnpin:
+		return Intent{Kind: IntentUnpin, Ref: a.Ref}
+	case ActionDelete:
+		return Intent{Kind: IntentDelete, Ref: a.Ref}
+	default:
+		return Intent{Kind: IntentPlatformAction}
 	}
 }

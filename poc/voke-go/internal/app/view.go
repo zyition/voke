@@ -93,7 +93,7 @@ func (st *appState) renderResults(c *ui.Context) {
 	case st.providerActive():
 		// 已落地 provider 的插件态：出 providers.RunOne 的排序结果（provRows 在
 		// applyEngineState 刷新）；空态文案 provHint（解码失败提示 / 用法占位）。
-		appui.ProviderResults(c, st.provRows, &st.provChosen, &st.provList, st.icons, st.open, st.providerClick, st.provHint)
+		appui.ProviderResults(c, st.provRows, &st.provChosen, &st.provList, st.icons, st.open, st.providerClick, st.providerAction, st.provHint)
 	case st.globalActive():
 		// 全局搜索且命中了 apps 以外的全局插件组 → 合并分组列表（apps 组在最前）。
 		appui.GlobalResults(c, st.globalView(), &st.globalChosen, &st.globalList, st.icons, st.open, st.clickGlobal)
@@ -488,6 +488,23 @@ func (st *appState) openProvider() {
 		return
 	}
 	st.runProviderIntent(st.provRows[st.provChosen].Match, st.engineState.PluginID())
+}
+
+// providerAction 执行结果行尾的操作图标。action 由 provider 随 Match 给出，
+// app 只按 Action 的纯数据意图执行；点击 icon 不改变默认动作。
+func (st *appState) providerAction(i int, id string) {
+	if i < 0 || i >= len(st.provRows) {
+		return
+	}
+	m := st.provRows[i].Match
+	for _, a := range m.Actions {
+		if a.ID != id {
+			continue
+		}
+		m.Action = a.Action
+		st.runProviderIntent(m, m.ProviderID)
+		return
+	}
 }
 
 // runProviderIntent 是 provider 结果行「执行」的唯一实现（IntentFor 分流）：

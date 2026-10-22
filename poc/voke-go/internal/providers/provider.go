@@ -76,6 +76,10 @@ type Action struct {
 
 	// ActivatePlugin（# 列表选中）：目标插件 id。
 	PluginID string
+
+	// Ref 是插件内部的条目引用（当前用于剪贴板历史 item id）。
+	// 纯数据，跨层只作不透明标识，不参与展示。
+	Ref string
 }
 
 // ActionKind 是 Action 的判别式。
@@ -93,7 +97,29 @@ const (
 	ActionCancelAwake
 	ActionRefresh
 	ActionActivatePlugin
+	// 剪贴板历史动作：默认动作与行内操作共用同一套纯数据意图。
+	ActionPaste
+	ActionPastePlain
+	ActionPin
+	ActionUnpin
+	ActionDelete
 )
+
+// RowAction 是结果行上可点的附加操作（纯数据）。provider 按条目类型
+// 决定返回哪些操作；UI 只渲染 Label/Shortcut/Icon，不判断业务语义。
+type RowAction struct {
+	// ID 是稳定标识（同时作为默认图标键）：paste / paste-plain / pin / unpin / delete。
+	ID string
+	// Label 是 tooltip 里的中文动作名。
+	Label string
+	// Shortcut 是展示用快捷键串（实际按键由 app 层消费）。
+	Shortcut string
+	// Tooltip 是预拼好的悬浮提示（Label + 快捷键）；空串时 UI 回落 Label。
+	Tooltip string
+	// Icon 是 UI 图标键；空串时回落到 ID。
+	Icon   string
+	Action Action
+}
 
 // Match 是一条候选结果（对照 Rust `Match`）。
 type Match struct {
@@ -101,8 +127,14 @@ type Match struct {
 	Title      string
 	Subtitle   string
 	// Icon 是本地 PNG 路径，空串 = 无图标（对照 Rust `Option<String>`）。
-	Icon   string
-	Action Action
+	Icon string
+	// PreviewPNG / PreviewKey 是内存中的缩略图（剪贴板图片用）。UI 先用
+	// PreviewKey 走图标缓存解码；两者都不写盘。
+	PreviewPNG []byte
+	PreviewKey string
+	// Actions 是结果行上的附加操作；UI 只在选中/悬浮时显示。
+	Actions []RowAction
+	Action  Action
 	// Score 是 provider 给的原始分 0.0–1.0；聚合时乘 provider 权重与频率加成。
 	Score    float64
 	Interact InteractSpec
