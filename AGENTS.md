@@ -77,7 +77,8 @@ Rust/gpui 参考实现已归档到 `legacy-rust` 分支与 `v0.1.x` tag；main �
 推 `vX.Y.Z` tag 即触发 **Go 版**发版：`git tag v0.2.3 && git push origin v0.2.3` →
 `.github/workflows/release.yml` 在 windows-latest 用 Go 构建 `poc/voke-go`，出安装包
 （`voke-setup-<ver>.exe`）与 portable zip（`voke-vX.Y.Z-windows-x86_64.zip`）；ubuntu job
-用 git-cliff 生成 `CHANGELOG.md` 并回推默认分支，建 GitHub Release 挂上两个产物。
+用 git-cliff 把本版本前置到 `CHANGELOG.md`（保留已归档版本的旧条目）并回推默认分支，
+建 GitHub Release 挂上两个产物。
 Rust 时代的 CI / 发版流水线已随代码归档到 `legacy-rust` 分支；当前 CI 为
 `.github/workflows/ci.yml`，发版为 `release.yml`。
 

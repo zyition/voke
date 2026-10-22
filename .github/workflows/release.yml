@@ -126,15 +126,16 @@ jobs:
 
       - name: Generate changelog and release body
         shell: bash
-        # git-cliff 读 git 历史 + Conventional Commits（cliff.toml），
-        # 一次跑出完整 CHANGELOG.md，一次跑出本次版本的 release 正文。
+        # git-cliff 读 git 历史 + Conventional Commits（cliff.toml）。
+        # 只把本版本前置到现有 CHANGELOG，保留 Rust 时代已归档的 v0.1.x 条目；
+        # 整份重写只会覆盖 main 可达的标签，会丢历史版本。
         env:
           TAG_NAME: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          git-cliff --tag "$TAG_NAME" -o CHANGELOG.md
+          git-cliff --latest --tag "$TAG_NAME" --prepend CHANGELOG.md
           git-cliff --latest --tag "$TAG_NAME" -o release-body.md
           printf '\n---\n' >> release-body.md
           echo "Full changelog: https://github.com/$REPO/blob/$DEFAULT_BRANCH/CHANGELOG.md" >> release-body.md

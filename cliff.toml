@@ -2,13 +2,16 @@
 # https://git-cliff.org/docs/configuration
 #
 # CHANGELOG.md 由 Conventional Commits 生成（规范见 AGENTS.md「提交规范 / 发版流程」）。
-# `git-cliff -o CHANGELOG.md` 按 git 历史重写该文件；下面的模板沿用 git-cliff 默认模板，
-# 只改了两处：commit_parsers 决定哪些提交类型进 changelog，分组标题改成简体中文。
+# 发版时用 `git-cliff --latest --prepend CHANGELOG.md` 只前置最新版本，保留已归档的
+# v0.1.x 历史条目；直接 `-o` 会整份重写且只覆盖 main 可达的标签。下面的模板沿用
+# git-cliff 默认模板，只改了两处：commit_parsers 决定哪些提交类型进 changelog，
+# 分组标题改成简体中文。
 
 [changelog]
 # 每个 release 渲染用的 Tera 模板之前的固定抬头，整份文件只渲染一次。
 # 放在这里（而不是手写在 CHANGELOG.md 里）是因为 `git-cliff -o CHANGELOG.md`
-# 是**整份重写**（实测 2.14.2 会覆盖原文件，不是追加），手写的说明会被冲掉。
+# 是**整份重写**（实测 2.14.2 会覆盖原文件，不是追加），手写的说明会被冲掉；
+# 发版工作流因此改用 `--prepend`。
 header = """
 # 更新日志
 
