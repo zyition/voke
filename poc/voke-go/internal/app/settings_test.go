@@ -63,7 +63,7 @@ func TestSeedSettings(t *testing.T) {
 		cfg: appcfg.Loaded{Hotkey: "ctrl+space", Autostart: true, Theme: appcfg.ThemeDark},
 		providers: config.Configs{Providers: []config.ProviderConfig{
 			{ID: "apps", Name: "应用", Enabled: true, IsGlobal: true, Weight: 1.2},
-			{ID: "base64", Name: "Base64", Enabled: false, Prefix: "@b", Activation: engine.Indirect, Weight: 1.0},
+			{ID: "base64", Name: "Base64", Enabled: false, Prefix: "@b", Activation: engine.Indirect, Weight: 1.0, Hotkey: "Ctrl+Shift+B"},
 		}},
 	}
 	s := &settingsWindow{}
@@ -86,8 +86,9 @@ func TestSeedSettings(t *testing.T) {
 		t.Errorf("apps 行错误：%+v", e0)
 	}
 	e1 := s.edits[1]
-	if e1.id != "base64" || e1.enabled || e1.prefix != "@b" || e1.activation != "间接" {
-		t.Errorf("base64 行应未启用/前缀@b/间接：%+v", e1)
+	if e1.id != "base64" || e1.enabled || e1.prefix != "@b" || e1.activation != "间接" ||
+		e1.hotkey != "Ctrl+Shift+B" {
+		t.Errorf("base64 行应未启用/前缀@b/间接/热键 Ctrl+Shift+B：%+v", e1)
 	}
 	// 中文显示值 ↔ 落码映射（save 靠 activationCode 回落 direct/indirect）。
 	if activationCode("间接") != "indirect" || activationCode("直接") != "direct" {

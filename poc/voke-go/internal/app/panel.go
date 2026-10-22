@@ -72,6 +72,15 @@ type appState struct {
 	// showHotkey 是**当前实际注册**的唤隐热键串（ready() 定、设置窗改键更新）。改键要
 	// 「先撤这个旧串、再注新串」，故必须记住注册时用的确切串（而非 st.cfg 里存的那份）。
 	showHotkey string
+	// mainHotkeyOn 表示 showHotkey 当前是否真的注册着：启动失败 / 录制临时挂起时
+	// 为 false，resumeHotkeys 据此决定要不要补注册。
+	mainHotkeyOn bool
+	// pluginHotkeys 是**当前实际注册**的插件热键：provider id → 注册时用的串；
+	// pluginHotkeyErrs 是最近一次同步中失败 / 冲突的中文原因（设置页展示）。
+	// hotkeysSuspended 表示设置页正在录制，所有全局热键已临时注销（见 hotkeys.go）。
+	pluginHotkeys    map[string]string
+	pluginHotkeyErrs map[string]string
+	hotkeysSuspended bool
 	// settings 是独立设置窗（§7.2 / 设计文档「设置页」880×600）：nil = 未开过；
 	// 打开时懒建、绑定态存其中（见 settings.go）。只在主线程读写（托盘 Click）。
 	settings *settingsWindow
@@ -270,7 +279,12 @@ func (st *appState) ready() {
 	// 回调本体 st.togglePanel 读写 appState 与面板句柄，留在本文件。
 	if err := platform.RegisterHotkey(showHotkey, st.togglePanel); err != nil {
 		log.Printf("注册热键 %s 失败：%v", showHotkey, err)
+	} else {
+		st.mainHotkeyOn = true
 	}
+	// 插件热键：只注册“已启用且配置了 hotkey”的插件（无默认值）。单个失败只记日志
+	// 并在设置页展示，不影响主热键与其它插件。
+	st.syncPluginHotkeys()
 	st.setupTray()
 	// 应用枚举接缝（apps.go 契约）：这里**只注册回调、不触发枚举**。
 	// 唤起懒加载（PoC 文档 §11.12）——启动与唤起都只有一个空输入框，

@@ -84,3 +84,24 @@ func DefaultHotkey() Hotkey {
 	}
 	return Hotkey{Alt: true, Key: "space"}
 }
+
+// CanonicalHotkey 返回用于**冲突比较**的规范串：大小写、修饰键别名、顺序都归一。
+// 解析失败时退化为去首尾空白的原串（仍可做保守的相同性比较）。注册仍用原串——
+// 本函数只服务「两个热键是不是同一个」这类判断，不改变用户配置。
+func CanonicalHotkey(s string) string {
+	raw := strings.TrimSpace(s)
+	if h, ok := ParseHotkey(raw); ok {
+		return h.String()
+	}
+	return raw
+}
+
+// HasModifier 报告热键是否带至少一个修饰键（Ctrl / Alt / Shift / Win）。
+// 全局热键不允许裸主键：那会劫持所有应用里的正常输入。
+func HasModifier(s string) bool {
+	h, ok := ParseHotkey(s)
+	if !ok {
+		return false
+	}
+	return h.Ctrl || h.Alt || h.Shift || h.Win
+}

@@ -97,6 +97,10 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 
   ——`internal/platform/singleinstance.go`、`internal/app/main.go`。
 - 热键：mygo `GlobalShortcut` 主线程直接回调，改键「撤旧→注新→失败回滚」——
   `internal/platform/hotkey.go`、`internal/app/settings.go`。
+- 插件全局快捷键：无默认值，用户逐插件录制；只注册已启用插件，停用即注销。录制时
+  主热键与所有插件热键统一挂起（否则旧组合被系统先吃掉），结束后重建。插件热键是
+  “直达/切换”而非显隐 toggle（隐藏仍归主热键 / Esc）——`internal/app/hotkeys.go`、
+  `internal/app/settings.go`。
 - 托盘：mygo `Tray`；左键双击显示面板，右键菜单；菜单是 `SetMenu` 快照，awake
   状态变化与面板显隐时重建——`internal/app/panel.go`。
 - 设置窗「关闭 = 程序化销毁」：`Window.Update` 里 `Destroy`，回收渲染资源——

@@ -79,6 +79,7 @@ type providerEdit struct {
 	weight     float64
 	prefix     string
 	activation string // 显示值 "Direct" / "Indirect"，save 时小写落码
+	hotkey     string // 插件全局快捷键；空 = 未绑定（无默认值）
 }
 
 // settingsWindow 是设置窗的绑定态（只在主线程、只在窗口存活期读写）。theme 存的是
@@ -95,8 +96,10 @@ type settingsWindow struct {
 	closed bool
 	// 热键录制器状态：recording 时用一个只读输入框接管按键（每帧回焦点），捕获到组合
 	// 即注册生效；Esc 取消并恢复旧键。recBuf 是只读框的绑定串（不承载实际内容）。
-	recording bool
-	hotkeyErr string
+	// recPluginID 是本次录制的目标插件 id；空串 = 主唤隐热键。
+	recording   bool
+	recPluginID string
+	hotkeyErr   string
 	// configErr 是插件前缀校验失败的中文提示（冲突 / 含空白 / 保留键）。
 	// 非空时 applySettings 不落盘、不重载，界面停留在上一次有效配置。
 	configErr string
@@ -176,6 +179,7 @@ func (st *appState) seedSettings(s *settingsWindow) {
 		s.edits = append(s.edits, providerEdit{
 			id: p.ID, name: p.Name, enabled: p.Enabled, isGlobal: p.IsGlobal,
 			weight: p.Weight, prefix: p.Prefix, activation: activationLabel(p.Activation),
+			hotkey: p.Hotkey,
 		})
 	}
 }
@@ -260,15 +264,17 @@ func (st *appState) closeSettings(s *settingsWindow) {
 	})
 }
 
-// startHotkeyRecording 进入录制态：**先注销当前全局热键**——否则按下旧组合会被系统
-// 当成既有热键触发面板、轮不到我们捕获（这就是录制时的“锁定”问题）。
-func (st *appState) startHotkeyRecording(s *settingsWindow) {
+// startHotkeyRecording 进入录制态：**先挂起所有全局热键**（主热键 + 插件热键）——
+// 否则按下旧组合会被系统当成既有热键触发，轮不到我们捕获。pluginID 为空 = 录制
+// 主唤隐热键；否则是目标插件 id。
+func (st *appState) startHotkeyRecording(s *settingsWindow, pluginID string) {
 	if s.recording {
 		return
 	}
 	s.recording = true
+	s.recPluginID = pluginID
 	s.hotkeyErr = ""
-	platform.UnregisterHotkey(st.showHotkey)
+	st.suspendHotkeys()
 	st.armHotkeyRecTimeout(s)
 }
 
@@ -300,22 +306,20 @@ func stopRecTimer(s *settingsWindow) {
 	}
 }
 
-// cancelHotkeyRecording 退出录制并恢复旧热键（Esc 或关窗/完成时调）。
+// cancelHotkeyRecording 退出录制并恢复全部热键（Esc 或关窗/完成时调）。
 func (st *appState) cancelHotkeyRecording(s *settingsWindow) {
 	if !s.recording {
 		return
 	}
 	s.recording = false
+	s.recPluginID = ""
+	s.hotkeyErr = ""
 	stopRecTimer(s)
-	if st.showHotkey != "" {
-		if err := platform.RegisterHotkey(st.showHotkey, st.togglePanel); err != nil {
-			log.Printf("voke 恢复旧热键 %q 失败：%v", st.showHotkey, err)
-		}
-	}
+	st.resumeHotkeys()
 }
 
 // recordHotkey 在录制态处理一次按键（输入框 OnTextKey 回调）：Esc 取消；合法组合则
-// 落盘注册并退出录制；无修饰键/不支持的键提示重按。
+// 先查冲突与系统占用，通过后落盘并退出录制；无修饰键/不支持的键提示重按。
 func (st *appState) recordHotkey(s *settingsWindow, k ui.TextKey) bool {
 	if !s.recording {
 		return false
@@ -330,19 +334,62 @@ func (st *appState) recordHotkey(s *settingsWindow, k ui.TextKey) bool {
 		st.armHotkeyRecTimeout(s) // 无效键也续期，给用户重试机会
 		return true
 	}
-	s.recording = false
-	s.hotkeyErr = ""
-	stopRecTimer(s)
-	if acc == st.showHotkey {
-		// 录的就是旧键：start 时已注销，这里补回（applySettings 会因“未变化”跳过注册）。
-		if err := platform.RegisterHotkey(acc, st.togglePanel); err != nil {
-			log.Printf("voke 重新注册热键 %q 失败：%v", acc, err)
+
+	// 先写进编辑态，用统一校验查“与主热键 / 其它启用插件”的冲突；失败回滚。
+	target := s.recPluginID
+	oldMain := s.hotkey
+	var edit *providerEdit
+	var oldPlugin string
+	if target == "" {
+		s.hotkey = acc
+	} else {
+		edit = findProviderEdit(s.edits, target)
+		if edit == nil {
+			st.cancelHotkeyRecording(s)
+			return true
 		}
+		oldPlugin = edit.hotkey
+		edit.hotkey = acc
+	}
+	revert := func() {
+		if target == "" {
+			s.hotkey = oldMain
+		} else if edit != nil {
+			edit.hotkey = oldPlugin
+		}
+	}
+	if msg := hotkeySettingsError(s.edits, s.hotkey); msg != "" {
+		revert()
+		s.hotkeyErr = msg
+		st.armHotkeyRecTimeout(s)
 		return true
 	}
-	s.hotkey = acc
-	st.applySettings() // 落盘 + 撤旧注新（旧键已注销，撤是幂等）
+	// 探测系统级占用：此刻所有热键都已挂起，注册成功即说明组合可用。
+	if err := platform.RegisterHotkey(acc, func() {}); err != nil {
+		revert()
+		s.hotkeyErr = "该快捷键已被系统或其他程序占用，请换一个"
+		st.armHotkeyRecTimeout(s)
+		return true
+	}
+	platform.UnregisterHotkey(acc)
+
+	s.recording = false
+	s.recPluginID = ""
+	s.hotkeyErr = ""
+	stopRecTimer(s)
+	st.applySettings() // 落盘 + 重载（录制中插件热键同步会跳过）
+	st.resumeHotkeys() // 结束后按新配置统一重建
 	return true
+}
+
+// findProviderEdit 按插件 id 取设置页里的可变编辑项（找不到返回 nil）。
+func findProviderEdit(edits []providerEdit, id string) *providerEdit {
+	for i := range edits {
+		if edits[i].id == id {
+			return &edits[i]
+		}
+	}
+	return nil
 }
 
 // settingsView 是设置窗整帧视图。所有控件**即时生效**（无保存按钮）：开关/选择器改动
@@ -385,7 +432,7 @@ func (st *appState) settingsView(c *ui.Context) {
 				// ── 快捷键 ──
 				ui.Fieldset(c, "快捷键", func() {
 					ui.Column(c).Gap(6).Children(func() {
-						if s.recording {
+						if s.recording && s.recPluginID == "" {
 							ui.Text(c, "请按下新的快捷键（Esc 取消）").FontSize(theme.HintSize).TextColor(t.TextMuted)
 							ui.TextInputBase(c, &s.recBuf).Bind(&s.recHandle).ReadOnly(true).Grow(1).
 								FontSize(theme.InputSize).Placeholder("等待按键…").Label("录制热键").
@@ -394,13 +441,15 @@ func (st *appState) settingsView(c *ui.Context) {
 						} else {
 							ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 								ui.Text(c, "全局唤起 / 隐藏面板").FontSize(theme.HintSize).TextColor(t.TextMuted).Grow(1)
-								if ui.Button(c, s.hotkey).Clicked() {
-									st.startHotkeyRecording(s)
+								btn := ui.Button(c, s.hotkey)
+								btn.Disabled(s.recording)
+								if btn.Clicked() {
+									st.startHotkeyRecording(s, "")
 								}
 							})
 							ui.Text(c, "点击按键块后按下新组合，Esc 取消").FontSize(theme.HintSize).TextColor(t.TextMuted)
 						}
-						if s.hotkeyErr != "" {
+						if s.hotkeyErr != "" && s.recPluginID == "" {
 							ui.Text(c, s.hotkeyErr).FontSize(theme.HintSize).TextColor(t.Danger)
 						}
 					})
@@ -420,36 +469,82 @@ func (st *appState) settingsView(c *ui.Context) {
 								if ui.Checkbox(c, &p.enabled, "启用").Changed() {
 									st.applySettings()
 								}
-								ui.Spacer(c)
-								ui.Text(c, "参与全局搜索").FontSize(theme.HintSize).TextColor(t.TextMuted)
-								if ui.Switch(c, &p.isGlobal).Changed() {
-									st.applySettings()
-								}
 							})
-							ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-								ui.Text(c, "前缀").FontSize(theme.HintSize).TextColor(t.TextMuted)
-								if ui.TextInput(c, &p.prefix).Grow(1).FontSize(theme.InputSize).
-									Placeholder("如 @b；空=无").Label(p.name + " 前缀").Changed() {
-									st.applySettings()
-								}
-								ui.Text(c, "权重").FontSize(theme.HintSize).TextColor(t.TextMuted)
-								if ui.NumberInput(c, &p.weight, 0, 3, 0.1).Changed() {
-									st.applySettings()
-								}
-								if ui.Select(c, &p.activation, activationLabels).Changed() {
-									st.applySettings()
-								}
-							})
-							if p.id == providerClipboardID {
+							if !p.enabled {
+								ui.Text(c, "插件已停用，以下配置不生效").FontSize(theme.HintSize).TextColor(t.TextMuted)
+							}
+							// 未启用时整组配置禁用：不可点、不可聚焦，避免改了一个当前不生效的值。
+							ui.Column(c).Gap(12).Disabled(!p.enabled).Children(func() {
 								ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-									ui.Text(c, "历史条数").FontSize(theme.HintSize).TextColor(t.TextMuted)
-									if ui.NumberInput(c, &s.clipboardMax, 1, 1000, 1).Changed() {
+									ui.Spacer(c)
+									ui.Text(c, "参与全局搜索").FontSize(theme.HintSize).TextColor(t.TextMuted)
+									if ui.Switch(c, &p.isGlobal).Changed() {
 										st.applySettings()
 									}
-									ui.Text(c, "普通条目上限；置顶 10 条不计入").
-										FontSize(theme.HintSize).TextColor(t.TextMuted).Grow(1)
 								})
-							}
+								ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+									ui.Text(c, "前缀").FontSize(theme.HintSize).TextColor(t.TextMuted)
+									if ui.TextInput(c, &p.prefix).Grow(1).FontSize(theme.InputSize).
+										Placeholder("如 @b；空=无").Label(p.name + " 前缀").Changed() {
+										st.applySettings()
+									}
+									ui.Text(c, "权重").FontSize(theme.HintSize).TextColor(t.TextMuted)
+									if ui.NumberInput(c, &p.weight, 0, 3, 0.1).Changed() {
+										st.applySettings()
+									}
+									if ui.Select(c, &p.activation, activationLabels).Changed() {
+										st.applySettings()
+									}
+								})
+								if p.id != engine.PickerPluginID {
+									ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+										ui.Text(c, "全局快捷键").FontSize(theme.HintSize).TextColor(t.TextMuted)
+										if s.recording && s.recPluginID == p.id {
+											ui.TextInputBase(c, &s.recBuf).Bind(&s.recHandle).ReadOnly(true).Grow(1).
+												FontSize(theme.InputSize).Placeholder("等待按键…").
+												Label(p.name + " 全局快捷键").
+												OnTextKey(func(k ui.TextKey) bool { return st.recordHotkey(s, k) })
+											s.recHandle.Focus()
+										} else {
+											label := p.hotkey
+											if label == "" {
+												label = "未设置"
+											}
+											btn := ui.Button(c, label)
+											btn.Disabled(s.recording)
+											if btn.Clicked() {
+												st.startHotkeyRecording(s, p.id)
+											}
+											if p.hotkey != "" {
+												if ui.Button(c, "清除").Clicked() {
+													p.hotkey = ""
+													s.hotkeyErr = ""
+													st.applySettings()
+												}
+											}
+											ui.Text(c, "点击后按组合键；仅启用时注册").
+												FontSize(theme.HintSize).TextColor(t.TextMuted).Grow(1)
+										}
+									})
+									if s.recording && s.recPluginID == p.id && s.hotkeyErr != "" {
+										ui.Text(c, s.hotkeyErr).FontSize(theme.HintSize).TextColor(t.Danger)
+									}
+									if msg := st.pluginHotkeyError(p.id); msg != "" &&
+										!(s.recording && s.recPluginID == p.id) {
+										ui.Text(c, msg).FontSize(theme.HintSize).TextColor(t.Danger)
+									}
+								}
+								if p.id == providerClipboardID {
+									ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+										ui.Text(c, "历史条数").FontSize(theme.HintSize).TextColor(t.TextMuted)
+										if ui.NumberInput(c, &s.clipboardMax, 1, 1000, 1).Changed() {
+											st.applySettings()
+										}
+										ui.Text(c, "普通条目上限；置顶 10 条不计入").
+											FontSize(theme.HintSize).TextColor(t.TextMuted).Grow(1)
+									})
+								}
+							})
 						})
 					})
 				}
@@ -493,6 +588,11 @@ func (st *appState) applySettings() {
 	if msg := prefixSettingsError(s.edits, overrides); msg != "" {
 		// 前缀无效时不落盘、不重载：界面与生效配置都停在上一次有效状态，
 		// 错误提示就地显示（见 settingsView 的「插件」区）。
+		s.configErr = msg
+		return
+	}
+	if msg := hotkeySettingsError(s.edits, s.hotkey); msg != "" {
+		// 与主热键 / 其它启用插件撞键：同样不落盘，避免“保存成功但没注册”。
 		s.configErr = msg
 		return
 	}
@@ -545,35 +645,60 @@ func (st *appState) applySettings() {
 	platform.SetThemeSource(string(st.cfg.Theme))
 	// 改键当场生效：先撤旧串、再注新串；注新失败则回滚旧串（对照生产「注册失败回退」，
 	// 绝不留「新旧都没绑」的空窗）。撤/注都只在主线程（本函数由托盘 Click→saveSettings 走到）。
-	if newKey := st.cfg.Hotkey; newKey != "" && newKey != st.showHotkey {
-		platform.UnregisterHotkey(st.showHotkey)
-		if err := platform.RegisterHotkey(newKey, st.togglePanel); err != nil {
-			log.Printf("voke 改键注册 %q 失败，回滚到 %q：%v", newKey, st.showHotkey, err)
-			platform.UnregisterHotkey(newKey)
-			if rerr := platform.RegisterHotkey(st.showHotkey, st.togglePanel); rerr != nil {
-				log.Printf("voke 回滚注册旧键 %q 也失败（下次启动按配置重建）：%v", st.showHotkey, rerr)
-			}
-		} else {
-			st.showHotkey = newKey
-		}
-	}
+	st.rebindMainHotkey(st.cfg.Hotkey)
+	// 插件启用 / 停用 / 改键后，同步实际的插件热键注册表。录制期间会跳过（热键已挂起），
+	// 录制结束后由 resumeHotkeys 统一重建。
+	st.syncPluginHotkeys()
 
 	s.hotkey = st.showHotkey // 回显实际生效的键（改键失败时即旧键）
 }
 
-// providerOverrides 把设置页的绑定态包成 UserOverride。所有字段都写成指针，
-// 保持「打开后不改、直接触发一次保存」也是幂等写回。
+// providerOverrides 把设置页的绑定态包成 UserOverride。除 hotkey 外所有字段都写成
+// 指针，保持「打开后不改、直接触发一次保存」也是幂等写回；hotkey 空 = 未绑定，
+// 没有默认值，故省略该键与写空串等价。
 func providerOverrides(edits []providerEdit) []config.UserOverride {
 	overrides := make([]config.UserOverride, 0, len(edits))
 	for _, p := range edits {
 		enabled, isGlobal, weight, prefix := p.enabled, p.isGlobal, p.weight, p.prefix
 		activation := activationCode(p.activation)
-		overrides = append(overrides, config.UserOverride{
+		ov := config.UserOverride{
 			ID: p.id, Enabled: &enabled, IsGlobal: &isGlobal,
 			Weight: &weight, Prefix: &prefix, Activation: &activation,
-		})
+		}
+		if p.hotkey != "" {
+			// 空 = 未绑定；没有默认值，故省略该键与写空串等价，保持文件干净。
+			hk := p.hotkey
+			ov.Hotkey = &hk
+		}
+		overrides = append(overrides, ov)
 	}
 	return overrides
+}
+
+// hotkeySettingsError 校验插件快捷键：只检查**启用**的插件（停用时不注册），
+// 并同时与主唤隐热键比较。返回中文错误（空串 = 通过）。
+func hotkeySettingsError(edits []providerEdit, mainHotkey string) string {
+	owners := make(map[string]string) // 规范化热键 → 占用者描述
+	if mainHotkey != "" {
+		owners[config.CanonicalHotkey(mainHotkey)] = "全局唤起热键"
+	}
+	for _, p := range edits {
+		if !p.enabled || p.hotkey == "" || p.id == engine.PickerPluginID {
+			continue
+		}
+		if !config.HasModifier(p.hotkey) {
+			return fmt.Sprintf("%s 的快捷键 %s 无效：需至少一个修饰键", p.name, p.hotkey)
+		}
+		key := config.CanonicalHotkey(p.hotkey)
+		if owner, ok := owners[key]; ok {
+			if owner == "全局唤起热键" {
+				return fmt.Sprintf("%s 的快捷键 %s 与全局唤起热键冲突", p.name, p.hotkey)
+			}
+			return fmt.Sprintf("%s 的快捷键 %s 与%s冲突", p.name, p.hotkey, owner)
+		}
+		owners[key] = fmt.Sprintf("插件「%s」的快捷键", p.name)
+	}
+	return ""
 }
 
 // prefixSettingsError 在落盘前校验插件前缀，返回中文错误（空串 = 通过）：

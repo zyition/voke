@@ -41,13 +41,13 @@ const (
 	neutralWeight = 1.0
 )
 
-// Normalize 合并默认值与用户覆盖，产出归一后的 Configs，并跑 C1–C7。
+// Normalize 合并默认值与用户覆盖，产出归一后的 Configs，并跑 C1–C8。
 //
 // 执行顺序（越靠前的失败越致命，后面的校验要用前面归一出的最终值）：
 //
 //  0. 注册表自检（id 非空且不重复）——C1 的前提；
 //  1. C1 未知 id → 报错，列出**全部**未知 id（生产 D4 的静默失效就是缺这条）；
-//  2. 逐插件合并 + C7 activation、C5 weight、C6 count、C3 prefix；
+//  2. 逐插件合并 + C7 activation、C5 weight、C6 count、C3 prefix、C8 hotkey；
 //  3. C4 保留键 → 报错（要拦的是「picker 那条还没进表就被字母键挤掉」）；
 //  4. C2 触发串互不为前缀 → 报错，列出每一对撞车插件（判定见 prefix.go）。
 //
@@ -139,6 +139,15 @@ func Normalize(descriptors []Descriptor, overrides []UserOverride) (Configs, err
 		if p.Prefix != "" && containsSpace(p.Prefix) {
 			out.warnf("插件 %s 的前缀 %q 含空白，已置空（C3：前缀不能含空白）", d.ID, p.Prefix)
 			p.Prefix = ""
+		}
+
+		// C8：插件快捷键必须可解析且至少带一个修饰键；否则置空 + 中文警告。
+		// 没有 Descriptor 默认值——不配置就等于不绑定。
+		p.Hotkey = strings.TrimSpace(derefString(ov.Hotkey, ""))
+		if p.Hotkey != "" && !HasModifier(p.Hotkey) {
+			out.warnf("插件 %s 的 hotkey %q 无效（需可解析且至少一个修饰键），已忽略（C8）",
+				d.ID, p.Hotkey)
+			p.Hotkey = ""
 		}
 
 		out.Providers = append(out.Providers, p)

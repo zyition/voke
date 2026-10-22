@@ -119,10 +119,11 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
 - 路径：`%APPDATA%\voke\config.toml`（与旧 Rust 版同格式，可互相读取）。
 - 顶层：`hotkey` / `autostart` / `theme` / `[clipboard] max_entries`（默认 100，范围 1–1000）。
 - 插件节：`[providers.<id>]`，字段 `enabled` / `is_global` / `weight` / `prefix` /
-  `activation` / `count`；未写字段回落 Descriptor 默认。
+  `activation` / `count` / `hotkey`；未写字段回落 Descriptor 默认。`hotkey` 是例外：
+  刻意没有默认值，未写 = 不绑定，由用户手动录制。
 - 归一（`internal/logic/config`）：C1 未知 id、C2 触发串冲突、C3 前缀不含空白、
-  C4 字母/数字保留键、C5 weight、C6 count、C7 activation；错误落日志并降级，
-  不静默。
+  C4 字母/数字保留键、C5 weight、C6 count、C7 activation、C8 插件热键需可解析且
+  至少一个修饰键；错误落日志并降级，不静默。
 - 频率表：`%APPDATA%\voke\frequency.toml`，跨版本保留；首次可从旧目录只读导入。
 - 设置页修改即时落盘并热重载；前缀非法时不写盘、就地显示错误。
 - 错误路径与旧实现对齐：自启注册失败则配置与界面回弹；热键注册失败撤新注旧；
@@ -148,7 +149,11 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
 
 ## 7. 生命周期与 UI
 
-- 启动即托盘常驻；面板窗口隐藏创建，热键 toggle、托盘双击、二次启动唤醒。
+- 启动即托盘常驻；面板窗口隐藏创建，主热键 toggle、托盘双击、二次启动唤醒。
+- 插件全局快捷键：只注册“已启用 + 配置了 hotkey”的插件；停用即注销，启用后重注。
+  交互对齐主流启动器的 per-plugin hotkey——隐藏时唤起并 `enterPlugin` 直达，已在
+  该插件时只聚焦（保留过滤词），其它状态则切换；不做“再按一次隐藏”。录制期间主热键
+  与所有插件热键统一挂起，结束后按新配置重建（`internal/app/hotkeys.go`）。
 - 失焦 / Esc 隐藏面板（保留查询与插件页）；Backspace 逐级回退作用域，回到上层时输入
   恒为空（过滤词在入栈时丢弃，不跨层恢复）；Enter 执行选中项；Ctrl+Backspace 手动清空
   查询并退回 Global（面板保持可见，焦点不在输入框时也生效）。

@@ -87,6 +87,9 @@ type UserOverride struct {
 	Weight *float64
 	// Count 对应 count。
 	Count *int
+	// Hotkey 对应 hotkey：插件全局快捷键（Electron 风格加速器串，如 "Alt+`"）。
+	// 刻意没有 Descriptor 默认值：所有插件默认不绑定，由用户在设置页手动录制。
+	Hotkey *string
 }
 
 // ProviderConfig 是归一后的**唯一一份真相**（§7.3.4 第三层）。
@@ -112,6 +115,9 @@ type ProviderConfig struct {
 	Weight float64
 	// Count 是生效条数（C6 后恒在 1..50；不用条数概念的插件忽略它）。
 	Count int
+	// Hotkey 是生效的插件全局快捷键（"" = 未绑定）。只有用户显式配置才有值；
+	// 是否注册还要看 Enabled（见 app/hotkeys.go）。
+	Hotkey string
 }
 
 // Configs 是 Normalize 的产物：注册顺序的 ProviderConfig + 要落日志的中文警告。

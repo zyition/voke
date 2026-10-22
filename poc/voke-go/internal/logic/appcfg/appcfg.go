@@ -54,6 +54,7 @@ type providerPatch struct {
 	Prefix     *string  `json:"prefix,omitempty" toml:"prefix,omitempty"`
 	Activation *string  `json:"activation,omitempty" toml:"activation,omitempty"`
 	Count      *int     `json:"count,omitempty" toml:"count,omitempty"`
+	Hotkey     *string  `json:"hotkey,omitempty" toml:"hotkey,omitempty"`
 }
 
 // configFile 是顶层 schema（与生产 config.toml 同形：顶层三键 + [providers.<id>] 表）。
@@ -129,6 +130,7 @@ func decodeFile(f configFile) Loaded {
 			Weight:   p.Weight,
 			Prefix:   p.Prefix,
 			Count:    p.Count,
+			Hotkey:   p.Hotkey,
 		}
 		if p.Activation != nil {
 			if a, ok := normalizeActivation(*p.Activation); ok {
@@ -199,7 +201,7 @@ func Encode(top Top, overrides []config.UserOverride) ([]byte, error) {
 	for _, ov := range overrides {
 		patch := providerPatch{
 			Enabled: ov.Enabled, IsGlobal: ov.IsGlobal, Weight: ov.Weight,
-			Activation: ov.Activation, Count: ov.Count,
+			Activation: ov.Activation, Count: ov.Count, Hotkey: ov.Hotkey,
 		}
 		if ov.Prefix != nil && *ov.Prefix != "" {
 			patch.Prefix = ov.Prefix // 空前缀=无，生产 config.toml 也不写该键
