@@ -115,6 +115,10 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 
   粘贴写回后先恢复唤起前的窗口，再发 `Ctrl+V`（终端用 `Shift+Insert`）；失败时保留面板并
   提示手动粘贴。历史存储 `internal/logic/cliphist`，采集/按键 `internal/platform/clipboard*`，
   监控与自我写入抑制 `internal/app/clipboard.go`。
+- 窗口结束任务：窗口 provider 行尾操作 + `Ctrl+Shift+Delete`（输入框会消费 Delete，
+  必须在 `OnTextKey` 截住）。先 `PostMessage(WM_CLOSE)`，6 秒后仅对
+  `IsHungAppWindow` 为真的窗口 `TerminateProcess`；自身 / 核心系统进程在
+  `platform/endtask.go` 拒绝。结束的是窗口所属进程，子进程不递归。
 - 前缀冲突（C2）：触发串（Direct=前缀，Indirect=前缀+空格）双向互为前缀即冲突；
   默认二级前缀 `@b/@u/@t/@r`，`#` 归 picker。旧配置加载时只丢弃冲突项的 Prefix
   覆盖，设置页保存前同一套校验——`internal/logic/config/prefix.go`、

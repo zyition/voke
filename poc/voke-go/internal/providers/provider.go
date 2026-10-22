@@ -64,7 +64,7 @@ type Action struct {
 	Profile      string
 	FallbackPath string
 
-	// ActivateWindow：窗口句柄（Windows 上是 HWND 数值）。
+	// ActivateWindow / EndTask：窗口句柄（Windows 上是 HWND 数值）。
 	Hwnd uintptr
 
 	// OpenUrl：URL；Copy：待写入剪贴板的文本。二者复用 Text。
@@ -103,6 +103,8 @@ const (
 	ActionPin
 	ActionUnpin
 	ActionDelete
+	// ActionEndTask：结束窗口所属进程（窗口 provider 的行内操作）。
+	ActionEndTask
 )
 
 // RowAction 是结果行上可点的附加操作（纯数据）。provider 按条目类型

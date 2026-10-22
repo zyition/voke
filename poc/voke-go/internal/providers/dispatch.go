@@ -31,6 +31,8 @@ const (
 	IntentPin
 	IntentUnpin
 	IntentDelete
+	// IntentEndTask：结束窗口所属进程（成功后面板隐藏并复位）。
+	IntentEndTask
 )
 
 // Intent 是一条可执行意图（纯数据）。
@@ -38,6 +40,8 @@ type Intent struct {
 	Kind IntentKind
 	Text string // Copy 文本 / 子模式标识 / 插件 id
 	Ref  string // 插件内部条目引用（剪贴板 item id）
+	// Hwnd 是窗口类动作的目标句柄（ActivateWindow / EndTask）。
+	Hwnd uintptr
 }
 
 // IntentFor 把一条 Match 摊平成意图，对照生产行为：
@@ -77,6 +81,8 @@ func IntentForAction(a Action) Intent {
 		return Intent{Kind: IntentUnpin, Ref: a.Ref}
 	case ActionDelete:
 		return Intent{Kind: IntentDelete, Ref: a.Ref}
+	case ActionEndTask:
+		return Intent{Kind: IntentEndTask, Hwnd: a.Hwnd}
 	default:
 		return Intent{Kind: IntentPlatformAction}
 	}

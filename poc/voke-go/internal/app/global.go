@@ -165,6 +165,7 @@ func (st *appState) globalView() []appui.GlobalRow {
 		out = append(out, appui.GlobalRow{
 			Title: m.Title, Subtitle: m.Subtitle, Icon: m.Icon, ProviderID: r.groupID,
 			GroupLabel: st.providerName(r.groupID), NewGroup: r.newGroup,
+			Actions: m.Actions,
 		})
 	}
 	return out
@@ -201,4 +202,25 @@ func (st *appState) openGlobal(i int) {
 func (st *appState) clickGlobal(i int) {
 	st.globalChosen = i
 	st.openGlobal(i)
+}
+
+// globalAction 执行合并列表第 i 行的附加操作图标。apps 行没有行内操作；
+// provider 行按自己的 Match.Actions 找 id，再交统一 intent 执行器。
+func (st *appState) globalAction(i int, id string) {
+	if i < 0 || i >= len(st.globalRows) {
+		return
+	}
+	r := st.globalRows[i]
+	if r.apps || r.provIdx < 0 || r.provIdx >= len(st.globalProvRows) {
+		return
+	}
+	m := st.globalProvRows[r.provIdx].Match
+	for _, a := range m.Actions {
+		if a.ID != id {
+			continue
+		}
+		m.Action = a.Action
+		st.runProviderIntent(m, m.ProviderID)
+		return
+	}
 }

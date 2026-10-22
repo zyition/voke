@@ -128,10 +128,10 @@ type appState struct {
 	clipSeq uint32
 	// clipTarget 是唤起面板前的前台窗口快照，粘贴时恢复它并发送按键。
 	clipTarget platform.ClipTarget
-	// clipNotice 是剪贴板操作的一次性提示（粘贴失败 / 置顶已满），显示在底部
-	// 提示行；clipNoticeAt 用于下次唤起时判断是否过期。
-	clipNotice   string
-	clipNoticeAt time.Time
+	// notice 是一次性操作提示（粘贴失败 / 置顶已满 / 结束任务失败），显示在底部
+	// 提示行；noticeAt 用于下次唤起时判断是否过期。
+	notice   string
+	noticeAt time.Time
 	// clipSuppress / clipSuppressUntil 是程序化写入的内容指纹与有效期。仅靠序列号
 	// 不够：Windows 的延迟渲染会让序列号在 OleSetClipboard 之后再次递增，若只对齐
 	// 一次，粘贴「纯文本」写回的降级内容会被当成一次新复制。有效期内读到相同内容
@@ -388,8 +388,8 @@ func (st *appState) showPanel() {
 			st.clipTarget = t
 		}
 	}
-	if st.clipNotice != "" && !st.clipNoticeAt.IsZero() && time.Since(st.clipNoticeAt) > clipNoticeTTL {
-		st.clipNotice = ""
+	if st.notice != "" && !st.noticeAt.IsZero() && time.Since(st.noticeAt) > noticeTTL {
+		st.notice = ""
 	}
 	d := mygo.Screen.PrimaryDisplay()
 	w, h := st.panel.Size()

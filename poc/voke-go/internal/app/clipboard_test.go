@@ -98,7 +98,7 @@ func TestClipboardPinLimitNotice(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.toggleClipboardPin(extra.ID)
-	if st.clipNotice == "" || st.clipNoticeAt.IsZero() {
+	if st.notice == "" || st.noticeAt.IsZero() {
 		t.Fatal("置顶已满时应给出提示")
 	}
 	if it, _ := st.hist.Find(extra.ID); it.Pinned {
@@ -119,8 +119,8 @@ func TestPasteSelectedPlainRejectsImageOnly(t *testing.T) {
 	if !st.pasteSelectedPlain() {
 		t.Fatal("剪贴板插件态应消费 Ctrl+Enter")
 	}
-	if st.clipNotice != "该条目没有文本，无法纯文本粘贴" {
-		t.Fatalf("图片项 Ctrl+Enter 应提示无文本，得到 %q", st.clipNotice)
+	if st.notice != "该条目没有文本，无法纯文本粘贴" {
+		t.Fatalf("图片项 Ctrl+Enter 应提示无文本，得到 %q", st.notice)
 	}
 }
 

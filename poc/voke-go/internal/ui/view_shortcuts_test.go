@@ -40,6 +40,33 @@ func TestCtrlEnterTriggersPlainOpen(t *testing.T) {
 	}
 }
 
+// Ctrl+Shift+Delete 会被输入框编辑器视为「删后一个词」（KeyDelete 的 wants 恒真），
+// 必须在 OnTextKey 里先截住；本用例验证它确实到达 OnEndTask。
+func TestEndTaskShortcutReachesWindow(t *testing.T) {
+	var query string
+	var input goui.Handle
+	var end int
+
+	tt := goui.NewTester(func(c *goui.Context) {
+		View(c, ViewInput{
+			Hotkey: "Alt+Space", Query: &query, Input: &input, Placeholder: "搜索",
+			OnEsc: func() {}, OnMove: func(int) {}, OnOpen: func() {},
+			OnOpenPlain: func() bool { return true },
+			OnPinToggle: func() {}, OnDeleteSelected: func() {}, OnEndTask: func() { end++ },
+			OnQueryChanged: func() {}, OnBackspaceAtEmpty: func() bool { return false },
+			OnResetInput: func() {}, OnQuit: func() {}, OnOpenSettings: func() {},
+			RenderResults: func(*goui.Context) {},
+		})
+	}, 680, 494)
+
+	tt.Frame()
+	tt.Key(goui.Ctrl|goui.Shift, goui.KeyDelete)
+	tt.Frame()
+	if end != 1 {
+		t.Fatalf("Ctrl+Shift+Delete 应到达 OnEndTask，得到 %d", end)
+	}
+}
+
 // Ctrl+Shift+P / Ctrl+Shift+D 同样走窗口级快捷键（编辑器不接收带 Ctrl 的字母键）。
 func TestClipboardShortcutKeysReachWindow(t *testing.T) {
 	var query string

@@ -21,6 +21,9 @@ const (
 
 	// maxResults 单次非空查询返回上限（同 apps：只渲染前几十条）。空查询不限流。
 	maxResults = 50
+
+	// EndTaskActionID 是「结束任务」行内操作的稳定 id（UI 图标键、app 侧查找共用）。
+	EndTaskActionID = "end-task"
 )
 
 // Entry 是从系统层拿到的一条窗口。字段与 Rust `WindowEntry` 逐字对齐（故意不共享
@@ -158,6 +161,11 @@ func (p *Provider) toMatch(w indexedWindow, score float64) providers.Match {
 		Action:   providers.Action{Kind: providers.ActionActivateWindow, Hwnd: uintptr(w.entry.Hwnd)},
 		Score:    score,
 		Interact: providers.InteractSpec{Kind: providers.InteractExecute},
+		Actions: []providers.RowAction{{
+			ID: EndTaskActionID, Label: "结束任务", Shortcut: "Ctrl+Shift+Delete",
+			Tooltip: "结束任务 · Ctrl+Shift+Delete",
+			Action:  providers.Action{Kind: providers.ActionEndTask, Hwnd: uintptr(w.entry.Hwnd)},
+		}},
 	}
 }
 

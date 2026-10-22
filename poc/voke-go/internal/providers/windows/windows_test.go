@@ -94,6 +94,33 @@ func TestActionIsActivateWindow(t *testing.T) {
 	}
 }
 
+func TestEndTaskRowAction(t *testing.T) {
+	hits := query(sample(), "windows terminal")
+	if len(hits) == 0 {
+		t.Fatal("应有命中")
+	}
+	var found bool
+	for _, a := range hits[0].Actions {
+		if a.ID != EndTaskActionID {
+			continue
+		}
+		found = true
+		if a.Action.Kind != providers.ActionEndTask || a.Action.Hwnd != 104 {
+			t.Fatalf("结束任务动作应指向 EndTask(104)：%+v", a.Action)
+		}
+		if a.Shortcut != "Ctrl+Shift+Delete" || a.Tooltip == "" {
+			t.Fatalf("动作应带快捷键与 tooltip：%+v", a)
+		}
+	}
+	if !found {
+		t.Fatalf("窗口行应带结束任务操作：%+v", hits[0].Actions)
+	}
+	// 默认动作仍是切换窗口，不能被行内操作顶掉。
+	if hits[0].Action.Kind != providers.ActionActivateWindow {
+		t.Fatalf("默认动作应保持 ActivateWindow：%+v", hits[0].Action)
+	}
+}
+
 func TestIconSourceIsProcessPath(t *testing.T) {
 	entries := sampleEntries()
 	hits := query(providerWith(entries), "windows terminal")

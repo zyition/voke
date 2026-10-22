@@ -56,6 +56,7 @@ Win32 / COM，界面走 mygo 的 D3D11 后端；启动后 PrivateCommit 约 55MB
 | `Backspace` | 先清空当前层查询词，再逐级退出插件 / 子模式 |
 | `#` | 拉出插件选择列表（拼音 / 英文别名过滤） |
 | `Ctrl+,` | 打开设置页 |
+| `Ctrl+Shift+Delete` | 选中窗口结果时结束该任务（先请求关闭，无响应才强杀） |
 | 托盘左键双击 | 唤起面板（右键打开菜单） |
 
 剪贴板历史插件（`@c`）内另有：
@@ -75,7 +76,7 @@ Win32 / COM，界面走 mygo 的 D3D11 后端；启动后 PrivateCommit 约 55MB
 | id | 作用 | 默认前缀 |
 |---|---|---|
 | `apps` | 启动应用（开始菜单 Applications：桌面程序快捷方式 + packaged 应用） | 无（全局结果） |
-| `windows` | 窗口切换（枚举并激活已开窗口） | 无（全局结果） |
+| `windows` | 窗口切换（枚举并激活已开窗口；行内可结束任务） | 无（全局结果） |
 | `awake` | 保持唤醒（系统 / 连屏幕，到期自动失效） | 无（全局结果） |
 | `terminal` | Windows Terminal 配置（按 profile 启动） | 无（全局结果） |
 | `workspaces` | 工作区（读 Zed / VS Code 最近工作区历史） | 无（全局结果） |

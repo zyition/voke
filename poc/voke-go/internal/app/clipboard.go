@@ -25,8 +25,8 @@ const (
 	clipboardPasteDelay = 120 * time.Millisecond
 	// clipboardSuppressWindow 覆盖 OLE 延迟渲染可能带来的额外序列号变化。
 	clipboardSuppressWindow = 3 * time.Second
-	// clipNoticeTTL 是提示文案的保留时长（之后唤起面板时清掉）。
-	clipNoticeTTL = 6 * time.Second
+	// noticeTTL 是提示文案的保留时长（之后唤起面板时清掉）。
+	noticeTTL = 6 * time.Second
 )
 
 // clipboardMaxEntries 取配置里的历史上限；未写 / 越界（手改配置）均回落默认，
@@ -102,10 +102,10 @@ func (st *appState) refreshClipboardRows() {
 	st.chooseProvider(keep)
 }
 
-// setClipNotice 在主线程设置一次性提示并请求重绘。
-func (st *appState) setClipNotice(msg string) {
-	st.clipNotice = msg
-	st.clipNoticeAt = time.Now()
+// setNotice 在主线程设置一次性提示并请求重绘。
+func (st *appState) setNotice(msg string) {
+	st.notice = msg
+	st.noticeAt = time.Now()
 	if st.panel != nil && st.panel.IsVisible() {
 		st.panel.Update(func() {})
 	}
@@ -130,7 +130,7 @@ func (st *appState) pasteClipboardItem(ref string, plain bool) {
 	}
 	if err != nil {
 		log.Printf("voke：剪贴板历史写入失败（plain=%v）：%v", plain, err)
-		st.setClipNotice("粘贴失败：无法写入剪贴板")
+		st.setNotice("粘贴失败：无法写入剪贴板")
 		return
 	}
 	// 程序化写入也会让序列号递增；先同步到已处理位，并记下内容指纹抑制
@@ -142,7 +142,7 @@ func (st *appState) pasteClipboardItem(ref string, plain bool) {
 	target := st.clipTarget
 	if !target.Valid() {
 		// 没有可恢复的目标窗口：面板保持可见，内容已在剪贴板里，用户可手动粘贴。
-		st.setClipNotice("内容已复制，请手动粘贴")
+		st.setNotice("内容已复制，请手动粘贴")
 		return
 	}
 	st.hidePanel()
@@ -162,7 +162,7 @@ func (st *appState) showPasteFallback(msg string) {
 	target := st.clipTarget
 	st.showPanel()
 	st.clipTarget = target
-	st.setClipNotice(msg)
+	st.setNotice(msg)
 }
 
 // toggleClipboardPin 置顶 / 取消置顶当前条目。置顶已满时给提示、不改历史。
@@ -177,7 +177,7 @@ func (st *appState) toggleClipboardPin(ref string) {
 	if it.Pinned {
 		st.hist.Unpin(ref)
 	} else if !st.hist.Pin(ref) {
-		st.setClipNotice("置顶最多 10 条，请先取消一条")
+		st.setNotice("置顶最多 10 条，请先取消一条")
 		return
 	}
 	st.refreshClipboardRows()
@@ -225,7 +225,7 @@ func (st *appState) pasteSelectedPlain() bool {
 		return false
 	}
 	if it.Text == "" {
-		st.setClipNotice("该条目没有文本，无法纯文本粘贴")
+		st.setNotice("该条目没有文本，无法纯文本粘贴")
 		return true
 	}
 	st.pasteClipboardItem(it.ID, true)

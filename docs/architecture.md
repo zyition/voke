@@ -91,7 +91,7 @@ type Provider interface {
 | id | 触发 | 说明 |
 |---|---|---|
 | `apps` | 无前缀（全局） | 开始菜单 Applications 文件夹（含桌面程序快捷方式与 packaged 应用） |
-| `windows` | 无前缀（全局） | 枚举并激活已打开窗口 |
+| `windows` | 无前缀（全局） | 枚举并激活已打开窗口；行内「结束任务」先 WM_CLOSE，无响应再强杀 |
 | `awake` | 无前缀（全局） | 保持唤醒 / 取消，支持连屏幕 |
 | `terminal` | 无前缀（全局） | Windows Terminal profile |
 | `workspaces` | 无前缀（全局） | Zed / VS Code 最近工作区 |

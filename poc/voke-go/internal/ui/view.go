@@ -64,7 +64,10 @@ type ViewInput struct {
 	// 剪贴板插件生效（main 侧判定），UI 只转交按键。
 	OnPinToggle      func()
 	OnDeleteSelected func()
-	OnQueryChanged   func()
+	// OnEndTask 是 Ctrl+Shift+Delete：当前选中窗口行的「结束任务」。同样由 main
+	// 侧判断是否消费（非窗口行无操作）。
+	OnEndTask      func()
+	OnQueryChanged func()
 	// OnBackspaceAtEmpty 在「输入框已空时按 Backspace」触发（经输入框 OnTextKey 捕获，
 	// 非空时交编辑引擎正常删字符）。返回 true 表示已被消费（逐级回退），编辑器不再处理；
 	// 退到顶级应原地不动、绝不关面板。这样回退链单一由 Backspace 按键驱动，无「删到空的
@@ -195,6 +198,12 @@ func View(c *goui.Context, in ViewInput) {
 	if c.Shortcut(goui.Ctrl|goui.Shift, goui.KeyD) {
 		in.OnDeleteSelected()
 	}
+	// 窗口行「结束任务」。Delete 在输入框聚焦时由编辑器消费（wants 对 KeyDelete
+	// 恒真），所以主路径是下面的 OnTextKey；这条窗口级路由只覆盖焦点不在输入框
+	// 的帧，与 Ctrl+Backspace 的双路处理同款。
+	if c.Shortcut(goui.Ctrl|goui.Shift, goui.KeyDelete) {
+		in.OnEndTask()
+	}
 	// Ctrl+Q 退出（调试期便利快捷键，生产 voke 无此键）。
 	c.OnShortcut(goui.Cmd, goui.KeyQ, in.OnQuit)
 
@@ -236,6 +245,13 @@ func View(c *goui.Context, in ViewInput) {
 			input := goui.TextInputBase(c, in.Query).Bind(in.Input).Grow(1).FontSize(theme.InputSize).
 				Placeholder(in.Placeholder).Label(in.Placeholder).
 				OnTextKey(func(k goui.TextKey) bool {
+					// Ctrl+Shift+Delete：窗口行「结束任务」。编辑器对 KeyDelete 的
+					// wants 恒为 true（带 Ctrl 也一样），必须先在这里截住，否则会被
+					// 当成「删除后一个词」吃掉。
+					if k.Key == goui.KeyDelete && k.Mods == (goui.Ctrl|goui.Shift) && in.OnEndTask != nil {
+						in.OnEndTask()
+						return true
+					}
 					// Ctrl+Backspace：一键重置（清查询 + 回 Global，不隐藏）。
 					// 输入框聚焦时编辑器会把它当「删前一个词」（mygo keymap.go:305）
 					// 先吃掉，所以必须在这里拦；焦点不在输入框时走上方的窗口级

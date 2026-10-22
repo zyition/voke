@@ -68,6 +68,7 @@ func (st *appState) viewInput() appui.ViewInput {
 		OnOpenPlain:        st.pasteSelectedPlain,
 		OnPinToggle:        st.toggleSelectedPin,
 		OnDeleteSelected:   st.deleteSelected,
+		OnEndTask:          st.endTaskSelected,
 		OnQueryChanged:     st.onQueryChanged,
 		OnBackspaceAtEmpty: st.onEmptyBackspace,
 		OnResetInput:       st.onResetInput,
@@ -99,7 +100,7 @@ func (st *appState) renderResults(c *ui.Context) {
 		appui.ProviderResults(c, st.provRows, &st.provChosen, &st.provList, st.icons, st.open, st.providerClick, st.providerAction, st.provHint)
 	case st.globalActive():
 		// 全局搜索且命中了 apps 以外的全局插件组 → 合并分组列表（apps 组在最前）。
-		appui.GlobalResults(c, st.globalView(), &st.globalChosen, &st.globalList, st.icons, st.open, st.clickGlobal)
+		appui.GlobalResults(c, st.globalView(), &st.globalChosen, &st.globalList, st.icons, st.open, st.clickGlobal, st.globalAction)
 	case st.pluginPending():
 		// 表里有、既非 apps 也未落地实现（不在 pluginReg）的插件：明说未接入。
 		appui.PendingResults(c, st.pendingHint())
@@ -146,15 +147,18 @@ func (st *appState) placeholder() string {
 }
 
 func (st *appState) hintLine() string {
-	// 剪贴板操作的一次性提示优先（粘贴失败 / 置顶已满），下一次唤起时按 TTL 清掉。
-	if st.clipNotice != "" {
-		return st.clipNotice
+	// 一次性操作提示优先（粘贴失败 / 置顶已满 / 结束任务失败），下一次唤起时按 TTL 清掉。
+	if st.notice != "" {
+		return st.notice
 	}
 	if st.engineState.Mode() == engine.PluginPicker {
 		return "↑↓ 选择  单击/↵ 进入  Ctrl+Backspace 重置  esc 隐藏"
 	}
 	if st.isClipboardPlugin() {
 		return "↵ 粘贴  Ctrl+↵ 纯文本  Ctrl+Shift+P 置顶  Ctrl+Shift+D 删除  esc 隐藏"
+	}
+	if st.providerActive() && st.engineState.PluginID() == providerWindowsID {
+		return "↵ 切换  Ctrl+Shift+Delete 结束任务  Ctrl+Backspace 重置  esc 隐藏"
 	}
 	return "↑↓ 选择  单击/↵ 启动  Ctrl+Backspace 重置  esc 隐藏"
 }
@@ -554,6 +558,12 @@ func (st *appState) runProviderIntent(m providers.Match, providerID string) {
 		st.toggleClipboardPin(intent.Ref)
 	case providers.IntentDelete:
 		st.deleteClipboardItem(intent.Ref)
+	case providers.IntentEndTask:
+		// 成功投递 WM_CLOSE 后面板立即收起；强杀兜底在后台等宽限期。
+		if st.endTask(intent.Hwnd, m.Title) {
+			st.hidePanel()
+			st.resetAfterAction()
+		}
 	case providers.IntentPlatformAction:
 		if st.execPlatformAction(m.Action) {
 			if st.freq != nil {

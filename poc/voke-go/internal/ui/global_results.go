@@ -6,6 +6,7 @@ package ui
 import (
 	goui "github.com/egoist/mygo/ui"
 
+	"github.com/zyition/voke/poc/voke-go/internal/providers"
 	"github.com/zyition/voke/poc/voke-go/internal/ui/theme"
 )
 
@@ -17,22 +18,32 @@ type GlobalRow struct {
 	ProviderID string // 来源插件 id：无 PNG 时据此取 Lucide 角标（对齐 Rust badge::plugin_icon）
 	GroupLabel string // 组标题（provider 显示名 / 「应用」）
 	NewGroup   bool   // 是否组首（渲染标题行）
+	// Actions 是行尾附加操作（目前 windows 的「结束任务」）。apps 行恒为空。
+	Actions []providers.RowAction
 }
 
-// GlobalResults 渲染合并列表；ls/chosen 驱动单列表键盘导航，onOpen=Enter，onClick(i)=单击。
-func GlobalResults(c *goui.Context, rows []GlobalRow, chosen *int, ls *goui.ListState, icons *IconCache, onOpen func(), onClick func(i int)) {
+// GlobalResults 渲染合并列表；ls/chosen 驱动单列表键盘导航，onOpen=Enter，
+// onClick(i)=单击，onAction(i,id)=行尾操作图标被点击。
+func GlobalResults(c *goui.Context, rows []GlobalRow, chosen *int, ls *goui.ListState, icons *IconCache, onOpen func(), onClick func(i int), onAction func(i int, id string)) {
 	ls.Selected = chosen
 	ls.Key = func(i int) any { return i }
 	ls.Label = func(i int) string { return rows[i].Title }
-	list := goui.List(c, ls, len(rows), func(i int) { globalRow(c, rows[i], *chosen, icons, onClick, i) }).
-		Grow(1).Padding(6)
+	maxActions := 0
+	for _, r := range rows {
+		if n := len(r.Actions); n > maxActions {
+			maxActions = n
+		}
+	}
+	list := goui.List(c, ls, len(rows), func(i int) {
+		globalRow(c, rows[i], *chosen, maxActions, icons, onClick, onAction, i)
+	}).Grow(1).Padding(6)
 	if list.Submitted() {
 		onOpen()
 	}
 }
 
 // globalRow 画一条合并行：可选组标题行 + 「图标 + 标题 + 副标题」药丸行。
-func globalRow(c *goui.Context, r GlobalRow, chosen int, icons *IconCache, onClick func(i int), i int) {
+func globalRow(c *goui.Context, r GlobalRow, chosen, maxActions int, icons *IconCache, onClick func(i int), onAction func(i int, id string), i int) {
 	t := c.Theme()
 	btn := goui.ButtonBase(c).Grow(1).AlignItems(goui.Center).Background(t.Background)
 	if btn.Clicked() {
@@ -68,6 +79,11 @@ func globalRow(c *goui.Context, r GlobalRow, chosen int, icons *IconCache, onCli
 						goui.Text(c, r.Title).TextColor(t.Text).SingleLine().FontSize(theme.TitleSize)
 						if r.Subtitle != "" {
 							goui.Text(c, r.Subtitle).FontSize(theme.DetailSize).TextColor(t.TextMuted).SingleLine()
+						}
+					})
+					ActionBar(c, r.Actions, maxActions, i == chosen || btn.Hovered(), func(id string) {
+						if onAction != nil {
+							onAction(i, id)
 						}
 					})
 				})
