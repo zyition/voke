@@ -33,6 +33,10 @@ const (
 	MaxRichBytes = 1 << 20
 	// ThumbSize 是缩略图最长边（像素）；UI 以 24 DIP 显示，2x 屏够用。
 	ThumbSize = 48
+	// MaxImagePixels 是解码前的像素总量上限。PNG 压缩率可以极高（纯色大图
+	// 几 MB 就能解出数百 MB 的位图），仅靠字节上限挡不住解码期内存峰值；
+	// 超过就不生成缩略图、丢弃图片表示（文本仍保留）。
+	MaxImagePixels = 32_000_000
 )
 
 var (
@@ -351,6 +355,9 @@ func thumbnail(data []byte) ([]byte, int, int, bool) {
 	}
 	cfg, err := png.DecodeConfig(bytes.NewReader(data))
 	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
+		return nil, 0, 0, false
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > MaxImagePixels {
 		return nil, 0, 0, false
 	}
 	img, err := png.Decode(bytes.NewReader(data))

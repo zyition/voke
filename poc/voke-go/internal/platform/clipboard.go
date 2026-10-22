@@ -84,6 +84,9 @@ func ReadClipboardPayload() (ClipPayload, bool) {
 	var p ClipPayload
 	if b, err := mygo.Clipboard.ReadFormat(transfer.Text); err == nil {
 		p.Text = string(b)
+	} else if b, err := mygo.Clipboard.ReadFormat(transfer.URIList); err == nil {
+		// 只有 URI 列表的复制（部分浏览器 / 下载器）：当成文本存，粘贴时也是文本。
+		p.Text = string(b)
 	}
 	if b, err := mygo.Clipboard.ReadFormat(transfer.HTML); err == nil {
 		p.HTML = b
