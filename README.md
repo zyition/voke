@@ -17,6 +17,8 @@ Win32 / COM，界面走 mygo 的 D3D11 后端；启动后 PrivateCommit 约 55MB
 
 - 全局热键唤起（默认 `Alt+Space`，可在设置页录制改键）。
 - 每个插件可绑定独立的全局快捷键（**默认不绑定**，设置页录制），按下直达该插件。
+- 管理员窗口粘贴、终端 profile 提权打开按需弹一次 UAC：由临时辅助进程完成，不常驻
+  高权限进程。
 - 11 个内置插件：应用、窗口、保持唤醒、终端配置、工作区、计算器、时间戳、Base64、UUID、随机值、剪贴板历史。
 - `#` 拉出插件列表，拼音 / 英文别名过滤；插件支持二级交互（如 Base64 编 / 解、随机值重新生成）。
 - 托盘常驻：右键打开菜单（首项为 awake 状态快照），左键双击唤起面板。
@@ -50,6 +52,9 @@ Win32 / COM，界面走 mygo 的 D3D11 后端；启动后 PrivateCommit 约 55MB
   会就地提示且不落盘。组合也可能被系统或其它程序占用，提示“占用”时换一个即可
   （例如 `Alt+\`` 在部分机器上已被其它工具注册）。
 - 前缀冲突、含空白或占用字母/数字保留键时，设置页会就地提示且不落盘。
+- 剪贴板历史条数在设置页的「剪贴板」插件区修改，也可写 `[clipboard] max_entries`
+  （默认 100，范围 1–1000）；置顶最多 10 条，不占普通名额。历史只保存在内存里，
+  退出即清空。
 
 ## 键盘用法
 
@@ -131,7 +136,7 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
   构建 Go exe、注入版本、出安装包与便携 zip，并建立 GitHub Release；版本号以 tag 为
   唯一事实来源。
 
-技术栈：Go（版本见 `poc/voke-go/go.mod`）、mygo v0.5.5（D3D11 / DirectWrite）、
+技术栈：Go（版本见 `poc/voke-go/go.mod`）、mygo v0.6.2（D3D11 / DirectWrite）、
 `go-pinyin`、nucleo-matcher 0.3.1 评分的 Go 移植、SQLite（Zed / VS Code 历史只读）、
 Inno Setup 7.1（打包）。Rust/gpui 旧实现保留在仓库根目录作参考，不参与 CI 与发版。
 

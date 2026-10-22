@@ -145,7 +145,9 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
 | 开机自启 | Win32 注册表 `HKCU\...\Run\voke`（`autostart_windows.go`） |
 | 窗口枚举 / 激活 | user32 EnumWindows + SetForegroundWindow（`windows_enum_windows.go`） |
 | 终端配置 / 工作区 | 读取 Windows Terminal settings.json；只读 SQLite（Zed / VS Code） |
-| 剪贴板 | mygo `Clipboard` |
+| 剪贴板 | mygo `Clipboard` + 序列号轮询 / `SendInput` / 提权粘贴辅助（`clipboard*.go`） |
+| 提权 | Token 完整性判定 + `ShellExecuteEx(runas)` 一次性辅助进程（`elevate*.go`） |
+| 结束进程 | `OpenProcess` + `TerminateProcess`，拒绝自身与核心系统进程（`endtask*.go`） |
 | 内存快照 | `K32GetProcessMemoryInfo` + `runtime.ReadMemStats`（`mem_windows.go`） |
 | 日志 | `%APPDATA%\voke\voke.log`，滚动上限默认 9999 行（`logic/logcap`） |
 
@@ -158,7 +160,8 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
 - 插件全局快捷键：只注册“已启用 + 配置了 hotkey”的插件；停用即注销，启用后重注。
   交互对齐主流启动器的 per-plugin hotkey——隐藏时唤起并 `enterPlugin` 直达，已在
   该插件时只聚焦（保留过滤词），其它状态则切换；不做“再按一次隐藏”。录制期间主热键
-  与所有插件热键统一挂起，结束后按新配置重建（`internal/app/hotkeys.go`）。
+  与所有插件热键统一挂起，结束后按新配置重建（`internal/app/hotkeys.go`）。录制输入走
+  `HandleInput` 而非 `OnTextKey`：mygo 会把带 Alt 的字母/符号当作可输入文本而跳过后者。
 - 失焦 / Esc 隐藏面板（保留查询与插件页）；Backspace 逐级回退作用域，回到上层时输入
   恒为空（过滤词在入栈时丢弃，不跨层恢复）；Enter 执行选中项；Ctrl+Backspace 手动清空
   查询并退回 Global（面板保持可见，焦点不在输入框时也生效）。
