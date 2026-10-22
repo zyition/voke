@@ -12,10 +12,6 @@ trim_trailing_whitespace = true
 indent_style = space
 indent_size = 4
 
-# Rust：4 空格缩进（rustfmt 默认）
-[*.rs]
-indent_size = 4
-
 # Go：gofmt 使用 tab（显示宽度 4）
 [*.go]
 indent_style = tab

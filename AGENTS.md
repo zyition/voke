@@ -3,9 +3,10 @@
 给人看的架构/上手看 [`README.md`](README.md)；当前架构看 [`docs/architecture.md`](docs/architecture.md)。
 本文件只写**非通用**的纪律与踩坑。正文一律简体中文。
 
-当前生产实现是 **`poc/voke-go/` 的 Go + mygo**；仓库根目录的 `voke-core/`、`voke-sys/`、
-`voke-app/` 与 Cargo 配置是 Rust/gpui 参考实现，**不参与 CI 与发版**。Rust 时代文档在
-[`docs/legacy/`](docs/legacy/README.md)。
+当前生产实现是 **`poc/voke-go/` 的 Go + mygo**。main 历史从首个 Go 提交起算；
+Rust/gpui 参考实现已归档到 **`legacy-rust` 分支与 `v0.1.x` tag**，不在当前工作树，
+也不参与 CI 与发版。Rust 时代文档在 [`docs/legacy/`](docs/legacy/README.md)；Go 注释里
+引用的 `voke-core/` / `voke-sys/` 路径与行号是迁移时的对照 oracle，对应 `legacy-rust` 分支。
 
 ## 仓库纪律
 
@@ -59,13 +60,8 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
   -tags mygo_noinspector -ldflags="-s -w -H windowsgui" -o /tmp/voke.exe .
 ```
 
-Rust（旧版，代码暂留作参考，CI 已退役；一般不需要跑）：
-
-```bash
-cargo check --target x86_64-pc-windows-gnu -p voke-app --all-targets
-cargo test -p voke-core
-cargo test -p voke-sys
-```
+Rust/gpui 参考实现已归档到 `legacy-rust` 分支与 `v0.1.x` tag；main 上没有 Cargo
+配置，日常验证不需要、也无法在 main 上运行 `cargo` 命令。
 
 ## 部署与安装包
 
@@ -82,7 +78,7 @@ cargo test -p voke-sys
 `.github/workflows/release.yml` 在 windows-latest 用 Go 构建 `poc/voke-go`，出安装包
 （`voke-setup-<ver>.exe`）与 portable zip（`voke-vX.Y.Z-windows-x86_64.zip`）；ubuntu job
 用 git-cliff 生成 `CHANGELOG.md` 并回推默认分支，建 GitHub Release 挂上两个产物。
-旧的 Rust CI / 发版流水线已删除（git history 可查）；当前 CI 为
+Rust 时代的 CI / 发版流水线已随代码归档到 `legacy-rust` 分支；当前 CI 为
 `.github/workflows/ci.yml`，发版为 `release.yml`。
 
 版本号以 **tag 为唯一事实来源**：release 构建用
@@ -140,7 +136,7 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 
 
 - 本仓库**不自带 skill**；公共 skill 走全局安装，不入库。
 - 开发界面时以 **mygo 源码**（模块缓存）与官网文档为准；`gpui-kit` skill 只适用于
-  Rust 参考实现，不是当前主线。
+  `legacy-rust` 分支中的 Rust 参考实现，不是当前主线。
 - 不要在仓库内新增 `.agents/` / `.claude/` / `skills/` 之类的目录。
 
 ## 当前遗留 / 已知问题（详见 `docs/KNOWN-ISSUES.md` 与 `docs/BACKLOG.md`）

@@ -1,5 +1,4 @@
-/target
-**/*.rs.bk
+/target/
 *.pdb
 *.exe
 *.log
@@ -8,4 +7,3 @@
 .DS_Store
 .vscode/
 .idea/
-/target/

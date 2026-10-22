@@ -1,8 +1,9 @@
 # Voke 架构（Go + mygo）
 
 > 当前实现位于 [`poc/voke-go/`](../poc/voke-go)，产品形态是单 exe、托盘常驻的
-> Windows 启动器。Rust/gpui 版代码保留在仓库根目录作参考实现，已不参与 CI 与发版；
-> 其架构文档见 [`docs/legacy/rust-architecture.md`](legacy/rust-architecture.md)。
+> Windows 启动器。Rust/gpui 版代码已归档到 `legacy-rust` 分支与 `v0.1.x` tag，
+> 不在 main 树中，也不参与 CI 与发版；其架构文档见
+> [`docs/legacy/rust-architecture.md`](legacy/rust-architecture.md)。
 
 ## 1. 总览
 

@@ -9,8 +9,8 @@
 > - [已知问题](../KNOWN-ISSUES.md) / [待办](../BACKLOG.md) —— 当前限制与未来工作
 > - [内存现状](../notes/memory.md) / [匹配一致性](../notes/matching.md) —— 从旧文档沉淀的当前经验
 >
-> 仓库根目录的 `voke-core/`、`voke-sys/`、`voke-app/` 与 `Cargo.toml` 等 Rust 代码
-> **保留作参考实现**，不再参与 CI 与发版。
+> Rust 代码（原 `voke-core/`、`voke-sys/`、`voke-app/` 与 Cargo 配置）已归档到
+> **`legacy-rust` 分支与 `v0.1.x` tag**，不在 main 树中，也不再参与 CI 与发版。
 
 ## 文件
 

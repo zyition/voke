@@ -138,7 +138,8 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
 
 技术栈：Go（版本见 `poc/voke-go/go.mod`）、mygo v0.6.2（D3D11 / DirectWrite）、
 `go-pinyin`、nucleo-matcher 0.3.1 评分的 Go 移植、SQLite（Zed / VS Code 历史只读）、
-Inno Setup 7.1（打包）。Rust/gpui 旧实现保留在仓库根目录作参考，不参与 CI 与发版。
+Inno Setup 7.1（打包）。Rust/gpui 旧实现已归档到 `legacy-rust` 分支与 `v0.1.x` tag，
+不在 main 树中。
 
 ## 架构
 

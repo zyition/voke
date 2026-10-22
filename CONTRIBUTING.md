@@ -13,7 +13,8 @@
 - **无遥测、无服务端**：程序不联网、不上报任何数据（详见 `SECURITY.md`）。
 
 当前源码在 **`poc/voke-go/`**（历史上是 PoC 目录，现在是唯一生产实现）。
-仓库根目录的 `voke-core/`、`voke-sys/`、`voke-app/` 是 Rust/gpui 参考实现，不参与 CI 与发版。
+Rust/gpui 参考实现已归档到 `legacy-rust` 分支与 `v0.1.x` tag，不在 main 树中，
+也不参与 CI 与发版。
 
 ## 二、开发前置
 
@@ -110,5 +111,6 @@ poc/voke-go/
   internal/ui/        mygo 组件、主题、视图
 packaging/            安装器脚本与 Inno Setup 脚本
 docs/                 当前文档 + docs/legacy 历史存档
-voke-*/               Rust/gpui 参考实现（不参与 CI/发版）
 ```
+
+Rust/gpui 参考实现不在当前工作树，见 `legacy-rust` 分支与 `v0.1.x` tag。
