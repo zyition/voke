@@ -14,10 +14,8 @@ import "github.com/egoist/mygo"
 // NewTray 往通知区 / 菜单栏放一个图标，返回 mygo 的托盘句柄。
 //
 // 转发 `mygo.NewTray`（modules.go:665 `func NewTray(opts TrayOptions)
-// (*Tray, error)`）：TrayOptions（modules.go:637-648）**只填 Icon / ToolTip**
-// 两个字段，与 panel.go setupTray 原来那句逐字相同——IconIsTemplate / Title /
-// Menu 三个字段原来就没写，零值照旧（Menu 留 nil 是有意的：菜单在下一步
-// SetTrayMenu 里挂，与搬之前同一顺序）。
+// (*Tray, error)`）：固定 ID + Icon / ToolTip。ID 让 Windows 记住用户把图标
+// 放在任务栏还是溢出区；Menu 留 nil 是有意的（菜单在 SetTrayMenu 里挂）。
 //
 // `*mygo.Tray` 原封不动交回调用方持有（appState.tray 字段存的就是它），本层
 // **不保存任何托盘状态**，也就不引入第二份真相；退出时的 `Tray.Destroy()`
@@ -33,7 +31,7 @@ import "github.com/egoist/mygo"
 // modules.go:693-697），**不在本层降级也不静默**：调用方（panel.go
 // setupTray）沿用搬之前那条中文日志 + `return`（热键与面板照常，只是没托盘）。
 func NewTray(icon []byte, toolTip string) (*mygo.Tray, error) {
-	return mygo.NewTray(mygo.TrayOptions{Icon: icon, ToolTip: toolTip})
+	return mygo.NewTray(mygo.TrayOptions{ID: "voke", Icon: icon, ToolTip: toolTip})
 }
 
 // SetTrayMenu 用 items 现建一份菜单并挂到托盘上（点击图标即弹这份菜单）。

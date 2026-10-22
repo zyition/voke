@@ -21,7 +21,7 @@ require (
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/egoist/mygo v0.5.5
+	github.com/egoist/mygo v0.6.2
 	github.com/glebarez/go-sqlite v1.23.0
 	github.com/mozillazg/go-pinyin v0.21.0
 )
