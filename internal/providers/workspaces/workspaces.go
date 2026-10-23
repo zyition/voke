@@ -772,16 +772,20 @@ func (p *Provider) Query(ctx providers.QueryCtx) []providers.Match {
 	if query == "" {
 		out := make([]providers.Match, 0, len(workspaces))
 		for i := range workspaces {
-			out = append(out, p.toMatch(workspaces[i], 1.0))
+			out = append(out, p.toMatch(workspaces[i], match.MatchScore{Score: 1}))
 		}
 		return out
 	}
 
 	m := match.NewMatcher()
+	qy, ok := match.Compile(query)
+	if !ok {
+		return nil
+	}
 	out := make([]providers.Match, 0, len(workspaces))
 	for i := range workspaces {
-		if s, ok := p.score(m, query, workspaces[i]); ok {
-			out = append(out, p.toMatch(workspaces[i], float64(s)))
+		if ms, ok := p.score(m, qy, workspaces[i]); ok {
+			out = append(out, p.toMatch(workspaces[i], ms))
 		}
 	}
 	sort.SliceStable(out, func(a, b int) bool { return out[a].Score > out[b].Score })
@@ -804,18 +808,18 @@ func (p *Provider) indexAll() []indexedWorkspace {
 	return out
 }
 
-func (p *Provider) score(m *match.Matcher, query string, w indexedWorkspace) (float32, bool) {
-	name, okN := match.ScoreEntry(m, query, w.nameKeys)
-	path, okP := match.ScoreEntry(m, query, w.pathKeys)
+func (p *Provider) score(m *match.Matcher, qy *match.Query, w indexedWorkspace) (match.MatchScore, bool) {
+	name, okN := qy.ScoreEntry(m, w.nameKeys)
+	path, okP := qy.ScoreEntry(m, w.pathKeys)
 	switch {
 	case okN && okP:
-		return maxF32(name.Score, path.Score), true
+		return match.Best(name, path), true
 	case okN:
-		return name.Score, true
+		return name, true
 	case okP:
-		return path.Score, true
+		return path, true
 	default:
-		return 0, false
+		return match.MatchScore{}, false
 	}
 }
 
@@ -835,21 +839,15 @@ func (p *Provider) openAction(entry Entry) providers.Action {
 	return providers.Action{Kind: providers.ActionLaunch, Path: entry.Path, NoConsole: false}
 }
 
-func (p *Provider) toMatch(w indexedWorkspace, score float64) providers.Match {
+func (p *Provider) toMatch(w indexedWorkspace, ms match.MatchScore) providers.Match {
 	subtitle := fmt.Sprintf("%s · %s · %s", editorLabel(w.entry.Editor), w.entry.Location.label(), w.entry.Path)
 	return providers.Match{
 		ProviderID: ID,
 		Title:      w.entry.Name,
 		Subtitle:   subtitle,
 		Action:     p.openAction(w.entry),
-		Score:      score,
+		Score:      float64(ms.Score),
+		Quality:    ms.Quality,
 		Interact:   providers.InteractSpec{Kind: providers.InteractExecute},
 	}
-}
-
-func maxF32(a, b float32) float32 {
-	if a > b {
-		return a
-	}
-	return b
 }

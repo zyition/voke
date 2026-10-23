@@ -125,22 +125,65 @@ func TestFilterAppsEmptyOrdersByFrequency(t *testing.T) {
 	}
 }
 
-// TestFilterAppsBoostOverridesScoreGap：非空查询里，boost 发生在「截断之后」的 rank 步，
-// 能把一个原始分略低但高频的条目顶到高分低频条目之上——证明 rank 的 `score×boost` 真的
-// 参与排序，而非只按原始分。用 weixin / weixinfuwu（前一条原始分高）+ 给后者巨大使用量。
-func TestFilterAppsBoostOverridesScoreGap(t *testing.T) {
+// TestFilterAppsUsageCrossesOneTier：使用加成是**有界**的——少量使用翻不动相邻一档，
+// 长期高频（封顶 0.12 > 档差 0.10）才翻得动，且只翻得动一档。
+// 用 weixin（全等档）与 weixinfuwu（前缀档，分相同）。
+func TestFilterAppsUsageCrossesOneTier(t *testing.T) {
 	in := testutil.MkApps("weixin", "weixinfuwu")
-	// 无频率：原始分降序，weixin 在前（= TestFilterAppsSortedByScoreDescending 的既有事实）。
+	// 无频率：档位高的 weixin 在前。
 	if got := entryNames(FilterApps("weixin", in, nil)); got[0] != "weixin" {
 		t.Fatalf("nil 频率应 weixin 在前，得 %v", got)
 	}
-	// 给 weixinfuwu 记足量使用，让 1+ln(n+1)*0.5 的 boost 跨过两条的原始分差。
-	freq := frequency.Store{
-		frequency.Key(appsmodel.ProviderID, "weixinfuwu"): 100000,
+	// 只记几次：翻不动（0.10 的档差 > 几次积累的加成）。
+	few := frequency.Store{frequency.Key(appsmodel.ProviderID, "weixinfuwu"): 3}
+	if got := entryNames(FilterApps("weixin", in, few)); got[0] != "weixin" {
+		t.Fatalf("少量使用不该翻过档位差，得 %v", got)
 	}
-	got := entryNames(FilterApps("weixin", in, freq))
-	if got[0] != "weixinfuwu" {
-		t.Fatalf("高频应把 weixinfuwu 顶到首位（rank 的 score×boost 生效），得 %v", got)
+	// 长期高频：加成封顶 0.12，跨过 0.10 的档差。
+	many := frequency.Store{frequency.Key(appsmodel.ProviderID, "weixinfuwu"): 1000}
+	if got := entryNames(FilterApps("weixin", in, many)); got[0] != "weixinfuwu" {
+		t.Fatalf("长期高频应把 weixinfuwu 顶到首位，得 %v", got)
+	}
+	// 但跨不了两档：再加一个模糊档的高频条目也上不去。
+	in2 := testutil.MkApps("weixin", "wx")
+	junk := frequency.Store{frequency.Key(appsmodel.ProviderID, "wx"): 1000000}
+	if got := entryNames(FilterApps("weixin", in2, junk)); len(got) == 2 && got[0] != "weixin" {
+		t.Fatalf("使用加成不得跨两档，得 %v", got)
+	}
+}
+
+// TestFilterAppsPrefixBeatsFuzzy：前缀命中（Gmail）必须排在只有散点命中的条目
+// 之前——这是用户视角的「搜 gma 时一堆乱七八糟的应用挤在 gmail 前面」。
+func TestFilterAppsPrefixBeatsFuzzy(t *testing.T) {
+	in := testutil.MkApps("GlobalMarket App", "Google Mail", "Gamma", "Gmail")
+	got := entryNames(FilterApps("gma", in, nil))
+	if len(got) != 4 {
+		t.Fatalf("应命中 4 条，实际 %d：%v", len(got), got)
+	}
+	if got[0] != "Gmail" {
+		t.Fatalf("Gmail 应排首位，得 %v", got)
+	}
+}
+
+// TestFilterAppsAcronymRanking：拉丁文名字的词首缩写命中（vsc → Visual Studio
+// Code）走 Acronym 档——压过「仅包含」命中，但排在「名字以查询开头」之后。
+func TestFilterAppsAcronymRanking(t *testing.T) {
+	in := testutil.MkApps("AVSC Tool", "Visual Studio Code", "VSCode Helper")
+	got := entryNames(FilterApps("vsc", in, nil))
+	want := []string{"VSCode Helper", "Visual Studio Code", "AVSC Tool"}
+	if !eqNames(got, want) {
+		t.Fatalf("得 %v，想要 %v", got, want)
+	}
+}
+
+// TestFilterAppsNoUsageKeepsRankDescending：没有任何使用记录时，结果必须按匹配分
+// 降序。这条守的是排序比较方向——方向写反时整个列表会被倒过来（曾经的真实 bug）。
+func TestFilterAppsNoUsageKeepsRankDescending(t *testing.T) {
+	in := testutil.MkApps("Google Mail", "Gamma") // 同为模糊档，前者原始分更高
+	got := entryNames(FilterApps("gma", in, nil))
+	want := []string{"Google Mail", "Gamma"}
+	if !eqNames(got, want) {
+		t.Fatalf("得 %v，想要 %v", got, want)
 	}
 }
 

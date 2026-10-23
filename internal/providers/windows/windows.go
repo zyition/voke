@@ -11,6 +11,7 @@ package windows
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"voke/internal/match"
 	"voke/internal/providers"
@@ -54,12 +55,34 @@ type Provider struct {
 	config providers.ProviderConfig
 	fetch  Fetcher
 	keys   *match.SearchKeysCache
+
+	// 快照缓存：见 defaultTTL。
+	cacheValid bool
+	cacheAt    time.Time
+	cacheData  []Entry
+	ttl        time.Duration
 }
+
+// defaultTTL 是窗口快照的有效期。
+//
+// 为什么需要：Global 态**每次按键**都会跑一遍全局 provider（collectGlobalBatches），
+// 而窗口 provider 的数据源是 EnumWindows + 每个窗口取标题 / 进程名 / exe 路径
+// （3–4 次系统调用/窗口）。连续打字时这份枚举是白白重复的，也是输入延迟的主要来源。
+// 250ms 足够覆盖一段连续输入，又远短于「用户敲完到抬眼」的感知差。
+const defaultTTL = 250 * time.Millisecond
 
 var _ providers.Provider = (*Provider)(nil)
 
 // New 用数据源构造（生产注入真实枚举闭包；测试注入假闭包返回造好的数据）。
 func New(fetch Fetcher) *Provider {
+	if fetch == nil {
+		fetch = func() []Entry { return nil }
+	}
+	return WithTTL(fetch, defaultTTL)
+}
+
+// WithTTL 用数据源 + 快照有效期构造（测试用 0 表示每次重取）。
+func WithTTL(fetch Fetcher, ttl time.Duration) *Provider {
 	if fetch == nil {
 		fetch = func() []Entry { return nil }
 	}
@@ -70,7 +93,19 @@ func New(fetch Fetcher) *Provider {
 		},
 		fetch: fetch,
 		keys:  match.NewSearchKeysCache(),
+		ttl:   ttl,
 	}
+}
+
+// entries 取窗口快照：TTL 内复用，过期重枚举。
+func (p *Provider) entries() []Entry {
+	if p.cacheValid && p.ttl > 0 && time.Since(p.cacheAt) < p.ttl {
+		return p.cacheData
+	}
+	p.cacheData = p.fetch()
+	p.cacheAt = time.Now()
+	p.cacheValid = true
+	return p.cacheData
 }
 
 // NewEmpty 返回空数据源实例（非 Windows 平台 / 未枚举占位）。
@@ -85,8 +120,8 @@ func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 
 func (p *Provider) Placeholder(string) string { return "输入窗口标题或进程名" }
 
-// Query 每次重新枚举；空查询全返回（score=1.0，交给引擎按频率重排、不截断），
-// 非空按 title/process_name 取最高分排序、截断 maxResults。
+// Query 按 TTL 取窗口快照（defaultTTL）；空查询全返回（score=1.0，交给引擎按频率
+// 重排、不截断），非空按 title/process_name 取最高分排序、截断 maxResults。
 // RegeneratesOnQuery：窗口每次查询现枚举（调用方在后台线程重取），结果跟随实际
 // 窗口状态而非「重跑即变」的随机 → false（Rust 未 override）。
 func (p *Provider) RegeneratesOnQuery() bool { return false }
@@ -98,16 +133,20 @@ func (p *Provider) Query(ctx providers.QueryCtx) []providers.Match {
 	if query == "" {
 		out := make([]providers.Match, 0, len(windows))
 		for i := range windows {
-			out = append(out, p.toMatch(windows[i], 1.0))
+			out = append(out, p.toMatch(windows[i], match.MatchScore{Score: 1}))
 		}
 		return out
 	}
 
 	m := match.NewMatcher()
+	qy, ok := match.Compile(query)
+	if !ok {
+		return nil
+	}
 	out := make([]providers.Match, 0, len(windows))
 	for i := range windows {
-		if s, ok := p.score(m, query, windows[i]); ok {
-			out = append(out, p.toMatch(windows[i], float64(s)))
+		if ms, ok := p.score(m, qy, windows[i]); ok {
+			out = append(out, p.toMatch(windows[i], ms))
 		}
 	}
 	sort.SliceStable(out, func(a, b int) bool { return out[a].Score > out[b].Score })
@@ -119,7 +158,7 @@ func (p *Provider) Query(ctx providers.QueryCtx) []providers.Match {
 
 // indexAll：枚举 + 入口拦掉空标题 / 空句柄 + 建（缓存的）搜索键。
 func (p *Provider) indexAll() []indexedWindow {
-	entries := p.fetch()
+	entries := p.entries()
 	out := make([]indexedWindow, 0, len(entries))
 	for _, e := range entries {
 		if strings.TrimSpace(e.Title) == "" || e.Hwnd == 0 {
@@ -135,23 +174,23 @@ func (p *Provider) indexAll() []indexedWindow {
 }
 
 // score：title 与 process_name 分开建键、各打分取 max（拼接会让拼音串互相污染）。
-func (p *Provider) score(m *match.Matcher, query string, w indexedWindow) (float32, bool) {
-	title, okT := match.ScoreEntry(m, query, w.titleKeys)
-	process, okP := match.ScoreEntry(m, query, w.processKeys)
+func (p *Provider) score(m *match.Matcher, qy *match.Query, w indexedWindow) (match.MatchScore, bool) {
+	title, okT := qy.ScoreEntry(m, w.titleKeys)
+	process, okP := qy.ScoreEntry(m, w.processKeys)
 	switch {
 	case okT && okP:
-		return maxF32(title.Score, process.Score), true
+		return match.Best(title, process), true
 	case okT:
-		return title.Score, true
+		return title, true
 	case okP:
-		return process.Score, true
+		return process, true
 	default:
-		return 0, false
+		return match.MatchScore{}, false
 	}
 }
 
 // toMatch：窗口行 = 主标题 title、副标题 process_name、动作 ActivateWindow{hwnd}。
-func (p *Provider) toMatch(w indexedWindow, score float64) providers.Match {
+func (p *Provider) toMatch(w indexedWindow, ms match.MatchScore) providers.Match {
 	return providers.Match{
 		ProviderID: ID,
 		Title:      w.entry.Title,
@@ -161,7 +200,8 @@ func (p *Provider) toMatch(w indexedWindow, score float64) providers.Match {
 		// ProcessPath 为空串 → Icon 空 → 该行不画图标（与纯计算 provider 行同款降级）。
 		Icon:     w.entry.ProcessPath,
 		Action:   providers.Action{Kind: providers.ActionActivateWindow, Hwnd: uintptr(w.entry.Hwnd)},
-		Score:    score,
+		Score:    float64(ms.Score),
+		Quality:  ms.Quality,
 		Interact: providers.InteractSpec{Kind: providers.InteractExecute},
 		Actions: []providers.RowAction{
 			// 关闭窗口放在左侧、结束任务保持最右：老用户对电源图标的肌肉记忆不变。
@@ -177,11 +217,4 @@ func (p *Provider) toMatch(w indexedWindow, score float64) providers.Match {
 			},
 		},
 	}
-}
-
-func maxF32(a, b float32) float32 {
-	if a > b {
-		return a
-	}
-	return b
 }

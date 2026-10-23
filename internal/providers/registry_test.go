@@ -42,14 +42,23 @@ func TestRunOneLevel1RankedDesc(t *testing.T) {
 	}
 }
 
-// TestFrequencyBoostReorders 证频率真的进了排序：给「解密」记一次使用，其
-// final = 0.9 × Boost(1)=0.9×1.3466≈1.212 > 加密的 1.0 → 顺序翻转。
+// TestFrequencyBoostReorders 证使用习惯真的进了排序，且是**有界加分**：
+// 一次使用（+0.017）翻不动 0.1 的分差；长期高频（封顶 +0.12）才翻得动。
 func TestFrequencyBoostReorders(t *testing.T) {
 	freq := frequency.New()
 	freq.Record(frequency.Key("base64", "解密"))
 	ranked, _ := providers.RunOne(base64.New(), providers.QueryCtx{}, freq)
+	if len(ranked) != 2 || ranked[0].Title != "加密" {
+		t.Fatalf("记一次不该翻过 0.1 的分差，实得 %+v", ranked)
+	}
+
+	freq = frequency.New()
+	for i := 0; i < 500; i++ {
+		freq.Record(frequency.Key("base64", "解密"))
+	}
+	ranked, _ = providers.RunOne(base64.New(), providers.QueryCtx{}, freq)
 	if len(ranked) != 2 || ranked[0].Title != "解密" {
-		t.Fatalf("记一次使用后「解密」应升到首位，实得 %+v", ranked)
+		t.Fatalf("长期高频应把「解密」升到首位，实得 %+v", ranked)
 	}
 	if !(ranked[0].FinalScore > ranked[1].FinalScore) {
 		t.Errorf("降序不成立：%v !> %v", ranked[0].FinalScore, ranked[1].FinalScore)
@@ -115,18 +124,27 @@ func TestAggregateGroupsOrderAndHints(t *testing.T) {
 
 // TestAggregateAppliesFrequencyBoostWithinGroup 证 Aggregate 里的 Rank 也吃频率：给
 // ghost2 的 g1 记一次使用，boost 把它抬过 base64 组的相对值不影响，但组内若有两条应重排。
+// 使用习惯是**有界加分**：少量使用翻不动 0.1 的分差，长期高频才翻得动
+// （上限 0.12，见 docs/notes/ranking.md §1）。
 func TestAggregateAppliesFrequencyBoost(t *testing.T) {
 	r := providers.NewRegistry(base64.New())
-	freq := frequency.New()
-	freq.Record(frequency.Key("base64", "low")) // 低分的记一次 → 升到高分以上
 	batches := []providers.Batch{
 		{ProviderID: "base64", Matches: []providers.Match{
 			execMatch("base64", "low", 0.4), execMatch("base64", "high", 0.5),
 		}},
 	}
-	agg := r.Aggregate(batches, freq)
-	g := agg.Groups[0].Matches
-	if g[0].Title != "low" {
-		t.Errorf("记一次使用后 low 应因频率加成升到组首：%+v", g)
+	// 只记一次：分差 0.1 还在，低分条目仍应在后。
+	freq := frequency.New()
+	freq.Record(frequency.Key("base64", "low"))
+	if g := r.Aggregate(batches, freq).Groups[0].Matches; g[0].Title != "high" {
+		t.Errorf("记一次不该翻过 0.1 的分差：%+v", g)
+	}
+	// 记够次数（加成封顶 0.12 > 0.1）：低分条目反超。
+	freq = frequency.New()
+	for i := 0; i < 500; i++ {
+		freq.Record(frequency.Key("base64", "low"))
+	}
+	if g := r.Aggregate(batches, freq).Groups[0].Matches; g[0].Title != "low" {
+		t.Errorf("长期高频应把 low 顶到组首：%+v", g)
 	}
 }

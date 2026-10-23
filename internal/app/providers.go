@@ -506,6 +506,12 @@ func loadFrequency() frequency.Store {
 		log.Printf("voke：已从生产 voke 只读导入 %d 条使用频率（历史排序参照）", n)
 		saveFrequency(store)
 	}
+	// 清理不该累计的历史条目（旧版本记下的 awake 倒计时 / uuid / random 生成值、
+	// 易变的窗口标题等，见 frequency.Recordable）。放在导入之后：生产表里同样有这类键。
+	if _, dropped := frequency.Prune(store); dropped > 0 {
+		log.Printf("voke：已清理 %d 条不该累计的使用习惯（非查找类 provider）", dropped)
+		saveFrequency(store)
+	}
 	return store
 }
 
@@ -629,13 +635,14 @@ func rankPlugins(cfg config.Configs, query string) []pluginRow {
 	cands := make([]config.Candidate, 0, len(cfg.Providers))
 	m := match.NewMatcher()
 	q := strings.TrimSpace(query)
+	qy, _ := match.Compile(q) // 一次编译、所有插件复用
 	for _, p := range cfg.Providers {
 		if !p.Enabled || p.ID == engine.PickerPluginID {
 			continue
 		}
 		var fuzzy float32
-		if q != "" {
-			if s, ok := match.ScoreEntry(m, q, match.NewSearchKeys(p.Name)); ok {
+		if qy != nil {
+			if s, ok := qy.ScoreEntry(m, match.NewSearchKeys(p.Name)); ok {
 				fuzzy = s.Score
 			}
 		}

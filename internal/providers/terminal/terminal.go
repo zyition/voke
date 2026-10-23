@@ -3,7 +3,8 @@
 //
 // 分层：纯逻辑（JSONC 预处理 + 解析 + 合并去重 + provider 打分），零 mygo、零 IO、
 // 不碰文件系统。读盘（LOCALAPPDATA / Packages）在 voke-sys，合并语义全在这里可测。
-// 数据源是注入的枚举闭包（每次查询重读 settings.json，profile 会被用户增删改、缓存即过期）；
+// 数据源是注入的枚举闭包（默认 5s TTL 复用：settings.json 只在用户改配置时变，而 Global
+// 态每次按键都会跑全局 provider，逐键读盘是白烧；过期后重读，用户增删改 profile 仍会跟上）；
 // 打分复用 internal/match。执行 LaunchTerminalProfile（App Activation + --profile "<guid>"）
 // 在 app 层 dispatcher。第三条… is_global、无前缀（直接打 profile 名命中，对齐 PTR Terminal）。
 package terminal
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"voke/internal/match"
 	"voke/internal/providers"
@@ -57,12 +59,33 @@ type Provider struct {
 	fetch  Fetcher
 	wtPath string // wt.exe 别名路径（App Activation 失败兜底直启用）
 	keys   *match.SearchKeysCache
+
+	// 快照缓存：见 defaultTTL。
+	cacheValid bool
+	cacheAt    time.Time
+	cacheData  []Profile
+	ttl        time.Duration
 }
+
+// defaultTTL 是 profile 快照的有效期。
+//
+// 为什么需要：Global 态**每次按键**都会跑一遍全局 provider，而本 provider 的数据源
+// 要读 %LOCALAPPDATA% 下两个包的 settings.json 并解析 JSON——settings.json 只在用户
+// 改配置时变，逐键读盘纯属浪费。
+const defaultTTL = 5 * time.Second
 
 var _ providers.Provider = (*Provider)(nil)
 
 // New 用数据源 + wt.exe 路径构造。
 func New(fetch Fetcher, wtPath string) *Provider {
+	if fetch == nil {
+		fetch = func() []Profile { return nil }
+	}
+	return WithTTL(fetch, wtPath, defaultTTL)
+}
+
+// WithTTL 用数据源 + 快照有效期构造（测试用 0 表示每次重取）。
+func WithTTL(fetch Fetcher, wtPath string, ttl time.Duration) *Provider {
 	if fetch == nil {
 		fetch = func() []Profile { return nil }
 	}
@@ -74,7 +97,19 @@ func New(fetch Fetcher, wtPath string) *Provider {
 		fetch:  fetch,
 		wtPath: wtPath,
 		keys:   match.NewSearchKeysCache(),
+		ttl:    ttl,
 	}
+}
+
+// entries 取 profile 快照：TTL 内复用，过期重读。
+func (p *Provider) entries() []Profile {
+	if p.cacheValid && p.ttl > 0 && time.Since(p.cacheAt) < p.ttl {
+		return p.cacheData
+	}
+	p.cacheData = p.fetch()
+	p.cacheAt = time.Now()
+	p.cacheValid = true
+	return p.cacheData
 }
 
 // NewEmpty 返回空数据源实例（非 Windows 平台 / 未读配置占位）。
@@ -91,7 +126,7 @@ func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 
 func (p *Provider) Placeholder(string) string { return "输入配置名过滤，Enter 用 wt 启动" }
 
-// Query 每次重读数据源；空查询全返回 score=1.0（保 default 置顶 + stable 优先），
+// Query 按 TTL 取 profile 快照（defaultTTL）；空查询全返回 score=1.0（保 default 置顶 + stable 优先），
 // 非空按 name/commandline 取最高分排序、截断 maxResults。
 // RegeneratesOnQuery：profile 每次现读配置，结果跟随数据而非重跑即变 → false。
 func (p *Provider) RegeneratesOnQuery() bool { return false }
@@ -103,16 +138,20 @@ func (p *Provider) Query(ctx providers.QueryCtx) []providers.Match {
 	if query == "" {
 		out := make([]providers.Match, 0, len(profiles))
 		for i := range profiles {
-			out = append(out, p.toMatch(profiles[i], 1.0))
+			out = append(out, p.toMatch(profiles[i], match.MatchScore{Score: 1}))
 		}
 		return out
 	}
 
 	m := match.NewMatcher()
+	qy, ok := match.Compile(query)
+	if !ok {
+		return nil
+	}
 	out := make([]providers.Match, 0, len(profiles))
 	for i := range profiles {
-		if s, ok := p.score(m, query, profiles[i]); ok {
-			out = append(out, p.toMatch(profiles[i], float64(s)))
+		if ms, ok := p.score(m, qy, profiles[i]); ok {
+			out = append(out, p.toMatch(profiles[i], ms))
 		}
 	}
 	sort.SliceStable(out, func(a, b int) bool { return out[a].Score > out[b].Score })
@@ -123,7 +162,7 @@ func (p *Provider) Query(ctx providers.QueryCtx) []providers.Match {
 }
 
 func (p *Provider) indexAll() []indexedProfile {
-	entries := p.fetch()
+	entries := p.entries()
 	out := make([]indexedProfile, 0, len(entries))
 	for _, e := range entries {
 		out = append(out, indexedProfile{
@@ -135,24 +174,24 @@ func (p *Provider) indexAll() []indexedProfile {
 	return out
 }
 
-func (p *Provider) score(m *match.Matcher, query string, prof indexedProfile) (float32, bool) {
-	name, okN := match.ScoreEntry(m, query, prof.nameKeys)
-	command, okC := match.ScoreEntry(m, query, prof.commandKeys)
+func (p *Provider) score(m *match.Matcher, qy *match.Query, prof indexedProfile) (match.MatchScore, bool) {
+	name, okN := qy.ScoreEntry(m, prof.nameKeys)
+	command, okC := qy.ScoreEntry(m, prof.commandKeys)
 	switch {
 	case okN && okC:
-		return maxF32(name.Score, command.Score), true
+		return match.Best(name, command), true
 	case okN:
-		return name.Score, true
+		return name, true
 	case okC:
-		return command.Score, true
+		return command, true
 	default:
-		return 0, false
+		return match.MatchScore{}, false
 	}
 }
 
 // toMatch：动作 LaunchTerminalProfile{aumid, profile, fallback_path}，profile 用
 // guid（缺失退化显示名）。副标题：commandline（空则兜底），default 再加「默认配置 · 」。
-func (p *Provider) toMatch(prof indexedProfile, score float64) providers.Match {
+func (p *Provider) toMatch(prof indexedProfile, ms match.MatchScore) providers.Match {
 	profileID := prof.entry.GUID
 	if profileID == "" {
 		profileID = prof.entry.Name
@@ -187,7 +226,8 @@ func (p *Provider) toMatch(prof indexedProfile, score float64) providers.Match {
 			Icon:     "shield",
 			Action:   admin,
 		}},
-		Score:    score,
+		Score:    float64(ms.Score),
+		Quality:  ms.Quality,
 		Interact: providers.InteractSpec{Kind: providers.InteractExecute},
 	}
 }
@@ -342,11 +382,4 @@ func ProfilesFromSettings(sources []SettingsSource) []Profile {
 // （CmdPal 同款：`--profile "<profile>"`，引号保留——显示名可能含空格）。
 func ProfileActivationArguments(profile string) string {
 	return fmt.Sprintf("--profile \"%s\"", profile)
-}
-
-func maxF32(a, b float32) float32 {
-	if a > b {
-		return a
-	}
-	return b
 }

@@ -21,6 +21,8 @@
 // 便于值相等比较与构造，非 Rust 的各态带参枚举。
 package providers
 
+import "voke/internal/match"
+
 // Interact 声明「这一行是什么、Enter/点击该干什么」，UI 只按类型分发，无特判。
 // 对照 Rust `Interact`。
 type Interact uint8
@@ -141,8 +143,12 @@ type Match struct {
 	// Actions 是结果行上的附加操作；UI 只在选中/悬浮时显示。
 	Actions []RowAction
 	Action  Action
-	// Score 是 provider 给的原始分 0.0–1.0；聚合时乘 provider 权重与频率加成。
-	Score    float64
+	// Score 是 provider 给的原始分 0.0–1.0（nucleo 分）。
+	Score float64
+	// Quality 是匹配档位（全等 / 前缀 / 词首 / 子串 / 模糊）。聚合时
+	// 与 Score、provider 权重、使用习惯一起折成排序分（internal/logic/rank）。
+	// 非搜索型 provider（计算器 / uuid / random）留零值即可。
+	Quality  match.MatchQuality
 	Interact InteractSpec
 }
 

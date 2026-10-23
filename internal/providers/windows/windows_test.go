@@ -1,11 +1,12 @@
 // windows provider 测试：以 `voke-core/windows.rs` 为 oracle——title / process_name
 // 分别打分取 max、空句柄 / 空标题剔除、空查询全返回 score=1.0 不截断、非空排序截断、
-// 中文标题拼音命中、每次查询现枚举、搜索键记忆化且容量有界。
+// 中文标题拼音命中、快照 TTL（连续打字复用、过期重取）、搜索键记忆化且容量有界。
 package windows
 
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"voke/internal/match"
 	"voke/internal/providers"
@@ -204,17 +205,36 @@ func TestInvalidEntriesDropped(t *testing.T) {
 	}
 }
 
-func TestFetcherCalledEveryQuery(t *testing.T) {
+// 快照语义：默认 TTL 内连续查询复用同一份枚举（连续打字不再每键 EnumWindows），
+// 过期后重取；ttl=0 表示每次重取（测试 / 需要绝对新鲜的场景）。
+func TestFetcherCachedWithinTTL(t *testing.T) {
 	n := 0
-	p := New(func() []Entry {
+	p := WithTTL(func() []Entry {
 		n++
 		return []Entry{mkEntry("Dynamic Window", "dyn.exe", int64(100+n))}
-	})
+	}, time.Minute)
+	if h := query(p, "dynamic"); len(h) == 0 || h[0].Action.Hwnd != 101 {
+		t.Fatalf("首次枚举应得 hwnd 101：%+v", h)
+	}
+	if h := query(p, "dynamic"); len(h) == 0 || h[0].Action.Hwnd != 101 {
+		t.Fatalf("TTL 内应复用快照（仍 101）：%+v", h)
+	}
+	if n != 1 {
+		t.Errorf("TTL 内只应调一次闭包：calls=%d", n)
+	}
+}
+
+func TestFetcherCalledEveryQueryWhenTTLZero(t *testing.T) {
+	n := 0
+	p := WithTTL(func() []Entry {
+		n++
+		return []Entry{mkEntry("Dynamic Window", "dyn.exe", int64(100+n))}
+	}, 0)
 	if h := query(p, "dynamic"); len(h) == 0 || h[0].Action.Hwnd != 101 {
 		t.Fatalf("首次枚举应得 hwnd 101：%+v", h)
 	}
 	if h := query(p, "dynamic"); len(h) == 0 || h[0].Action.Hwnd != 102 {
-		t.Fatalf("次应得 hwnd 102（证明现读）：%+v", h)
+		t.Fatalf("ttl=0 应每次重取（得 102）：%+v", h)
 	}
 	if n != 2 {
 		t.Errorf("每次查询都应调闭包：calls=%d", n)

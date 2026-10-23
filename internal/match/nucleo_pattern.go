@@ -23,11 +23,19 @@ type atom struct {
 	needle     []rune
 	ignoreCase bool
 	normalize  bool
+	// raw 是 needle 的字符串形态（ASCII 分支已小写、非 ASCII 分支已折叠），
+	// 只供 quality 判定用：匹配形态是纯字符串关系，不必再走一遍 DP。
+	raw string
 }
 
 // pattern 对应 pattern::Pattern。
 type pattern struct {
 	atoms []atom
+	// whole 是整串查询小写后的形态（保留原空白），wholeTight 是再去掉空白的形态。
+	// 两者只供「整串」档位判定：whole 认 "visual studio" 这种带空格的前缀，
+	// wholeTight 认 "vs code" 这种按词首拼出的形态。
+	whole      string
+	wholeTight string
 }
 
 // patternAtoms 对应 pattern::pattern_atoms：按未转义空格切分，
@@ -81,6 +89,7 @@ func newAtom(needle string, kind atomKind) atom {
 		s := unescapeSpaces(needle)
 		s = strings.ToLower(s)
 		a.needle = []rune(s)
+		a.raw = s
 		a.ignoreCase = true
 		a.normalize = true
 		return a
@@ -97,6 +106,7 @@ func newAtom(needle string, kind atomKind) atom {
 		chars[i] = c
 	}
 	a.needle = chars
+	a.raw = string(chars)
 	a.ignoreCase = true
 	a.normalize = normalize
 	return a
@@ -104,7 +114,7 @@ func newAtom(needle string, kind atomKind) atom {
 
 // newPattern 对应 Pattern::new（空 needle 的 atom 被过滤）。
 func newPattern(s string, kind atomKind) *pattern {
-	p := &pattern{}
+	p := &pattern{whole: needleForm(s, false), wholeTight: needleForm(s, true)}
 	for _, raw := range patternAtoms(s) {
 		a := newAtom(raw, kind)
 		if len(a.needle) == 0 {
@@ -140,6 +150,31 @@ func (p *pattern) score(m *Matcher, haystack []rune) (uint32, bool) {
 		total += uint32(s)
 	}
 	return total, true
+}
+
+// quality 返回该 pattern 对 key 的匹配形态：整串与逐词各判一次，取**较强**的那档。
+//
+//   - 整串负责「查询本身就是键的一部分」：`visual studio` 是 `Visual Studio 2022` 的前缀、
+//     `vs code` 去空格后能按词首拼出 `Visual Studio Code`；
+//   - 逐词取**最低**档负责「每个词都得沾边」：任一 atom 只到子串，整条就封顶在子串，
+//     防止空格把判定放水。
+//
+// 两者取 max 而不是只用其中一种：只用整串会丢掉「空格分隔但整串不连续」的命中，
+// 只用逐词会把 `visual studio` 从「前缀」压成「子串」（视觉上更差的消息）。
+// 注意 max 不会放水：整串档位高于逐词最低档时，词与词的关系必然更强。
+//
+// 只在 p.score 命中后调用——形态是纯字符串关系，与 nucleo 的 DP 无关。
+func (p *pattern) quality(text, lower string) MatchQuality {
+	weakest := QualityExact
+	for _, a := range p.atoms {
+		if q := qualityFor(text, lower, a.raw); q < weakest {
+			weakest = q
+		}
+	}
+	if whole := wholeQuality(text, lower, p.whole, p.wholeTight); whole > weakest {
+		return whole
+	}
+	return weakest
 }
 
 // isASCIIString 对应 str::is_ascii。

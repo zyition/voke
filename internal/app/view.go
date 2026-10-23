@@ -592,7 +592,9 @@ func (st *appState) runProviderIntent(m providers.Match, providerID string) {
 	switch intent := providers.IntentFor(m); intent.Kind {
 	case providers.IntentCopy:
 		platform.WriteClipboard(intent.Text)
-		if st.freq != nil {
+		// 只记「查找类且身份稳定」的 provider（见 frequency.Recordable）：
+		// uuid/random/awake 这些结果是生成值，复制它们不该影响任何排序。
+		if st.freq != nil && frequency.Recordable(providerID) {
 			st.freq.Record(frequency.Key(providerID, m.Title))
 			saveFrequency(st.freq) // 持久化由 env 路径决定；未设 = no-op
 		}
@@ -635,7 +637,7 @@ func (st *appState) runProviderIntent(m providers.Match, providerID string) {
 		}
 	case providers.IntentPlatformAction:
 		if st.execPlatformAction(m.Action) {
-			if st.freq != nil {
+			if st.freq != nil && frequency.Recordable(providerID) {
 				st.freq.Record(frequency.Key(providerID, m.Title))
 				saveFrequency(st.freq)
 			}

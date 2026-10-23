@@ -1142,13 +1142,14 @@ func TestFrequencyPersistenceRoundtrip(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "freq.json")
 	t.Setenv(freqPathEnv, p)
 
+	// 用可记录的 provider（apps）：加载时会剪掉非查找类条目，见 loadFrequency。
 	store := frequency.New()
-	store.Record(frequency.Key("base64", "加密"))
-	store.Record(frequency.Key("base64", "加密"))
+	store.Record(frequency.Key("apps", "微信"))
+	store.Record(frequency.Key("apps", "微信"))
 	saveFrequency(store)
 
 	back := loadFrequency()
-	if back[frequency.Key("base64", "加密")] != 2 {
+	if back[frequency.Key("apps", "微信")] != 2 {
 		t.Errorf("频率表落盘读回错：%+v", back)
 	}
 

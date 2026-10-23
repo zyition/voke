@@ -2,7 +2,8 @@
 // `QueryEngine::rank` / `aggregate`）——把 provider 的原始 Match 汇成
 // 「组内按 final_score 降序」的可执行结果 + 单独抽出的提示行。
 //
-// final_score = provider.weight × match.score × frequency.Boost(使用次数)。
+// final_score = provider.weight × (match.score + 档位加分 + 有界使用加成)，
+// 由 internal/logic/rank 统一计算（见 docs/notes/ranking.md）。
 // 纯逻辑、零 mygo、零 IO；frequency 表由调用方（app 层从磁盘加载）注入。
 // apps 走的是它自己的 panelstate 路径，不经本注册表（§10.2 第 12 条：apps 暂不并入）。
 package providers
@@ -11,6 +12,7 @@ import (
 	"sort"
 
 	"voke/internal/logic/frequency"
+	"voke/internal/logic/rank"
 )
 
 // Registry 是按注册顺序持有 provider 的表（id → Provider；注册顺序 = 分组展示顺序）。
@@ -46,16 +48,20 @@ type RankedMatch struct {
 	FinalScore float64
 }
 
-// Rank 计算 final_score = weight × score × boost 并按降序**稳定**排序（同分保持原序，
-// 对照 Rust 的 sort_by + 稳定排序）。freq 为 nil 时 boost 恒 1.0。
+// Rank 计算最终排序分并按降序**稳定**排序（同分保持原序，对照 Rust 的 sort_by +
+// 稳定排序）。最终分由 internal/logic/rank 统一给出：
+//
+//	Final = weight × (nucleo 分 + 档位加分 + 有界使用加成)
+//
+// freq 为 nil 时使用加成为 0。
 func Rank(providerID string, weight float64, ms []Match, freq frequency.Store) []RankedMatch {
 	out := make([]RankedMatch, 0, len(ms))
 	for _, m := range ms {
-		boost := 1.0
-		if freq != nil {
-			boost = freq.BoostOf(frequency.Key(providerID, m.Title))
-		}
-		out = append(out, RankedMatch{Match: m, FinalScore: weight * m.Score * boost})
+		out = append(out, RankedMatch{
+			Match: m,
+			FinalScore: rank.Final(m.Quality, m.Score, weight,
+				rank.UsageOf(freq, providerID, m.Title)),
+		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].FinalScore > out[j].FinalScore })
 	return out

@@ -1,19 +1,25 @@
-// 拼音搜索键预处理，1:1 对应 voke-core/src/search_key.rs。
+// 搜索键预处理，1:1 对应 voke-core/src/search_key.rs。
 //
 // 索引时对每个条目预生成搜索键，查询时零汉字转换开销：
 //
-//	"微信"       → keys: name="微信", full=["weixin","weishen"], initials=["wx","ws"]
-//	"网易云音乐" → keys: name="网易云音乐", full=["wangyiyunyinle","wangyiyunyinyue"], initials=["wyyyl","wyyyy"]
+//	"微信"       → name="微信", full=["weixin","weishen"], initials=["wx","ws"]
+//	"网易云音乐" → name="网易云音乐", full=["wangyiyunyinle","wangyiyunyinyue"], initials=["wyyyl","wyyyy"]
+//
+// 词首缩写（"Visual Studio Code" → "vsc"）**不建键**：它是纯字符串规则，由
+// quality.go 的 acronymMatch 在查询期判定，既支持 "vsc" 也支持续写 "vscode"。
 //
 // 查询时：
-//   - query 为纯 ASCII → 对所有 keys 跑 nucleo 模糊匹配（首字母串天然获得前缀高分）
+//   - query 为纯 ASCII → 对所有 keys 跑 nucleo 模糊匹配（首字母串天然获得全等或前缀档）
 //   - query 含汉字 → 只对原名匹配
 //
 // 索引期一次生成的前提是「条目稳定」；条目每次查询都重新读的 provider
 // （窗口 / 工作区 / 终端）要走 SearchKeysCache 复用，否则每次按键都重算。
 package match
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
 // HasNonASCII 对应 search_key.rs 的 has_non_ascii：
 // 是否含有非 ASCII 字符（用于判断 query 走汉字匹配还是拼音匹配路径）。
@@ -63,6 +69,16 @@ type SearchKeys struct {
 	Full []string
 	// Initials 首字母串变体，ASCII query 匹配（"wx" 命中"微信"）。
 	Initials []string
+	// refs 是查询期真正遍历的键（原名 + 全拼 + 首字母），索引期算好小写形态，
+	// 让档位判定在每次按键时零分配（键不变，小写也不变）。
+	refs []keyRef
+}
+
+// keyRef 是一条搜索键及其小写形态。小写形态只服务于档位判定：
+// 全等 / 前缀 / 子串都能在已小写的串上做，不必每个候选再 ToLower 一次。
+type keyRef struct {
+	text  string
+	lower string
 }
 
 // variantLimit 对应 SearchKeys::VARIANT_LIMIT：多音字展开组数上限，
@@ -149,12 +165,18 @@ func NewSearchKeys(name string) *SearchKeys {
 			keys.Initials = append(keys.Initials, v)
 		}
 	}
+	keys.refs = make([]keyRef, 0, 1+len(keys.Full)+len(keys.Initials))
+	for _, s := range keys.ASCIIKeys() {
+		keys.refs = append(keys.refs, keyRef{text: s, lower: strings.ToLower(s)})
+	}
 	return keys
 }
 
 // ASCIIKeys 对应 SearchKeys::ascii_keys：原名 + 全拼 + 首字母串。
 // 原名必须包含在内：纯 ASCII 条目（"Visual Studio Code"）没有拼音变体，
-// 靠原名匹配 "vscode"。
+// 靠原名匹配 "vscode"；词首缩写不在这里建键（见 quality.go 的 acronymMatch）。
+//
+// 查询期遍历的是 refs（带小写形态，索引期算好）；本方法只给测试 / 诊断用。
 func (k *SearchKeys) ASCIIKeys() []string {
 	keys := make([]string, 0, 1+len(k.Full)+len(k.Initials))
 	keys = append(keys, k.Name)
@@ -198,8 +220,13 @@ type SearchKeysCache struct {
 	items map[string]*SearchKeys
 }
 
-// CacheCapacity 对应 SearchKeysCache::CAPACITY。
-const CacheCapacity = 512
+// CacheCapacity 是搜索键缓存的上限（条数）。
+//
+// 必须大于「一台机器上可能出现的不同名字数」：apps 动辄上千条（AppsFolder + 开始菜单），
+// 缓存一旦装不下就会走「整表清空」的淘汰，命中率归零、每次按键重算全部拼音键
+// （实测 1200 个不同名字：5.1ms/键，比 500µs 的正常水平高一个数量级）。
+// 每条 SearchKeys 约 200–400B（含拼音变体），4096 条上限约 1MB 量级。
+const CacheCapacity = 4096
 
 // NewSearchKeysCache 对应 SearchKeysCache::new。
 func NewSearchKeysCache() *SearchKeysCache {

@@ -122,7 +122,7 @@ func TestScoresMatchRustCorpus(t *testing.T) {
 }
 
 // rawScoreEntry 复刻 score_entry 的取分逻辑但返回未归一化的原始分，
-// 便于与 Rust 的 Pattern::score 逐位比对。
+// 便于与 Rust 的 Pattern::score 逐位比对（键集与 Rust 相同：原名 / 全拼 / 首字母）。
 func rawScoreEntry(m *Matcher, query string, keys *SearchKeys) (uint32, bool) {
 	if query == "" {
 		return 0, false
