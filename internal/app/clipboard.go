@@ -17,6 +17,7 @@ import (
 	"voke/internal/logic/appcfg"
 	"voke/internal/logic/cliphist"
 	"voke/internal/platform"
+	clipboardprovider "voke/internal/providers/clipboard"
 )
 
 const (
@@ -44,29 +45,84 @@ func clipboardMaxEntries(loaded appcfg.Loaded) int {
 	return cliphist.DefaultMaxEntries
 }
 
-// startClipboardWatcher 启动后台轮询：只读 Win32 序列号，变化后经 RunOnMain
-// 回主线程读内容、写历史。序列号不变时一个锁都不碰，面板常驻的开销可以忽略。
+// startClipboardWatcher 启动后台轮询：只读 Win32 序列号，**变化后**才回主线程
+// 读内容、写历史。
+//
+// 省电约束（笔记本场景）：
+//   - 序列号比较放在后台 goroutine 里，稳态下**不产生任何主线程唤醒**（早先在每次
+//     tick 都投一次 RunOnMain，等于每 500ms 白叫一次消息循环）；
+//   - 剪贴板插件被停用时 clipWatchOn=false，连序列号系统调用都不做；
+//   - 空转时只有一个 ticker 与一次 GetClipboardSequenceNumber（读一个 DWORD）。
 //
 // 必须等 App 就绪后调用（ready 里）；goroutine 生命周期与进程一致。
 func (st *appState) startClipboardWatcher() {
-	st.clipSeq = platform.ClipboardSequence()
+	st.clipSeq.Store(platform.ClipboardSequence())
+	// 首选事件驱动：系统级 WM_CLIPBOARDUPDATE（见 platform.StartClipboardWatch），
+	// 空闲时零唤醒、零系统调用。
+	if ch, stop, ok := platform.StartClipboardWatch(); ok {
+		st.clipWatchStop = stop
+		go func() {
+			for range ch {
+				if !st.clipWatchOn.Load() {
+					continue
+				}
+				mygo.RunOnMain(st.onClipboardSignal)
+			}
+		}()
+		return
+	}
+	// 回退：500ms 轮询序列号（非 Windows / 监听窗口创建失败）。只读一个 DWORD，
+	// 序列号比较放在后台，稳态下不唤醒主线程。
 	go func() {
 		ticker := time.NewTicker(clipboardPollInterval)
 		defer ticker.Stop()
+		var last uint32
 		for range ticker.C {
+			if !st.clipWatchOn.Load() {
+				last = 0 // 停用期间不做任何系统调用
+				continue
+			}
 			seq := platform.ClipboardSequence()
-			if seq == 0 {
-				continue // 非 Windows / 序列号不可用
+			if seq == 0 || seq == last {
+				continue // 序列号不可用 / 没变化
+			}
+			last = seq
+			if st.clipSeq.Load() == seq {
+				continue // 程序化写入已同步过
 			}
 			mygo.RunOnMain(func() {
-				if seq == st.clipSeq {
-					return
-				}
-				st.clipSeq = seq
+				st.clipSeq.Store(seq)
 				st.captureClipboard()
 			})
 		}
 	}()
+}
+
+// onClipboardSignal 在主线程处理「系统剪贴板可能变了」：事件会合并、也会被我们自己
+// 的写入触发，所以重读序列号去重，真变了才读内容。
+func (st *appState) onClipboardSignal() {
+	if !st.clipWatchOn.Load() {
+		return
+	}
+	seq := platform.ClipboardSequence()
+	if seq == 0 || seq == st.clipSeq.Load() {
+		return
+	}
+	st.clipSeq.Store(seq)
+	st.captureClipboard()
+}
+
+// syncClipboardWatch 按配置决定后台轮询是否工作（剪贴板插件停用 → 完全空转）。
+// 只在主线程调用（ready / 配置重载）。
+func (st *appState) syncClipboardWatch() {
+	on := true
+	for _, p := range st.providers.Providers {
+		if p.ID == clipboardprovider.ID {
+			on = p.Enabled
+			break
+		}
+	}
+	st.clipWatchOn.Store(on)
 }
 
 // captureClipboard 在主线程读当前剪贴板并写入历史。
@@ -138,7 +194,7 @@ func (st *appState) pasteClipboardItem(ref string, plain bool) {
 	}
 	// 程序化写入也会让序列号递增；先同步到已处理位，并记下内容指纹抑制
 	// 延迟渲染造成的二次序列号变化。
-	st.clipSeq = platform.ClipboardSequence()
+	st.clipSeq.Store(platform.ClipboardSequence())
 	st.clipSuppress = payload
 	st.clipSuppressUntil = time.Now().Add(clipboardSuppressWindow)
 

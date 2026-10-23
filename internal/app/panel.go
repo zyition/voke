@@ -3,6 +3,7 @@ package app
 
 import (
 	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -103,6 +104,20 @@ type appState struct {
 	// 覆盖路径，未设则 no-op）。nil 安全：RunOne / search.FilterApps 都退回 boost=1。
 	// 装配时注入给 st.model.Freq，让 apps-only 全局查询也吃到 rank 的频率加成。
 	freq frequency.Store
+	// runner 是异步过滤的投递口（见 filter_async.go）。nil = 就地同步过滤，
+	// 测试与装配早期走这条；生产在 ready() 里换成单 worker，按键不再等过滤。
+	runner    filterRunner
+	filterGen uint64
+	// freqVersion 在每次 Record 后 +1；freqSnap / freqSnapVer 是给后台过滤用的
+	// 只读快照（按版本惰性克隆，避免每次按键都复制整张表）。
+	freqVersion uint64
+	freqSnap    frequency.Store
+	freqSnapVer uint64
+	// windowTimer / windowTimerGen 是**面板可见期间**的窗口快照定时刷新：
+	// 唤起时先刷一次，之后每 windowRefreshInterval 一次；隐藏即停（世代号让
+	// 迟到的回调空转），不留常驻定时器。
+	windowTimer    *time.Timer
+	windowTimerGen int
 	// provRows / provChosen / provList / provHint **只在「已注册 provider 的插件态」**读写。
 	provRows   []providers.RankedMatch
 	provChosen int
@@ -143,7 +158,13 @@ type appState struct {
 	hist *cliphist.Store
 	// clipSeq 是最近一次已处理的剪贴板序列号；程序化写入后同步置位，用于抑制
 	// 自己写剪贴板又被监控采集（例如「纯文本粘贴」降级出的新条目）。
-	clipSeq uint32
+	clipSeq atomic.Uint32
+	// clipWatchOn 是剪贴板后台轮询的开关：插件停用时后台空转（不做系统调用、
+	// 不叫醒主线程）。由 syncClipboardWatch 在 ready / 配置重载时写入。
+	clipWatchOn atomic.Bool
+	// clipWatchStop 停掉事件驱动的剪贴板监听（非 Windows / 监听失败时为 nil，
+	// 此时在跑的是轮询回退）。退出流程调用，避免留线程。
+	clipWatchStop func()
 	// clipTarget 是唤起面板前的前台窗口快照，粘贴时恢复它并发送按键。
 	clipTarget platform.ClipTarget
 	// notice 是一次性操作提示（粘贴失败 / 置顶已满 / 结束任务失败），显示在底部
@@ -308,7 +329,13 @@ func (st *appState) ready() {
 		st.filter()
 		st.refreshGlobalAgg() // apps 首次加载完成后，用最新 Results 重算全局合并行
 	})
+	// 异步过滤接缝：按键只投递任务，结果经 Window.Update 回主线程（见 filter_async.go）。
+	st.runner = newAsyncFilter()
+	st.runner.bind(st.panel, st.applyFilterResult)
+	// 窗口快照接缝：枚举在后台跑（见 winsnapshot.go），刷新完成后回主线程按需重算。
+	winSnap.bind(st.panel, st.onWindowSnapshot)
 	// 剪贴板监控：后台只轮询序列号，变化后回主线程读内容并写入内存历史。
+	st.syncClipboardWatch()
 	st.startClipboardWatcher()
 	platform.SnapshotMem("启动")
 	log.Printf("voke 就绪（版本 %s，热键 %s）", aboutVersion(), showHotkey)
@@ -417,6 +444,9 @@ func (st *appState) showPanelEntry(entry panelEntry) {
 		}
 	}
 	st.stopIconTrimTimer()
+	// 窗口快照：唤起即后台刷一次（不阻塞本帧），随后由定时器续刷。
+	winSnap.refreshAsync()
+	st.armWindowRefreshTimer()
 	// 唤起前记住前台窗口（剪贴板历史「粘贴」要回到这里）。只在面板原本不可见时
 	// 捕获：重复唤起 / 第二实例通知不能把面板自己当成目标。托盘点击时前台可能
 	// 仍是上一次的应用（任务栏通常不抢前台），捕获不到有效目标时粘贴会回退为
@@ -556,8 +586,46 @@ func (st *appState) hidePanel() {
 		st.saveMainSession()
 	}
 	st.panel.Hide()
+	st.stopWindowRefreshTimer()
 	if wasVisible {
 		st.armIconTrimTimer()
+	}
+}
+
+// windowRefreshInterval 是面板可见期间的窗口快照刷新间隔。
+//
+// 只在可见时挂表：面板关着的时候没人看窗口列表，枚举纯属浪费。2s 足够跟上
+// 「切了个窗口再回来搜」，又远长于一次枚举本身的耗时。
+const windowRefreshInterval = 2 * time.Second
+
+// armWindowRefreshTimer 挂一次「面板可见期间」的窗口刷新定时器（一次性 + 自重挂）。
+// 只在主线程调用。旧定时器靠世代号作废：showPanel / hidePanel 都会推进世代号，
+// 迟到的回调看到世代号对不上就直接退出，不会误刷、不会累积。
+func (st *appState) armWindowRefreshTimer() {
+	st.windowTimerGen++
+	gen := st.windowTimerGen
+	st.windowTimer = time.AfterFunc(windowRefreshInterval, func() {
+		// 回主线程再判断/续挂：可见性、世代号都只主线程读写。
+		st.panel.Update(func() {
+			if st.windowTimerGen != gen {
+				return
+			}
+			if !st.panel.IsVisible() {
+				st.windowTimer = nil
+				return
+			}
+			winSnap.refreshAsync()
+			st.armWindowRefreshTimer()
+		})
+	})
+}
+
+// stopWindowRefreshTimer 停掉可见期间的窗口刷新定时器（隐藏 / 退出时调）。
+func (st *appState) stopWindowRefreshTimer() {
+	st.windowTimerGen++
+	if st.windowTimer != nil {
+		st.windowTimer.Stop()
+		st.windowTimer = nil
 	}
 }
 

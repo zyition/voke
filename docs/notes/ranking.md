@@ -246,14 +246,50 @@ internal/app               Record / loadFrequency / saveFrequency 不变
 
 回归由 `internal/logic/search/bench_test.go` 的常驻基准守住。
 
-### 输入路径上的额外发现（2026-10-23）
+### 输入路径：从「帧内同步」改成「投递 + 回主线程」
 
-Global 态**每次按键**都会跑一遍「apps 过滤 + 全部 is_global 插件」（`refreshGlobalAgg`）。
-除了搜索本身，这条路径上原本还有两处纯浪费，已一并修：
+Global 态原来每一次按键都在**渲染帧内**同步跑完「Scan → FilterApps → 全部 is_global
+插件」，输入回显要等这些算完。两处必须改：
 
-| 位置 | 原行为 | 现行为 |
+| 问题 | 原行为 | 现行为 |
 | --- | --- | --- |
-| windows provider | 每次查询 `EnumWindows` + 每窗取标题 / 进程名 / exe 路径 | 250ms 快照（`windows.defaultTTL`），连续打字复用 |
-| terminal provider | 每次查询读两个 `settings.json` 并解析 JSON | 5s 快照（`terminal.defaultTTL`） |
+| 窗口枚举 | 每键 `EnumWindows` + 逐窗取标题 / 进程名 / exe 路径，**窗口多时阻塞几十到几百毫秒**（`platform/windows_enum_windows.go` 自己的注释） | 后台快照（`internal/app/winsnapshot.go`），主线程只读 `[]Entry`；**查询不触发枚举** |
+| 过滤 | 帧内同步 `FilterApps` | 投递到单 worker（`internal/app/filter_async.go`），结果经 `Window.Update` 回主线程；世代号丢弃过期结果 |
 
-两者都保留 `WithTTL(…, 0)` 供「必须绝对新鲜」的场景与测试使用。
+窗口快照的刷新只有两个触发点（都单飞，跑完即退）：
+
+- **面板唤起**（`showPanelEntry`）刷一次，保证这次搜索看到的是当下的窗口；
+- **可见期间每 2s** 刷一次（`windowRefreshInterval`，一次性 `time.AfterFunc` + 世代号自重挂），
+  隐藏（`hidePanel`）与退出（`OnWillQuit`）都停表，面板关着时没有任何常驻定时器或枚举。
+
+配套细节：
+
+- 队列容量 1，满了丢旧留新（latest-wins）——连续打字时中间的查询根本不需要算完；
+  全进程只有一个过滤 goroutine，跑完阻塞在 channel 上，进程退出即回收。
+- 后台只读不可变快照：apps 列表按 slice 头传入（主线程只整体替换、不改数组），
+  频率表按版本惰性克隆（`freqVersion` 变了才复制）。
+- 空查询仍就地同步算（复制 + 按使用次数排，约 1ms）：否则首帧会闪一下「没有匹配」。
+- 测试/装配早期 `runner == nil` 时走同步路径，断言语义与改造前一致。
+- 落地页 `applyFilterResult` 与 `applyEngineState` 共用同一套「哪条结果区在用」的
+  判定（picker / 已落地 provider / 未落地插件都不落 apps 结果）。
+
+### 常驻开销清单（笔记本口径，2026-10-23 审计）
+
+目标：空闲 / 隐藏时除了剪贴板必须的那点轮询，不应该有任何周期性工作。
+
+| 来源 | 触发条件 | 空闲成本 | 备注 |
+| --- | --- | --- | --- |
+| 剪贴板 | **事件驱动**：`AddClipboardFormatListener` + `WM_CLIPBOARDUPDATE`（`platform/clipboard_watch_windows.go`） | 空闲 0 唤醒、0 系统调用 | 监听失败 / 非 Windows 自动回退 500ms 轮询；插件停用时空转（`clipWatchOn`） |
+| 窗口快照 | 面板唤起 + 可见期每 2s | 隐藏时为 0 | 隐藏 / 退出即停表 |
+| 图标缓存裁剪 | 隐藏后 10s 一次性 | 0 | 10s 后把解码缓存 256→64 |
+| 保持唤醒重申 | 仅用户开启时，30s | 一次 `SetThreadExecutionState` | 功能本身 |
+| 热键录制超时 | 仅录制时 | 0 | 一次性 |
+| 粘贴 / 焦点延迟 | 动作时 60ms | 0 | 一次性 |
+| mygo 帧循环 | 事件驱动（无 VSync 空转） | 0 | 空闲后释放帧内存（mygo `windowHost.idle`） |
+
+常驻内存的大头（都有上界）：搜索键缓存 `CacheCapacity`=4096（约 1MB 上限）、
+解码图标缓存 256 条（隐藏 10s 后 64）、剪贴板历史（按配置条数）、频率表（按不同应用名）。
+
+剪贴板监听已改为事件驱动（自建 message-only 窗口，见上）。mygo 的 `listeners` 类型与
+`AppHandler` 接口都在 internal 包里、不对外暴露，无法注册自定义原生事件，所以事件源
+只能自己建——这也是 voke 里唯一一处「绕过 mygo 自建窗口」的地方。

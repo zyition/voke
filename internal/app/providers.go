@@ -268,22 +268,16 @@ func platformEditorCmd(c *platform.EditorCmd) *workspaces.EditorCommand {
 	return &workspaces.EditorCommand{Exe: c.Exe, PreArgs: c.PreArgs}
 }
 
-// windowsProvider 把 windows provider 接到真实数据源：每次查询现枚举可切换顶层窗口
-// （platform.EnumerateWindows，Windows 走 Win32 EnumWindows、非 Windows 返回 nil），转成
-// windows.Entry。Icon 留空（PoC 未接图标提取，provider 走首字母降级）。非 Windows 恒空 =
-// 接线前 NewEmpty 逐字一致（零回归）。
+// winSnap 是窗口数据源：枚举在后台跑，主线程只读快照（见 winsnapshot.go）。
+// 刷新只由「面板唤起」与「可见期间定时器」触发，查询不触发枚举。
+var winSnap = newWindowSnapshot()
+
+// windowsProvider 把 windows provider 接到快照数据源。**不能在输入路径上枚举**：
+// platform.EnumerateWindows 窗口多时阻塞几十到几百毫秒，原先它跑在每次按键的帧内，
+// 输入回显要等枚举完成。现在主线程只读快照，过期时由后台刷新。
+// provider 自身的 TTL 置 0：缓存在快照层，避免双层缓存把新窗口多挡 250ms。
 func windowsProvider() *windows.Provider {
-	return windows.New(func() []windows.Entry {
-		infos := platform.EnumerateWindows()
-		if len(infos) == 0 {
-			return nil
-		}
-		out := make([]windows.Entry, len(infos))
-		for i, w := range infos {
-			out[i] = windows.Entry{Hwnd: w.Hwnd, Title: w.Title, ProcessName: w.ProcessName, ProcessPath: w.ProcessPath}
-		}
-		return out
-	})
+	return windows.WithTTL(winSnap.get, 0)
 }
 
 // applyProviderConfigs 把归一后的配置（weight / count / enabled / is_global / prefix /
@@ -611,6 +605,7 @@ func (st *appState) reloadConfigs() {
 	}
 	applyProviderConfigs(cfg, st.pluginReg) // 下发到当前 live 注册表（appState 持有）
 	st.cfg, st.providers, st.table = loaded, cfg, table
+	st.syncClipboardWatch() // 剪贴板插件被停用后，后台轮询随即空转
 }
 
 // pluginRow 是 picker 模式列表的一行（id 用于 SelectPlugin，两行文本用于渲染）。

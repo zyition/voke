@@ -99,12 +99,26 @@ func (m *Model) Choose(i int) []Action {
 //
 // now 由调用方注入（main 传 time.Now()），本包不碰系统时钟。
 func (m *Model) OnQueryChanged(now time.Time) []Action {
-	var acts []Action
-	if strings.TrimSpace(m.Query) != "" && !m.Loaded && !m.Loading {
-		m.Loading, m.LoadAt = true, now
-		acts = append(acts, Action{Kind: ActionEnsureLoad})
+	return append(m.BeginQueryChange(now), m.Filter()...)
+}
+
+// BeginQueryChange 只做「查询变化」的状态侧（懒加载闸门），**不做过滤**。
+//
+// 拆分出来是给异步过滤用：main 侧按键时先跑它（微秒级，维持「首次非空查询触发
+// 枚举」的闸门语义），过滤交给后台；结果回来再调 SetResults。
+func (m *Model) BeginQueryChange(now time.Time) []Action {
+	if strings.TrimSpace(m.Query) == "" || m.Loaded || m.Loading {
+		return nil
 	}
-	return append(acts, m.Filter()...)
+	m.Loading, m.LoadAt = true, now
+	return []Action{{Kind: ActionEnsureLoad}}
+}
+
+// SetResults 用后台算好的结果替换 Results 并复位选中到第 0 行（异步过滤的落点）。
+// 与 Filter 的分工：Filter 自己算（同步/测试），SetResults 只接收算好的数据。
+func (m *Model) SetResults(results []appsmodel.AppEntry) []Action {
+	m.Results = results
+	return m.Choose(0)
 }
 
 // ClickRow 处理「单击某行 i」：越界直接返回 nil（什么都不做，与原实现一致）；

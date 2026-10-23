@@ -40,9 +40,11 @@ import (
 	"voke/internal/logic/engine"
 	"voke/internal/logic/frequency"
 	"voke/internal/logic/panelstate"
+	"voke/internal/logic/search"
 	"voke/internal/platform"
 	"voke/internal/providers"
 	"voke/internal/providers/terminal"
+	"voke/internal/providers/windows"
 )
 
 // view 是面板的整帧视图（WindowOptions.Content = ui.View(st.view)）。
@@ -210,6 +212,66 @@ func (st *appState) filter() {
 	st.execute(st.model.Filter())
 }
 
+// beginFilter 提交一次过滤。main 只做「更新查询 + 懒加载闸门」（微秒级），
+// 过滤交给 runner（生产 = 单 worker；nil = 就地同步，测试用），本帧立即回显输入。
+func (st *appState) beginFilter() {
+	st.execute(st.model.BeginQueryChange(time.Now()))
+	st.filterGen++
+	job := filterJob{
+		gen:   st.filterGen,
+		query: st.model.Query,
+		apps:  st.model.Apps,
+		freq:  st.freqSnapshot(),
+	}
+	if st.runner == nil {
+		st.applyFilterResult(job, search.FilterApps(job.query, job.apps, job.freq))
+		return
+	}
+	st.runner.submit(job)
+}
+
+// applyFilterResult 是过滤结果回主线程的落点：世代号或查询对不上（期间又敲了字 /
+// 切了模式）直接丢弃。只在主线程执行（Window.Update 回调 / 同步路径）。
+func (st *appState) applyFilterResult(job filterJob, results []appsmodel.AppEntry) {
+	if job.gen != st.filterGen || job.query != st.model.Query {
+		return
+	}
+	// 只有「apps 结果区」真的在用才落结果：期间切到 picker / 已落地 provider /
+	// 未落地插件，apps 列表都不展示（与 applyEngineState 的分支条件同一套判定）。
+	if st.engineState.Mode() == engine.PluginPicker || st.providerActive() || st.pluginPending() {
+		return
+	}
+	st.execute(st.model.SetResults(results))
+	st.refreshGlobalAgg()
+}
+
+// freqSnapshot 返回给后台过滤用的频率表只读快照：频率表只在主线程改，
+// 版本没变就复用上一份（克隆一次约几十微秒，但按键频率高，能省则省）。
+func (st *appState) freqSnapshot() frequency.Store {
+	if st.freq == nil {
+		return nil
+	}
+	if st.freqSnap != nil && st.freqSnapVer == st.freqVersion {
+		return st.freqSnap
+	}
+	snap := make(frequency.Store, len(st.freq))
+	for k, v := range st.freq {
+		snap[k] = v
+	}
+	st.freqSnap, st.freqSnapVer = snap, st.freqVersion
+	return snap
+}
+
+// recordUse 记一次使用：过白名单 → 计数 +1 → 快照失效 → 落盘。
+func (st *appState) recordUse(providerID, title string) {
+	if st.freq == nil || !frequency.Recordable(providerID) {
+		return
+	}
+	st.freq.Record(frequency.Key(providerID, title))
+	st.freqVersion++
+	saveFrequency(st.freq)
+}
+
 // onQueryChanged 是搜索框内容变化后的统一入口：**先问 engine 这是什么模式，
 // 再决定把查询词交给谁**。
 //
@@ -282,8 +344,23 @@ func (st *appState) applyEngineState(next engine.State) {
 	if st.pluginPending() {
 		return // 结果区出占位文案，这里不动 apps
 	}
-	st.execute(st.model.OnQueryChanged(time.Now()))
-	st.refreshGlobalAgg() // apps 结果更新后重算合并行（有全局插件命中才走合并渲染，否则 apps-only）
+	st.beginFilter() // 异步：本帧立即回显，结果回主线程后再重算合并行
+}
+
+// onWindowSnapshot 是窗口快照刷新后的主线程回调（经 Window.Update 投递）。
+// 只有「当前结果真的会用到窗口数据」时才重算，面板隐藏 / 非窗口相关查询直接跳过，
+// 避免后台枚举顺带把主线程的工作也拉起来。
+func (st *appState) onWindowSnapshot() {
+	if st.panel == nil || !st.panel.IsVisible() {
+		return
+	}
+	if st.engineState.Mode() == engine.Global && st.engineState.Query() != "" {
+		st.refreshGlobalAgg()
+		return
+	}
+	if st.providerActive() && st.engineState.PluginID() == windows.ID {
+		st.refreshProviderResults()
+	}
 }
 
 // refreshOnShow 在面板重新显示后按当前模式重跑一次查询，让隐藏期间变化的数据
@@ -594,10 +671,7 @@ func (st *appState) runProviderIntent(m providers.Match, providerID string) {
 		platform.WriteClipboard(intent.Text)
 		// 只记「查找类且身份稳定」的 provider（见 frequency.Recordable）：
 		// uuid/random/awake 这些结果是生成值，复制它们不该影响任何排序。
-		if st.freq != nil && frequency.Recordable(providerID) {
-			st.freq.Record(frequency.Key(providerID, m.Title))
-			saveFrequency(st.freq) // 持久化由 env 路径决定；未设 = no-op
-		}
+		st.recordUse(providerID, m.Title)
 		// 对照 Rust Copy：只隐藏、**不 reset_after_action**。输入与结果原样保留，
 		// 用户下次唤回还能看到刚复制的值并再次复制（重跑会把值换掉）。
 		st.hidePanel()
@@ -637,10 +711,7 @@ func (st *appState) runProviderIntent(m providers.Match, providerID string) {
 		}
 	case providers.IntentPlatformAction:
 		if st.execPlatformAction(m.Action) {
-			if st.freq != nil && frequency.Recordable(providerID) {
-				st.freq.Record(frequency.Key(providerID, m.Title))
-				saveFrequency(st.freq)
-			}
+			st.recordUse(providerID, m.Title)
 			// 保持唤醒 / 取消唤醒 / 切窗口 / 启动（含终端 profile）都属于 Rust
 			// Action::should_reset_input 的「离开面板」类：先隐藏，再复位成干净顶层。
 			st.hidePanel()
@@ -764,10 +835,7 @@ func (st *appState) execLaunch(acts []panelstate.Action) {
 			// 启动成功 → 记一次 apps 使用频率（对照生产 search.rs record_use("apps:<name>")），
 			// 下次 FilterApps 的 rank 据此把它顶到前面。键前缀用 appsmodel.ProviderID，与
 			// search.boostOf 的键必须一致。失败不记（与生产「选中执行才记」同）。
-			if st.freq != nil {
-				st.freq.Record(frequency.Key(appsmodel.ProviderID, app.Name))
-				saveFrequency(st.freq)
-			}
+			st.recordUse(appsmodel.ProviderID, app.Name)
 			st.hidePanel()
 			st.resetAfterAction()
 			return
