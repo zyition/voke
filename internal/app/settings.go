@@ -120,6 +120,8 @@ type settingsWindow struct {
 	win          *mygo.Window
 	section      string // 左侧导航当前项（general / shortcuts / about / plugin:<id>）
 	pluginsOpen  bool   // 左侧「插件」分组的展开态（默认展开）
+	scrollPlugin string // 待滚到顶部的插件 id；插件总览页消费一次
+	pluginList   ui.ListState
 	hotkey       string
 	autostart    bool
 	theme        string
@@ -499,22 +501,31 @@ func (st *appState) settingsView(c *ui.Context) {
 		ui.Divider(c)
 
 		ui.Row(c).Grow(1).Children(func() {
-			st.settingsSidebar(c, s)
+			if st.settingsSidebar(c, s) {
+				// 点插件条目时记下目标：插件总览页用 ListState.ScrollTo 把它对到顶部。
+				if id, ok := pluginIDFromNav(s.section); ok {
+					s.scrollPlugin = id
+				} else {
+					s.scrollPlugin = ""
+				}
+			}
 			ui.Box(c).Width(1).FillHeight().Background(t.Border)
-			ui.Scroll(c).Key(s.section).Grow(1).FillHeight().Padding(28, 20).Children(func() {
-				ui.Column(c).Gap(18).Children(func() {
-					switch {
-					case s.section == settingsSectionShortcuts:
-						st.settingsShortcuts(c, s)
-					case s.section == settingsSectionAbout:
-						st.settingsAbout(c)
-					default:
-						if id, ok := pluginIDFromNav(s.section); ok {
-							st.settingsPluginPage(c, s, id)
-						} else {
+			ui.Column(c).Grow(1).FillHeight().Children(func() {
+				if _, ok := pluginIDFromNav(s.section); ok {
+					st.settingsPlugins(c, s)
+					return
+				}
+				ui.Scroll(c).Key(s.section).Grow(1).FillHeight().Padding(28, 20).Children(func() {
+					ui.Column(c).Gap(18).Children(func() {
+						switch {
+						case s.section == settingsSectionShortcuts:
+							st.settingsShortcuts(c, s)
+						case s.section == settingsSectionAbout:
+							st.settingsAbout(c)
+						default:
 							st.settingsGeneral(c, s)
 						}
-					}
+					})
 				})
 			})
 		})
@@ -530,14 +541,15 @@ func (st *appState) settingsView(c *ui.Context) {
 	})
 }
 
-// settingsSidebar 画左侧导航：通用 / 快捷键 / 可折叠的插件列表 / 关于。
-// 图标用 Lucide 线稿，与托盘、面板的图标语言一致。插件分组只有逐插件条目，
-// 不再保留「全部插件」这一层——点哪个插件就直接看哪个插件。
-func (st *appState) settingsSidebar(c *ui.Context, s *settingsWindow) {
+// settingsSidebar 画左侧导航：通用 / 快捷键 / 可折叠的插件列表 / 关于，
+// 返回本次是否切换了选中项。插件分组只有逐插件条目；点哪个插件，右侧总览就
+// 滚到哪个插件卡片（不另设「全部插件」入口）。
+func (st *appState) settingsSidebar(c *ui.Context, s *settingsWindow) bool {
 	t := c.Theme()
+	changed := false
 	ui.Column(c).Width(188).FillHeight().Shrink(0).Padding(10, 10).
 		Background(t.Surface.Alpha(0.55)).Children(func() {
-		ui.Sidebar(c, &s.section, func() {
+		sidebar := ui.Sidebar(c, &s.section, func() {
 			ui.SidebarSection(c, i18n.L("偏好设置", "Preferences"), nil, func() {
 				ui.SidebarItem(c, settingsSectionGeneral, settingsIcon("general"), i18n.L("通用", "General"))
 				ui.SidebarItem(c, settingsSectionShortcuts, settingsIcon("shortcuts"), i18n.L("快捷键", "Shortcuts"))
@@ -554,7 +566,9 @@ func (st *appState) settingsSidebar(c *ui.Context, s *settingsWindow) {
 				ui.SidebarItem(c, settingsSectionAbout, settingsIcon("about"), i18n.L("关于", "About"))
 			})
 		}).Grow(1)
+		changed = sidebar.Changed()
 	})
+	return changed
 }
 
 // settingsGeneral 画「通用」页：启动、语言、外观。
@@ -637,20 +651,41 @@ func (st *appState) settingsShortcuts(c *ui.Context, s *settingsWindow) {
 		})
 }
 
-// settingsPluginPage 画单个插件的设置页：页标题 + 该插件卡片，始终从顶部开始，
-// 不再有「全部插件」列表页与滚动定位。
-func (st *appState) settingsPluginPage(c *ui.Context, s *settingsWindow, id string) {
-	settingsPageHeader(c,
-		i18n.L("插件", "Plugins"),
-		i18n.L("启用插件并调整搜索行为。", "Enable plugins and tune how they appear in search."))
-	if s.configErr != "" {
-		ui.Text(c, s.configErr).FontSize(theme.HintSize).TextColor(c.Theme().Danger)
+// settingsPlugins 画插件总览页：页标题 + 可滚动、可虚拟化的插件卡片列表。
+// 点侧栏插件条目时用 ListState.ScrollTo(…, Start) 把目标卡片对到顶部；列表本身
+// 仍可继续滚动，查看其它插件。
+func (st *appState) settingsPlugins(c *ui.Context, s *settingsWindow) {
+	ui.Column(c).Fill().Padding(28, 20).Children(func() {
+		settingsPageHeader(c,
+			i18n.L("插件", "Plugins"),
+			i18n.L("启用插件并调整搜索行为。", "Enable plugins and tune how they appear in search."))
+		if s.configErr != "" {
+			ui.Text(c, s.configErr).FontSize(theme.HintSize).TextColor(c.Theme().Danger)
+		}
+		s.pluginList.Key = func(i int) any { return s.edits[i].id }
+		s.pluginList.Label = func(i int) string { return s.edits[i].name }
+		if s.scrollPlugin != "" {
+			if idx := providerEditIndex(s.edits, s.scrollPlugin); idx >= 0 {
+				s.pluginList.ScrollTo(idx, ui.Start)
+			}
+			s.scrollPlugin = ""
+		}
+		ui.List(c, &s.pluginList, len(s.edits), func(i int) {
+			ui.Column(c).Padding(0, 0, 18, 0).Children(func() {
+				st.settingsProviderCard(c, s, &s.edits[i])
+			})
+		}).Grow(1)
+	})
+}
+
+// providerEditIndex 按插件 id 找它在设置列表里的下标（找不到返回 -1）。
+func providerEditIndex(edits []providerEdit, id string) int {
+	for i := range edits {
+		if edits[i].id == id {
+			return i
+		}
 	}
-	p := findProviderEdit(s.edits, id)
-	if p == nil {
-		return
-	}
-	st.settingsProviderCard(c, s, p)
+	return -1
 }
 
 // settingsProviderCard 画单个插件卡片。
@@ -817,7 +852,7 @@ func settingsInfoRow(c *ui.Context, label, value string) {
 // 默认文件管理器打开所在目录。路径无效（未落盘）时不显示按钮。
 func settingsPathRow(c *ui.Context, label, path string) {
 	t := c.Theme()
-	ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, label).Width(100).Shrink(0).FontSize(theme.DetailSize + 1).TextColor(t.TextMuted)
 		ui.Text(c, path).Shrink(1).SingleLine().FontSize(theme.TitleSize).TextColor(t.Text)
 		if filepath.IsAbs(path) {
