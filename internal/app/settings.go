@@ -532,7 +532,6 @@ func (st *appState) settingsView(c *ui.Context) {
 
 		ui.Divider(c)
 		ui.Row(c).Padding(20, 14).Gap(12).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Voke "+aboutVersion()).FontSize(theme.HintSize).TextColor(t.TextMuted)
 			ui.Spacer(c)
 			if ui.PrimaryButton(c, i18n.L("完成", "Done")).Clicked() {
 				st.closeSettings(s)
