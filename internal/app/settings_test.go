@@ -202,22 +202,56 @@ func TestSettingsViewRendersSidebarAndPages(t *testing.T) {
 		providers:        cfg,
 		pluginHotkeyErrs: map[string]string{},
 	}
-	s := &settingsWindow{section: settingsSectionGeneral}
+	s := &settingsWindow{section: settingsSectionGeneral, pluginsOpen: true}
 	st.settings = s
 	st.seedSettings(s)
 
 	tt := ui.NewTester(st.settingsView, 880, 600)
 	tt.Frame()
-	for _, want := range []string{"通用", "界面语言", "跟随系统", "开机自启"} {
+	for _, want := range []string{"通用", "界面语言", "跟随系统", "开机自启", "全部插件"} {
 		if !tt.HasText(want) {
 			t.Errorf("通用页应包含文案 %q", want)
 		}
 	}
-	if err := tt.Click("插件"); err != nil {
-		t.Fatalf("点击左侧「插件」失败：%v", err)
+	if err := tt.Click("全部插件"); err != nil {
+		t.Fatalf("点击左侧「全部插件」失败：%v", err)
 	}
 	tt.Frame()
 	if !tt.HasText("参与全局搜索") || !tt.HasText("前缀") {
 		t.Errorf("切到插件页后应显示插件配置项")
+	}
+}
+
+// TestSettingsSidebarPluginItemJumps：左侧插件二级项点击后进入插件页并把目标卡片
+// 滚入视野；scrollPlugin 只消费一次，避免每帧重复滚动。
+func TestSettingsSidebarPluginItemJumps(t *testing.T) {
+	cfg, _, err := buildPrefixTable()
+	if err != nil {
+		t.Fatalf("buildPrefixTable 失败：%v", err)
+	}
+	st := &appState{
+		cfg:              appcfg.Loaded{Hotkey: hotkeyShow, Theme: appcfg.ThemeSystem},
+		providers:        cfg,
+		pluginHotkeyErrs: map[string]string{},
+	}
+	s := &settingsWindow{section: settingsSectionGeneral, pluginsOpen: true}
+	st.settings = s
+	st.seedSettings(s)
+
+	tt := ui.NewTester(st.settingsView, 880, 600)
+	tt.Frame()
+	// 通用页上只有侧栏出现 Base64，点击不会落到插件卡片的同名标题。
+	if err := tt.Click("Base64"); err != nil {
+		t.Fatalf("点击左侧 Base64 失败：%v", err)
+	}
+	tt.Frame()
+	if s.section != "plugin:base64" {
+		t.Errorf("选中项 = %q，想要 plugin:base64", s.section)
+	}
+	if s.scrollPlugin != "" {
+		t.Errorf("scrollPlugin 应在首帧消费掉，实得 %q", s.scrollPlugin)
+	}
+	if !tt.HasText("base64 编解码（加密 / 解密）") {
+		t.Errorf("应显示 Base64 插件卡片")
 	}
 }
