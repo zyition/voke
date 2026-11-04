@@ -753,7 +753,7 @@ func (st *appState) settingsAbout(c *ui.Context) {
 	settingsCard(c, "Voke", "", func() {
 		ui.Column(c).Gap(12).Children(func() {
 			settingsInfoRow(c, i18n.L("版本", "Version"), aboutVersion())
-			settingsInfoRow(c, i18n.L("配置文件", "Config file"), aboutConfigPath())
+			settingsPathRow(c, i18n.L("配置文件", "Config file"), aboutConfigPath())
 			settingsLinkRow(c, i18n.L("项目地址", "Project"), projectURL)
 		})
 	})
@@ -803,12 +803,36 @@ func settingsRow(c *ui.Context, label, hint string, control func()) {
 	})
 }
 
-// settingsInfoRow 是只读信息行（版本 / 配置文件路径）。
+// settingsInfoRow 是只读信息行（版本）。字号比早期口径大一档，保证「关于」面板
+// 里的值在默认 DPI 下也清楚可读。
 func settingsInfoRow(c *ui.Context, label, value string) {
 	t := c.Theme()
 	ui.Row(c).Gap(16).AlignItems(ui.Start).Children(func() {
 		ui.Text(c, label).Width(100).Shrink(0).FontSize(theme.DetailSize + 1).TextColor(t.TextMuted)
-		ui.Text(c, value).Grow(1).FontSize(theme.DetailSize).TextColor(t.Text)
+		ui.Text(c, value).Grow(1).FontSize(theme.TitleSize).TextColor(t.Text)
+	})
+}
+
+// settingsPathRow 是配置文件路径行：路径本体更大，右侧带文件夹按钮，点击用系统
+// 默认文件管理器打开所在目录。路径无效（未落盘）时不显示按钮。
+func settingsPathRow(c *ui.Context, label, path string) {
+	t := c.Theme()
+	ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, label).Width(100).Shrink(0).FontSize(theme.DetailSize + 1).TextColor(t.TextMuted)
+		ui.Text(c, path).Shrink(1).SingleLine().FontSize(theme.TitleSize).TextColor(t.Text)
+		if filepath.IsAbs(path) {
+			btn := ui.ButtonBase(c).Padding(4).Radius(6).
+				Label(i18n.L("打开配置目录", "Open config folder"))
+			btn.Children(func() {
+				ui.Icon(c, settingsIcon("folder")).Size(18, 18).TextColor(t.TextMuted)
+			})
+			if btn.Clicked() {
+				if err := platform.OpenDirectory(filepath.Dir(path)); err != nil {
+					log.Printf("voke 打开配置目录 %s 失败：%v", filepath.Dir(path), err)
+				}
+			}
+		}
+		ui.Spacer(c)
 	})
 }
 
@@ -817,7 +841,7 @@ func settingsLinkRow(c *ui.Context, label, url string) {
 	t := c.Theme()
 	ui.Row(c).Gap(16).AlignItems(ui.Start).Children(func() {
 		ui.Text(c, label).Width(100).Shrink(0).FontSize(theme.DetailSize + 1).TextColor(t.TextMuted)
-		ui.Link(c, url, url).Grow(1).FontSize(theme.DetailSize)
+		ui.Link(c, url, url).Grow(1).FontSize(theme.TitleSize)
 	})
 }
 
@@ -833,6 +857,7 @@ func settingsIcon(key string) *ui.SVG {
 			"general":   ui.MustParseSVG(lucideSettings),
 			"shortcuts": ui.MustParseSVG(lucideKeyboard),
 			"about":     ui.MustParseSVG(lucideInfo),
+			"folder":    ui.MustParseSVG(lucideFolder),
 		}
 	})
 	if s, ok := settingsSVGs[key]; ok {
@@ -841,11 +866,12 @@ func settingsIcon(key string) *ui.SVG {
 	return settingsSVGs["general"]
 }
 
-// Lucide v0.544.0（ISC）：settings / keyboard / info。
+// Lucide v0.544.0（ISC）：settings / keyboard / info / folder。
 var (
 	lucideSettings = []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`)
 	lucideKeyboard = []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/></svg>`)
 	lucideInfo     = []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`)
+	lucideFolder   = []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`)
 )
 
 // applySettings 即时落盘 + 应用（实时生效，无“保存”按钮）：
