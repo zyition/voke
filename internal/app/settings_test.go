@@ -208,22 +208,22 @@ func TestSettingsViewRendersSidebarAndPages(t *testing.T) {
 
 	tt := ui.NewTester(st.settingsView, 880, 600)
 	tt.Frame()
-	for _, want := range []string{"通用", "界面语言", "跟随系统", "开机自启", "全部插件"} {
+	for _, want := range []string{"通用", "界面语言", "跟随系统", "开机自启", "Base64"} {
 		if !tt.HasText(want) {
 			t.Errorf("通用页应包含文案 %q", want)
 		}
 	}
-	if err := tt.Click("全部插件"); err != nil {
-		t.Fatalf("点击左侧「全部插件」失败：%v", err)
+	if err := tt.Click("快捷键"); err != nil {
+		t.Fatalf("点击左侧「快捷键」失败：%v", err)
 	}
 	tt.Frame()
-	if !tt.HasText("参与全局搜索") || !tt.HasText("前缀") {
-		t.Errorf("切到插件页后应显示插件配置项")
+	if !tt.HasText("全局热键") {
+		t.Errorf("切到快捷键页后应显示全局热键")
 	}
 }
 
-// TestSettingsSidebarPluginItemJumps：左侧插件二级项点击后进入插件页并把目标卡片
-// 滚入视野；scrollPlugin 只消费一次，避免每帧重复滚动。
+// TestSettingsSidebarPluginItemJumps：左侧插件条目点击后进入该插件的设置页，
+// 内容从顶部开始（不再有「全部插件」总览页）。
 func TestSettingsSidebarPluginItemJumps(t *testing.T) {
 	cfg, _, err := buildPrefixTable()
 	if err != nil {
@@ -248,11 +248,8 @@ func TestSettingsSidebarPluginItemJumps(t *testing.T) {
 	if s.section != "plugin:base64" {
 		t.Errorf("选中项 = %q，想要 plugin:base64", s.section)
 	}
-	if s.scrollPlugin != "" {
-		t.Errorf("scrollPlugin 应在首帧消费掉，实得 %q", s.scrollPlugin)
-	}
-	if !tt.HasText("base64 编解码（加密 / 解密）") {
-		t.Errorf("应显示 Base64 插件卡片")
+	if !tt.HasText("base64 编解码（加密 / 解密）") || !tt.HasText("参与全局搜索") {
+		t.Errorf("应显示 Base64 插件卡片且从顶部开始")
 	}
 }
 
@@ -278,7 +275,7 @@ func TestSettingsAboutShowsProjectURL(t *testing.T) {
 		t.Fatalf("折叠插件分组失败：%v", err)
 	}
 	tt.Frame()
-	if tt.HasText("全部插件") {
+	if tt.HasText("Base64") {
 		t.Errorf("折叠后不应再显示插件子项")
 	}
 	if err := tt.Click("关于"); err != nil {

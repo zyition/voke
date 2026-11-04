@@ -44,7 +44,6 @@ import (
 const (
 	settingsSectionGeneral   = "general"
 	settingsSectionShortcuts = "shortcuts"
-	settingsSectionPlugins   = "plugins"
 	settingsSectionAbout     = "about"
 	// pluginNavPrefix 是侧栏「单个插件」条目的 id 前缀，如 plugin:base64。
 	// 用独立前缀而不是裸 id，避免与页面 id 撞车。
@@ -119,9 +118,8 @@ type providerEdit struct {
 // 存的是 Select 显示的当前语言标签，save 时经 themeCode / languageCode 映射回配置码值。
 type settingsWindow struct {
 	win          *mygo.Window
-	section      string // 左侧导航当前项（general / shortcuts / plugins / plugin:<id> / about）
+	section      string // 左侧导航当前项（general / shortcuts / about / plugin:<id>）
 	pluginsOpen  bool   // 左侧「插件」分组的展开态（默认展开）
-	scrollPlugin string // 待滚动到的插件 id；渲染插件卡片时消费一次
 	hotkey       string
 	autostart    bool
 	theme        string
@@ -488,7 +486,6 @@ func (st *appState) settingsView(c *ui.Context) {
 	}
 	t := c.Theme()
 	c.Root().Background(t.Background)
-	_, pluginNav := pluginIDFromNav(s.section)
 
 	ui.Column(c).Fill().Children(func() {
 		// 标题栏：左标题 + 副标题，右侧留白，让内容成为视觉主体。
@@ -502,26 +499,21 @@ func (st *appState) settingsView(c *ui.Context) {
 		ui.Divider(c)
 
 		ui.Row(c).Grow(1).Children(func() {
-			if st.settingsSidebar(c, s) {
-				// 点插件的二级条目时记下目标，插件页渲染到该卡片时滚入视野。
-				if id, ok := pluginIDFromNav(s.section); ok {
-					s.scrollPlugin = id
-				} else {
-					s.scrollPlugin = ""
-				}
-			}
+			st.settingsSidebar(c, s)
 			ui.Box(c).Width(1).FillHeight().Background(t.Border)
 			ui.Scroll(c).Key(s.section).Grow(1).FillHeight().Padding(28, 20).Children(func() {
 				ui.Column(c).Gap(18).Children(func() {
 					switch {
 					case s.section == settingsSectionShortcuts:
 						st.settingsShortcuts(c, s)
-					case s.section == settingsSectionPlugins || pluginNav:
-						st.settingsPlugins(c, s)
 					case s.section == settingsSectionAbout:
 						st.settingsAbout(c)
 					default:
-						st.settingsGeneral(c, s)
+						if id, ok := pluginIDFromNav(s.section); ok {
+							st.settingsPluginPage(c, s, id)
+						} else {
+							st.settingsGeneral(c, s)
+						}
 					}
 				})
 			})
@@ -538,21 +530,20 @@ func (st *appState) settingsView(c *ui.Context) {
 	})
 }
 
-// settingsSidebar 画左侧导航：通用 / 快捷键 / 可折叠的插件列表 / 关于，返回本次是否
-// 切换了选中项。图标用 Lucide 线稿，与托盘、面板的图标语言一致。
-func (st *appState) settingsSidebar(c *ui.Context, s *settingsWindow) bool {
+// settingsSidebar 画左侧导航：通用 / 快捷键 / 可折叠的插件列表 / 关于。
+// 图标用 Lucide 线稿，与托盘、面板的图标语言一致。插件分组只有逐插件条目，
+// 不再保留「全部插件」这一层——点哪个插件就直接看哪个插件。
+func (st *appState) settingsSidebar(c *ui.Context, s *settingsWindow) {
 	t := c.Theme()
-	changed := false
 	ui.Column(c).Width(188).FillHeight().Shrink(0).Padding(10, 10).
 		Background(t.Surface.Alpha(0.55)).Children(func() {
-		sidebar := ui.Sidebar(c, &s.section, func() {
+		ui.Sidebar(c, &s.section, func() {
 			ui.SidebarSection(c, i18n.L("偏好设置", "Preferences"), nil, func() {
 				ui.SidebarItem(c, settingsSectionGeneral, settingsIcon("general"), i18n.L("通用", "General"))
 				ui.SidebarItem(c, settingsSectionShortcuts, settingsIcon("shortcuts"), i18n.L("快捷键", "Shortcuts"))
 			})
-			// 插件作为可折叠一级：默认展开，内含「全部插件」入口和逐插件直达项。
+			// 插件作为可折叠一级：默认展开，逐插件直达。
 			ui.SidebarSection(c, i18n.L("插件", "Plugins"), &s.pluginsOpen, func() {
-				ui.SidebarItem(c, settingsSectionPlugins, settingsIcon("plugins"), i18n.L("全部插件", "All Plugins"))
 				for i := range s.edits {
 					p := &s.edits[i]
 					ui.SidebarItem(c, pluginNavID(p.id), appui.PluginIconSVG(p.id), p.name).
@@ -563,9 +554,7 @@ func (st *appState) settingsSidebar(c *ui.Context, s *settingsWindow) bool {
 				ui.SidebarItem(c, settingsSectionAbout, settingsIcon("about"), i18n.L("关于", "About"))
 			})
 		}).Grow(1)
-		changed = sidebar.Changed()
 	})
-	return changed
 }
 
 // settingsGeneral 画「通用」页：启动、语言、外观。
@@ -648,23 +637,26 @@ func (st *appState) settingsShortcuts(c *ui.Context, s *settingsWindow) {
 		})
 }
 
-// settingsPlugins 画「插件」页：每个插件一张卡片。
-func (st *appState) settingsPlugins(c *ui.Context, s *settingsWindow) {
+// settingsPluginPage 画单个插件的设置页：页标题 + 该插件卡片，始终从顶部开始，
+// 不再有「全部插件」列表页与滚动定位。
+func (st *appState) settingsPluginPage(c *ui.Context, s *settingsWindow, id string) {
 	settingsPageHeader(c,
 		i18n.L("插件", "Plugins"),
 		i18n.L("启用插件并调整搜索行为。", "Enable plugins and tune how they appear in search."))
 	if s.configErr != "" {
 		ui.Text(c, s.configErr).FontSize(theme.HintSize).TextColor(c.Theme().Danger)
 	}
-	for i := range s.edits {
-		st.settingsProviderCard(c, s, &s.edits[i])
+	p := findProviderEdit(s.edits, id)
+	if p == nil {
+		return
 	}
+	st.settingsProviderCard(c, s, p)
 }
 
 // settingsProviderCard 画单个插件卡片。
 func (st *appState) settingsProviderCard(c *ui.Context, s *settingsWindow, p *providerEdit) {
 	t := c.Theme()
-	card := ui.Column(c).Gap(14).Padding(18).Radius(10).
+	ui.Column(c).Gap(14).Padding(18).Radius(10).
 		Background(t.Surface).Border(1, t.Border.Alpha(0.65)).Children(func() {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, appui.PluginIconSVG(p.id)).Size(16, 16).TextColor(t.TextMuted)
@@ -752,10 +744,6 @@ func (st *appState) settingsProviderCard(c *ui.Context, s *settingsWindow, p *pr
 			}
 		})
 	})
-	if s.scrollPlugin == p.id {
-		card.ScrollIntoView()
-		s.scrollPlugin = ""
-	}
 }
 
 // settingsAbout 画「关于」页。
@@ -844,7 +832,6 @@ func settingsIcon(key string) *ui.SVG {
 		settingsSVGs = map[string]*ui.SVG{
 			"general":   ui.MustParseSVG(lucideSettings),
 			"shortcuts": ui.MustParseSVG(lucideKeyboard),
-			"plugins":   ui.MustParseSVG(lucidePuzzle),
 			"about":     ui.MustParseSVG(lucideInfo),
 		}
 	})
@@ -854,11 +841,10 @@ func settingsIcon(key string) *ui.SVG {
 	return settingsSVGs["general"]
 }
 
-// Lucide v0.544.0（ISC）：settings / keyboard / puzzle / info。
+// Lucide v0.544.0（ISC）：settings / keyboard / info。
 var (
 	lucideSettings = []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`)
 	lucideKeyboard = []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/></svg>`)
-	lucidePuzzle   = []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.23 8.77c.24-.24.581-.353.917-.303.515.077.877.528 1.073 1.01a2.5 2.5 0 1 0 3.259-3.259c-.482-.196-.933-.558-1.01-1.073-.05-.336.062-.676.303-.917l1.525-1.525A2.402 2.402 0 0 1 12 1.998c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.237 3.237c-.464.18-.894.527-.967 1.02Z"/></svg>`)
 	lucideInfo     = []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`)
 )
 
