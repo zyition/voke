@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"voke/internal/i18n"
 	"voke/internal/logic/appsmodel"
 	"voke/internal/logic/frequency"
 	"voke/internal/logic/search"
@@ -147,12 +148,12 @@ func (m *Model) Open() []Action {
 func (m *Model) EmptyHint(now time.Time) string {
 	switch {
 	case m.Loading && now.Sub(m.LoadAt) < 10*time.Second:
-		return "正在枚举应用…"
+		return i18n.L("正在枚举应用…", "Loading apps…")
 	case !m.Loaded:
-		return "输入以搜索应用"
+		return i18n.L("输入以搜索应用", "Type to search apps")
 	case len(m.Apps) == 0:
-		return "暂无应用（枚举失败见日志）"
+		return i18n.L("暂无应用（枚举失败见日志）", "No apps found (see the log for enumeration errors)")
 	default:
-		return "没有匹配的应用"
+		return i18n.L("没有匹配的应用", "No matching apps")
 	}
 }

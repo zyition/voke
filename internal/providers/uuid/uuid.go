@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"voke/internal/i18n"
 	"voke/internal/providers"
 )
 
@@ -35,15 +36,21 @@ func New() *Provider {
 	}}
 }
 
-func (p *Provider) ID() string                           { return ID }
-func (p *Provider) Name() string                         { return "UUID" }
-func (p *Provider) Aliases() []string                    { return []string{"u"} }
-func (p *Provider) Description() string                  { return "生成 UUID v4（可指定个数）" }
+func (p *Provider) ID() string { return ID }
+func (p *Provider) Name() string {
+	return "UUID"
+}
+func (p *Provider) Aliases() []string { return []string{"u"} }
+func (p *Provider) Description() string {
+	return i18n.L("生成 UUID v4（可指定个数）", "Generate UUID v4 (optionally several)")
+}
 func (p *Provider) Config() providers.ProviderConfig     { return p.config }
 func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 
 // Placeholder 对照 Rust：uuid 无子模式，个数提示进占位符。
-func (p *Provider) Placeholder(string) string { return "生成 UUID，输入个数可批量如 3" }
+func (p *Provider) Placeholder(string) string {
+	return i18n.L("生成 UUID，输入个数可批量如 3", "Generate UUIDs; enter a count such as 3")
+}
 
 // Query 每次重新生成（对照 Rust：结果必须跟着输入变）。count 解析失败 → 无结果。
 // RegeneratesOnQuery：uuid 每次查询重掷新值 → true（输入没变却重跑必须跳过）。

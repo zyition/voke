@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"voke/internal/i18n"
 	"voke/internal/providers"
 )
 
@@ -61,11 +62,11 @@ func (a alphabetKind) chars() string {
 func (a alphabetKind) label() string {
 	switch a {
 	case alphaSym:
-		return "字母 + 数字 + 特殊字符"
+		return i18n.L("字母 + 数字 + 特殊字符", "letters + digits + symbols")
 	case alphaHex:
-		return "十六进制"
+		return i18n.L("十六进制", "hex")
 	default:
-		return "字母 + 数字"
+		return i18n.L("字母 + 数字", "letters + digits")
 	}
 }
 
@@ -107,10 +108,14 @@ func newSeeded(seed int64) *Provider {
 	return &Provider{config: defaultConfig(), fill: func(b []byte) { _, _ = r.Read(b) }}
 }
 
-func (p *Provider) ID() string                           { return ID }
-func (p *Provider) Name() string                         { return "随机值" }
-func (p *Provider) Aliases() []string                    { return []string{"r", "sj", "rand"} }
-func (p *Provider) Description() string                  { return "随机整数 / 随机字符串" }
+func (p *Provider) ID() string { return ID }
+func (p *Provider) Name() string {
+	return i18n.L("随机值", "Random")
+}
+func (p *Provider) Aliases() []string { return []string{"r", "sj", "rand"} }
+func (p *Provider) Description() string {
+	return i18n.L("随机整数 / 随机字符串", "Random integers / strings")
+}
 func (p *Provider) Config() providers.ProviderConfig     { return p.config }
 func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 
@@ -118,15 +123,15 @@ func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 func (p *Provider) Placeholder(subMode string) string {
 	switch subMode {
 	case SubModeInt:
-		return "输入范围如 5-10（默认 1–100），或选「重新生成」"
+		return i18n.L("输入范围如 5-10（默认 1–100），或选「重新生成」", "Enter a range such as 5-10 (default 1–100), or choose Regenerate")
 	case SubModeStr:
-		return "输入长度如 24（默认 16），或选「重新生成」"
+		return i18n.L("输入长度如 24（默认 16），或选「重新生成」", "Enter a length such as 24 (default 16), or choose Regenerate")
 	case SubModeSym:
-		return "输入长度如 24（默认 16），或选「重新生成」"
+		return i18n.L("输入长度如 24（默认 16），或选「重新生成」", "Enter a length such as 24 (default 16), or choose Regenerate")
 	case SubModeHex:
-		return "输入长度如 64（默认 32），或选「重新生成」"
+		return i18n.L("输入长度如 64（默认 32），或选「重新生成」", "Enter a length such as 64 (default 32), or choose Regenerate")
 	default:
-		return "选择随机类型"
+		return i18n.L("选择随机类型", "Choose a random type")
 	}
 }
 
@@ -148,13 +153,14 @@ func (p *Provider) Query(ctx providers.QueryCtx) []providers.Match {
 func (p *Provider) queryLevel1(query string) []providers.Match {
 	if query == "" {
 		return []providers.Match{
-			providers.MatchSubquery(ID, "随机整数", "默认 1–100，进入后可选范围", SubModeInt, 1.0),
-			providers.MatchSubquery(ID, "随机字符串", "默认 16 位字母+数字，进入后可选长度", SubModeStr, 0.95),
-			providers.MatchSubquery(ID, "含特殊字符", "默认 16 位，字母+数字+特殊字符", SubModeSym, 0.9),
-			providers.MatchSubquery(ID, "十六进制", "默认 32 位，0-9a-f", SubModeHex, 0.85),
+			providers.MatchSubquery(ID, i18n.L("随机整数", "Random integer"), i18n.L("默认 1–100，进入后可选范围", "Default 1–100; set a range inside"), SubModeInt, 1.0),
+			providers.MatchSubquery(ID, i18n.L("随机字符串", "Random string"), i18n.L("默认 16 位字母+数字，进入后可选长度", "16 letters/digits by default; set a length inside"), SubModeStr, 0.95),
+			providers.MatchSubquery(ID, i18n.L("含特殊字符", "With symbols"), i18n.L("默认 16 位，字母+数字+特殊字符", "16 chars with letters, digits and symbols by default"), SubModeSym, 0.9),
+			providers.MatchSubquery(ID, i18n.L("十六进制", "Hexadecimal"), i18n.L("默认 32 位，0-9a-f", "32 hex chars (0-9a-f) by default"), SubModeHex, 0.85),
 		}
 	}
-	return []providers.Match{hintRow("请先选择随机类型", "进入上方类型后再设置参数（范围 / 长度）", 1.0)}
+	return []providers.Match{hintRow(i18n.L("请先选择随机类型", "Choose a random type first"),
+		i18n.L("进入上方类型后再设置参数（范围 / 长度）", "Open a type above to set its options (range / length)"), 1.0)}
 }
 
 // queryLevel2：首条固定「重新生成」（Refresh），随后按预置 / 参数生成 count 条。
@@ -163,12 +169,12 @@ func (p *Provider) queryLevel2(subMode, query string) []providers.Match {
 	if count < 1 {
 		count = 1
 	}
-	refreshSubtitle := "重新生成"
+	refreshSubtitle := i18n.L("重新生成", "Regenerate")
 	if count > 1 {
-		refreshSubtitle = fmt.Sprintf("再生成 %d 个", count)
+		refreshSubtitle = fmt.Sprintf(i18n.L("再生成 %d 个", "Generate %d more"), count)
 	}
 	out := []providers.Match{
-		providers.MatchExecute(ID, "重新生成", refreshSubtitle,
+		providers.MatchExecute(ID, i18n.L("重新生成", "Regenerate"), refreshSubtitle,
 			providers.Action{Kind: providers.ActionRefresh}, 1.0),
 	}
 
@@ -184,13 +190,13 @@ func (p *Provider) queryLevel2(subMode, query string) []providers.Match {
 	if subMode == SubModeInt {
 		r, ok := parse(query)
 		if !ok || r.isString {
-			return append(out, hintRow("无法解析", "示例：5-10 或 24", 0.98))
+			return append(out, hintRow(i18n.L("无法解析", "Cannot parse"), i18n.L("示例：5-10 或 24", "Example: 5-10 or 24"), 0.98))
 		}
 		req = r
 	} else {
 		n, ok := parseLengthParam(query)
 		if !ok {
-			return append(out, hintRow("无法解析", "示例：5-10 或 24", 0.98))
+			return append(out, hintRow(i18n.L("无法解析", "Cannot parse"), i18n.L("示例：5-10 或 24", "Example: 5-10 or 24"), 0.98))
 		}
 		req = request{isString: true, length: n, alpha: defaultReq.alpha}
 	}
@@ -226,10 +232,10 @@ func defaultRequest(subMode string) (request, bool) {
 func (p *Provider) generate(req request) (string, string) {
 	if req.isString {
 		return p.randomStringWith(req.length, req.alpha),
-			fmt.Sprintf("随机字符串（%d 位 · %s）", req.length, req.alpha.label())
+			fmt.Sprintf(i18n.L("随机字符串（%d 位 · %s）", "Random string (%d chars · %s)"), req.length, req.alpha.label())
 	}
 	return strconv.FormatInt(p.randomInt(req.low, req.high), 10),
-		fmt.Sprintf("随机整数 [%d, %d]", req.low, req.high)
+		fmt.Sprintf(i18n.L("随机整数 [%d, %d]", "Random integer [%d, %d]"), req.low, req.high)
 }
 
 // randomInt 在 [low, high] 内取一个随机整数（含两端；倒序端点自动交换）。

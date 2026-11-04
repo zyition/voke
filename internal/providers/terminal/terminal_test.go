@@ -230,8 +230,8 @@ func TestProviderMetadata(t *testing.T) {
 		t.Errorf("别名应 wt,terminal：%v", p.Aliases())
 	}
 	c := p.Config()
-	if !c.Enabled || !c.IsGlobal || c.Weight != 1.0 || c.Prefix != "" {
-		t.Errorf("配置不符（enabled/is_global/1.0/无前缀）：%+v", c)
+	if !c.Enabled || c.IsGlobal || c.Weight != 1.0 || c.Prefix != "_" {
+		t.Errorf("配置不符（enabled/非全局/1.0/_）：%+v", c)
 	}
 }
 

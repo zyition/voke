@@ -274,8 +274,8 @@ func TestProviderMetadata(t *testing.T) {
 		t.Errorf("元数据不符：%s/%s/%v", p.ID(), p.Name(), p.Aliases())
 	}
 	c := p.Config()
-	if !c.Enabled || !c.IsGlobal || c.Weight != 1.0 || c.Prefix != "" {
-		t.Errorf("配置不符：%+v", c)
+	if !c.Enabled || c.IsGlobal || c.Weight != 1.0 || c.Prefix != "{" {
+		t.Errorf("配置不符（enabled/非全局/1.0/{）：%+v", c)
 	}
 }
 

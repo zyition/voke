@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"voke/internal/i18n"
 	"voke/internal/providers"
 )
 
@@ -41,10 +42,14 @@ func New() *Provider {
 	}}
 }
 
-func (p *Provider) ID() string                           { return ID }
-func (p *Provider) Name() string                         { return "Base64" }
-func (p *Provider) Aliases() []string                    { return []string{"b", "b64"} }
-func (p *Provider) Description() string                  { return "base64 编解码（加密 / 解密）" }
+func (p *Provider) ID() string { return ID }
+func (p *Provider) Name() string {
+	return "Base64"
+}
+func (p *Provider) Aliases() []string { return []string{"b", "b64"} }
+func (p *Provider) Description() string {
+	return i18n.L("base64 编解码（加密 / 解密）", "Base64 encoding and decoding")
+}
 func (p *Provider) Config() providers.ProviderConfig     { return p.config }
 func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 
@@ -52,11 +57,11 @@ func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 func (p *Provider) Placeholder(subMode string) string {
 	switch subMode {
 	case SubModeEnc:
-		return "输入要加密的内容（例：hello → aGVsbG8=）"
+		return i18n.L("输入要加密的内容（例：hello → aGVsbG8=）", "Text to encode (e.g. hello → aGVsbG8=)")
 	case SubModeDec:
-		return "输入要解密的 base64（例：aGVsbG8= → hello）"
+		return i18n.L("输入要解密的 base64（例：aGVsbG8= → hello）", "Base64 to decode (e.g. aGVsbG8= → hello)")
 	default:
-		return "选择 加密 或 解密"
+		return i18n.L("选择 加密 或 解密", "Choose Encode or Decode")
 	}
 }
 
@@ -67,8 +72,8 @@ func (p *Provider) RegeneratesOnQuery() bool { return false }
 func (p *Provider) Query(ctx providers.QueryCtx) []providers.Match {
 	if ctx.SubMode == "" {
 		return []providers.Match{
-			providers.MatchSubquery(ID, "加密", "把文本编码成 base64", SubModeEnc, 1.0),
-			providers.MatchSubquery(ID, "解密", "把 base64 解码成文本", SubModeDec, 0.9),
+			providers.MatchSubquery(ID, i18n.L("加密", "Encode"), i18n.L("把文本编码成 base64", "Encode text as Base64"), SubModeEnc, 1.0),
+			providers.MatchSubquery(ID, i18n.L("解密", "Decode"), i18n.L("把 base64 解码成文本", "Decode Base64 into text"), SubModeDec, 0.9),
 		}
 	}
 	return Convert(ctx.SubMode, ctx.Query)
@@ -84,10 +89,11 @@ func Convert(mode, query string) []providers.Match {
 			return nil // 用法已挪进占位符；空输入不再给提示行。
 		}
 		if text, ok := decodeToUTF8(q); ok {
-			return []providers.Match{execResult(text, fmt.Sprintf("base64 解码（%d 字节）", len(text)), 1.0)}
+			return []providers.Match{execResult(text, fmt.Sprintf(i18n.L("base64 解码（%d 字节）", "Base64 decoded (%d bytes)"), len(text)), 1.0)}
 		}
 		// 解码失败给提示而非空列表（否则「解密」却无反馈像卡住）。
-		return []providers.Match{hintRow("解码失败", "不是合法的 base64，或解出的字节不是 UTF-8 文本", 1.0)}
+		return []providers.Match{hintRow(i18n.L("解码失败", "Decode failed"),
+			i18n.L("不是合法的 base64，或解出的字节不是 UTF-8 文本", "Not valid Base64, or the result is not UTF-8 text"), 1.0)}
 	}
 
 	// 编码分支（含未知 mode 兜底）。
@@ -95,7 +101,7 @@ func Convert(mode, query string) []providers.Match {
 		return nil
 	}
 	enc := b64.StdEncoding.EncodeToString([]byte(q))
-	return []providers.Match{execResult(enc, fmt.Sprintf("base64 编码（%d 字节）", len(q)), 1.0)}
+	return []providers.Match{execResult(enc, fmt.Sprintf(i18n.L("base64 编码（%d 字节）", "Base64 encoded (%d bytes)"), len(q)), 1.0)}
 }
 
 // decodeToUTF8 解码标准 base64 并要求结果为合法 UTF-8；对照 Rust `decode(...).and_then(from_utf8)`。

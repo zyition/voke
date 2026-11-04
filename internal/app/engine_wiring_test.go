@@ -315,16 +315,21 @@ func TestBuildPrefixTableShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildPrefixTable 失败：%v", err)
 	}
-	// apps 无前缀 → BuildTable 不为它生成条目；表里有 picker(#)/base64(@b)/uuid(@u)/timestamp(@t)/random(@r)/clipboard(@c)/calculator(=) 七条，表序即优先级。
-	if len(table) != 7 ||
+	// apps 无前缀 → BuildTable 不为它生成条目；其余 11 条（picker/base64/uuid/timestamp/random/
+	// clipboard/calculator/awake/windows/terminal/workspaces）都带前缀，表序即优先级。
+	if len(table) != 11 ||
 		table[0] != (engine.PrefixEntry{Prefix: "#", PluginID: engine.PickerPluginID, Activation: engine.Direct}) ||
 		table[1] != (engine.PrefixEntry{Prefix: "@b", PluginID: "base64", Activation: engine.Indirect}) ||
 		table[2] != (engine.PrefixEntry{Prefix: "@u", PluginID: "uuid", Activation: engine.Indirect}) ||
 		table[3] != (engine.PrefixEntry{Prefix: "@t", PluginID: "timestamp", Activation: engine.Indirect}) ||
 		table[4] != (engine.PrefixEntry{Prefix: "@r", PluginID: "random", Activation: engine.Indirect}) ||
-		table[5] != (engine.PrefixEntry{Prefix: "@c", PluginID: "clipboard", Activation: engine.Indirect}) ||
-		table[6] != (engine.PrefixEntry{Prefix: "=", PluginID: "calculator", Activation: engine.Direct}) {
-		t.Errorf("前缀表 = %+v，想要七条 [{# __picker Direct}, {@b base64 Indirect}, {@u uuid Indirect}, {@t timestamp Indirect}, {@r random Indirect}, {@c clipboard Indirect}, {= calculator Direct}]", table)
+		table[5] != (engine.PrefixEntry{Prefix: "@c", PluginID: "clipboard", Activation: engine.Direct}) ||
+		table[6] != (engine.PrefixEntry{Prefix: "=", PluginID: "calculator", Activation: engine.Direct}) ||
+		table[7] != (engine.PrefixEntry{Prefix: "@a", PluginID: "awake", Activation: engine.Direct}) ||
+		table[8] != (engine.PrefixEntry{Prefix: "<", PluginID: "windows", Activation: engine.Direct}) ||
+		table[9] != (engine.PrefixEntry{Prefix: "_", PluginID: "terminal", Activation: engine.Direct}) ||
+		table[10] != (engine.PrefixEntry{Prefix: "{", PluginID: "workspaces", Activation: engine.Direct}) {
+		t.Errorf("前缀表 = %+v，想要十一条 [{# __picker Direct}, {@b base64 Indirect}, {@u uuid Indirect}, {@t timestamp Indirect}, {@r random Indirect}, {@c clipboard Direct}, {= calculator Direct}, {@a awake Direct}, {< windows Direct}, {_ terminal Direct}, {{ workspaces Direct}]", table)
 	}
 	if got := strings.Join(cfg.IDs(), ","); got != "apps,__picker,base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces" {
 		t.Errorf("注册 id 序列（注册顺序）= %q，想要 \"apps,__picker,base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces\"", got)
@@ -689,12 +694,14 @@ func TestEscChainFromSubModeWithFakePlugin(t *testing.T) {
 	}
 
 	// 回退单一由「空 + Backspace」按键驱动：删空停在子模式，再空 Backspace 才退插件第一级。
-	// terminal 未注册 → 不在前缀表 → 令牌恒空串。完整多级链由 engine 包钉死。
+	// terminal 未注册实现 → 但 Descriptor 仍在前缀表里（默认 "_"），令牌照常显示。
 	typeInto(st, "") // 删空 aB9：停在 SubMode(terminal/enc) 空查询
 	wantState(t, st, "删空停在子模式", engine.SubMode, "terminal", "", "")
 	st.onEmptyBackspace() // 空 + Backspace：SubMode → Plugin(terminal)
 	wantState(t, st, "空退 Plugin(terminal)", engine.Plugin, "terminal", "", "")
-	wantNoToken(t, st, "空退（terminal 不在前缀表 → 令牌空串）")
+	if got := prefixFor(st.engineState, st.table); got != "_" {
+		t.Errorf("空退（terminal 默认前缀 _）令牌 = %q，想要 \"_\"", got)
+	}
 }
 
 // TestBase64EndToEndCompute 端到端跑通 provider 接线（compute 层，不碰剪贴板/Window）：

@@ -93,7 +93,7 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 
   ——`internal/platform/singleinstance.go`、`internal/app/main.go`。
 - 热键：mygo `GlobalShortcut` 主线程直接回调，改键「撤旧→注新→失败回滚」——
   `internal/platform/hotkey.go`、`internal/app/settings.go`。
-- 插件全局快捷键：无默认值，用户逐插件录制；只注册已启用插件，停用即注销。录制时
+- 插件全局快捷键：剪贴板默认 ``Alt+` ``，其余无默认值、用户逐插件录制；只注册已启用插件，停用即注销。录制时
   主热键与所有插件热键统一挂起（否则旧组合被系统先吃掉），结束后重建。插件热键是
   “直达/切换”而非显隐 toggle（隐藏仍归主热键 / Esc），同时是“立即执行”：每次全新
   进入插件，不读取也不覆盖主会话快照；主热键 / 托盘双击 / 二次启动才恢复主会话
@@ -130,8 +130,12 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 
   托盘 / 后台应用也会退出）；自身 / 核心系统进程在 `platform/endtask.go` 拒绝。
   结束的是窗口所属进程，子进程不递归。实现见 `providers/windows`、
   `platform/window_windows.go`、`app/closewindow.go`、`app/endtask.go`。
+- 界面语言：`internal/i18n` 提供 `L(中文, English)` 与进程级语言切换；配置顶层
+  `language = "system" | "zh" | "en"`（默认 system，Windows 取系统 UI 语言）。
+  用户可见文案必须走 i18n，日志保持中文。设置页左侧导航用 mygo `Sidebar`。
 - 前缀冲突（C2）：触发串（Direct=前缀，Indirect=前缀+空格）双向互为前缀即冲突；
-  默认二级前缀 `@b/@u/@t/@r`，`#` 归 picker。旧配置加载时只丢弃冲突项的 Prefix
+  默认前缀 `#`（picker）、`@a/@b/@c/@t/@r/@u`、`=`、`<`、`_`、`{`，其中
+  `@b/@t/@r/@u` 为 Indirect。旧配置加载时只丢弃冲突项的 Prefix
   覆盖，设置页保存前同一套校验——`internal/logic/config/prefix.go`、
   `internal/app/providers.go`、`internal/app/settings.go`。
 

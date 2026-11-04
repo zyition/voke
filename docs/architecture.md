@@ -54,7 +54,8 @@ main.go
   - **Indirect**：输入原文 == 前缀 + 一个空格。
 - 输入只在 Global 态判前缀；已进入插件/子模式后，文字只作为该层查询词。
 - `#` 是「插件列表」入口（picker，Direct）。
-- 默认二级前缀：`@b` / `@u` / `@t` / `@r`（全部 Indirect）；calculator 是 `=`（Direct）。
+- 默认前缀：picker `#`；二级 `@a` / `@b` / `@c` / `@t` / `@r` / `@u`；`=` / `<` / `_` / `{`
+  为 Direct。其中 `@b` / `@u` / `@t` / `@r` 是 Indirect（需前缀 + 空格），其余为 Direct。
 
 **冲突判定（C2）**：把每条前缀展开成触发串（Direct = 前缀本身，Indirect = 前缀 + 空格），
 任意两条触发串双向互为前缀（含相等）即拒绝。原因：逐键扫描下短触发串会先命中并吞掉后续
@@ -92,16 +93,16 @@ type Provider interface {
 | id | 触发 | 说明 |
 |---|---|---|
 | `apps` | 无前缀（全局） | 开始菜单 Applications 文件夹（含桌面程序快捷方式与 packaged 应用） |
-| `windows` | 无前缀（全局） | 枚举并激活已打开窗口；行内「关闭窗口」发 WM_CLOSE、「结束任务」直接 TerminateProcess |
-| `awake` | 无前缀（全局） | 保持唤醒 / 取消，支持连屏幕 |
-| `terminal` | 无前缀（全局） | Windows Terminal profile；行内「以管理员身份打开」走 runas |
-| `workspaces` | 无前缀（全局） | Zed / VS Code 最近工作区 |
-| `calculator` | `=`（Direct） | 算术表达式 |
+| `windows` | `<`（Direct，同时全局） | 枚举并激活已打开窗口；行内「关闭窗口」发 WM_CLOSE、「结束任务」直接 TerminateProcess |
+| `calculator` | `=`（Direct，同时全局） | 算术表达式 |
+| `awake` | `@a`（Direct） | 保持唤醒 / 取消，支持连屏幕 |
+| `terminal` | `_`（Direct） | Windows Terminal profile；行内「以管理员身份打开」走 runas |
+| `workspaces` | `{`（Direct） | Zed / VS Code 最近工作区 |
 | `base64` | `@b `（Indirect） | 编码 / 解码 |
 | `uuid` | `@u `（Indirect） | UUID v4 |
 | `timestamp` | `@t `（Indirect） | 时间戳 ⇄ 可读时间 |
 | `random` | `@r `（Indirect） | 随机整数 / 字符串 |
-| `clipboard` | `@c `（Indirect） | 剪贴板历史：文本 / HTML / RTF / 图片；Enter 粘贴、Ctrl+Enter 纯文本、Ctrl+Shift+T 置顶、Ctrl+Delete 删除 |
+| `clipboard` | `@c`（Direct，默认快捷键 ``Alt+` ``） | 剪贴板历史：文本 / HTML / RTF / 图片；Enter 粘贴、Ctrl+Enter 纯文本、Ctrl+Shift+T 置顶、Ctrl+Delete 删除 |
 
 Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可编辑**。
 
@@ -123,10 +124,12 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
 ## 5. 配置
 
 - 路径：`%APPDATA%\voke\config.toml`（与旧 Rust 版同格式，可互相读取）。
-- 顶层：`hotkey` / `autostart` / `theme` / `[clipboard] max_entries`（默认 100，范围 1–1000）。
+- 顶层：`hotkey` / `autostart` / `theme` / `language` / `[clipboard] max_entries`
+  （默认 100，范围 1–1000）。`language` 取 `system`（默认）/ `zh` / `en`。
 - 插件节：`[providers.<id>]`，字段 `enabled` / `is_global` / `weight` / `prefix` /
-  `activation` / `count` / `hotkey`；未写字段回落 Descriptor 默认。`hotkey` 是例外：
-  刻意没有默认值，未写 = 不绑定，由用户手动录制。
+  `activation` / `count` / `hotkey`；未写字段回落 Descriptor 默认。`hotkey` 未写时
+  回落 `Descriptor.DefaultHotkey`（目前只有剪贴板有默认值 ``Alt+` ``，其余为空 = 不绑定）。
+  设置页把有默认值的插件「清除」时会显式写空串，避免重新回落到默认值。
 - 归一（`internal/logic/config`）：C1 未知 id、C2 触发串冲突、C3 前缀不含空白、
   C4 字母/数字保留键、C5 weight、C6 count、C7 activation、C8 插件热键需可解析且
   至少一个修饰键；错误落日志并降级，不静默。
@@ -134,6 +137,10 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
 - 设置页修改即时落盘并热重载；前缀非法时不写盘、就地显示错误。
 - 错误路径与旧实现对齐：自启注册失败则配置与界面回弹；热键注册失败撤新注旧；
   配置写失败不重载（内存态保持上一次有效值）。
+- 国际化：界面文案集中在 `internal/i18n`（`L(中文, English)` 成对书写，原子切换当前语言）；
+  `%APPDATA%\voke\config.toml` 的 `language` 为 `system` 时由
+  `platform.SystemLanguage()` 读取 Windows 界面语言。切换语言会重跑一次配置装配，
+  让 Descriptor 里的插件名 / 描述与新语言一致。
 
 ## 6. 平台层（`internal/platform`）
 

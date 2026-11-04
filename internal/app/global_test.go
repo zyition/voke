@@ -26,18 +26,19 @@ func TestFoldAppMatch(t *testing.T) {
 	}
 }
 
-// TestCollectGlobalBatches：apps 批在最前；其后只 enabled&&is_global 且在 pluginReg 的插件——
-// base64（is_global 假）不进、picker（不在 reg）不进；Linux 下 windows/terminal/workspaces
-// 空结果被跳，awake（空查询出两方向）成组。
+// TestCollectGlobalBatches：apps 批在最前；其后只 enabled&&is_global 且在 pluginReg 的插件。
+// 当前默认全局插件是 calculator（前缀 "=" 但 is_global=true）与 windows（Linux 空数据源）。
+// base64（is_global 假）不进、picker（不在 reg）不进；awake/terminal/workspaces 已退出全局，
+// 不再出现在裸查询批次里。
 func TestCollectGlobalBatches(t *testing.T) {
 	st := newGlobalState(t)
 	apps := []providers.Match{
 		foldAppMatch(appsmodel.AppEntry{Name: "Chrome", Path: "p1"}),
 		foldAppMatch(appsmodel.AppEntry{Name: "Edge", Path: "p2"}),
 	}
-	batches := st.collectGlobalBatches(apps, providers.QueryCtx{Raw: "", Query: ""})
+	batches := st.collectGlobalBatches(apps, providers.QueryCtx{Raw: "1+1", Query: "1+1"})
 	if len(batches) < 2 {
-		t.Fatalf("至少 apps + awake 两批，实得 %d：%+v", len(batches), batchIDs(batches))
+		t.Fatalf("至少 apps + calculator 两批，实得 %d：%+v", len(batches), batchIDs(batches))
 	}
 	if batches[0].ProviderID != "apps" || len(batches[0].Matches) != 2 {
 		t.Errorf("首批应是 apps（2 条）：%+v", batches[0])
@@ -46,8 +47,11 @@ func TestCollectGlobalBatches(t *testing.T) {
 	if containsID(ids, "base64") || containsID(ids, "picker") {
 		t.Errorf("base64/picker 不该进全局批次：%v", ids)
 	}
-	if !containsID(ids, "awake") {
-		t.Errorf("awake（is_global、空查询出方向）应在批次里：%v", ids)
+	if !containsID(ids, "calculator") {
+		t.Errorf("calculator（is_global、1+1 有结果）应在批次里：%v", ids)
+	}
+	if containsID(ids, "awake") || containsID(ids, "terminal") || containsID(ids, "workspaces") {
+		t.Errorf("awake/terminal/workspaces 已退出全局，不该进批次：%v", ids)
 	}
 }
 
@@ -58,9 +62,9 @@ func TestGlobalAggregateGrouping(t *testing.T) {
 		foldAppMatch(appsmodel.AppEntry{Name: "Chrome", Path: "p1"}),
 		foldAppMatch(appsmodel.AppEntry{Name: "Edge", Path: "p2"}),
 	}
-	agg := st.globalAggregate(apps, providers.QueryCtx{})
+	agg := st.globalAggregate(apps, providers.QueryCtx{Raw: "1+1", Query: "1+1"})
 	if len(agg.Groups) < 2 {
-		t.Fatalf("至少 apps + awake 两组：%v", groupIDs(agg.Groups))
+		t.Fatalf("至少 apps + calculator 两组：%v", groupIDs(agg.Groups))
 	}
 	if agg.Groups[0].ProviderID != "apps" || len(agg.Groups[0].Matches) != 2 {
 		t.Errorf("首组应 apps（2 条）：%+v", agg.Groups[0])
@@ -73,7 +77,7 @@ func TestBuildGlobalRows(t *testing.T) {
 	st := newGlobalState(t)
 	appsEntries := []appsmodel.AppEntry{{Name: "Chrome", Path: "p1"}, {Name: "Edge", Path: "p2"}}
 	appsMatches := []providers.Match{foldAppMatch(appsEntries[0]), foldAppMatch(appsEntries[1])}
-	agg := st.globalAggregate(appsMatches, providers.QueryCtx{})
+	agg := st.globalAggregate(appsMatches, providers.QueryCtx{Raw: "1+1", Query: "1+1"})
 
 	rows, provRows := buildGlobalRows(appsEntries, agg)
 	if len(rows) < 3 {
@@ -86,7 +90,7 @@ func TestBuildGlobalRows(t *testing.T) {
 	if !rows[1].apps || rows[1].appIdx != 1 || rows[1].newGroup {
 		t.Errorf("行1 应 apps/1/非组首：%+v", rows[1])
 	}
-	// 首个 provider 行：非 apps、组首、provIdx 0，对应 awake 组首条。
+	// 首个 provider 行：非 apps、组首、provIdx 0，对应 calculator 组首条。
 	first := rows[2]
 	if first.apps || !first.newGroup || first.provIdx != 0 || first.groupID == "apps" {
 		t.Errorf("行2 应是首个 provider 行（非 apps、newGroup、provIdx0）：%+v", first)

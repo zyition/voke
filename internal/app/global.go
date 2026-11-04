@@ -14,6 +14,7 @@
 package app
 
 import (
+	"voke/internal/i18n"
 	"voke/internal/logic/appsmodel"
 	"voke/internal/logic/engine"
 	"voke/internal/providers"
@@ -144,7 +145,7 @@ func (st *appState) providerName(id string) string {
 		return pc.Name
 	}
 	if id == appsProviderID {
-		return "应用"
+		return i18n.L("应用", "Apps")
 	}
 	return id
 }

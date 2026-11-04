@@ -8,7 +8,7 @@
 //   - 插件热键是“立即执行”：每次都从干净的插件第一级进入，不读取也不覆盖主会话
 //     快照（方案 C，见 session.go）。
 //
-// 配置来自 ProviderConfig.Hotkey；没有默认值，未启用插件不注册。注册 / 注销都
+// 配置来自 ProviderConfig.Hotkey（用户覆盖或 Descriptor 默认值）；未启用插件不注册。注册 / 注销都
 // 只在主线程（见 platform/hotkey.go 的线程约束）。
 package app
 
@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log"
 
+	"voke/internal/i18n"
 	"voke/internal/logic/config"
 	"voke/internal/logic/engine"
 	"voke/internal/platform"
@@ -33,12 +34,12 @@ func desiredPluginHotkeys(cfg config.Configs) (map[string]string, map[string]str
 			continue
 		}
 		if p.ID == engine.PickerPluginID {
-			errs[p.ID] = "该插件不支持全局快捷键"
+			errs[p.ID] = i18n.L("该插件不支持全局快捷键", "This plugin does not support a global shortcut")
 			continue
 		}
 		key := config.CanonicalHotkey(p.Hotkey)
 		if owner, ok := owners[key]; ok {
-			errs[p.ID] = fmt.Sprintf("快捷键 %s 与插件「%s」重复，未注册", p.Hotkey, owner)
+			errs[p.ID] = fmt.Sprintf(i18n.L("快捷键 %s 与插件「%s」重复，未注册", "Shortcut %s duplicates plugin “%s”; not registered"), p.Hotkey, owner)
 			continue
 		}
 		owners[key] = p.Name
@@ -61,7 +62,7 @@ func (st *appState) syncPluginHotkeys() {
 			if config.CanonicalHotkey(acc) != mainKey {
 				continue
 			}
-			errs[id] = fmt.Sprintf("快捷键 %s 已被显示/隐藏热键占用，未注册", acc)
+			errs[id] = fmt.Sprintf(i18n.L("快捷键 %s 已被显示/隐藏热键占用，未注册", "Shortcut %s is already used by the show/hide hotkey; not registered"), acc)
 			delete(desired, id)
 		}
 	}
@@ -90,7 +91,7 @@ func (st *appState) syncPluginHotkeys() {
 		}
 		id := p.ID
 		if err := platform.RegisterHotkey(want, func() { st.onPluginHotkey(id) }); err != nil {
-			errs[id] = fmt.Sprintf("快捷键 %s 注册失败：%v", want, err)
+			errs[id] = fmt.Sprintf(i18n.L("快捷键 %s 注册失败：%v", "Failed to register shortcut %s: %v"), want, err)
 			continue
 		}
 		st.pluginHotkeys[id] = want

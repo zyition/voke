@@ -35,6 +35,29 @@ func TestNormalizePluginHotkeyDefaultsEmpty(t *testing.T) {
 	}
 }
 
+// TestNormalizePluginHotkeyDescriptorDefault：Descriptor 可以声明默认热键（剪贴板 Alt+`），
+// 用户没写时生效；用户显式写空串则覆盖为「不绑定」。
+func TestNormalizePluginHotkeyDescriptorDefault(t *testing.T) {
+	ds := hotkeyTestDescriptors()
+	ds[0].DefaultHotkey = "Alt+`"
+	cfg, err := Normalize(ds, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Providers[0].Hotkey != "Alt+`" {
+		t.Errorf("应使用 Descriptor 默认热键，实得 %q", cfg.Providers[0].Hotkey)
+	}
+
+	empty := ""
+	cfg, err = Normalize(ds, []UserOverride{{ID: "clipboard", Hotkey: &empty}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Providers[0].Hotkey != "" {
+		t.Errorf("显式空串应清除默认热键，实得 %q", cfg.Providers[0].Hotkey)
+	}
+}
+
 // C8：裸主键 / 不可解析 / 只有修饰键都置空并给出警告，不让全局热键劫持正常输入。
 func TestNormalizePluginHotkeyInvalidCleared(t *testing.T) {
 	for _, raw := range []string{"a", "Alt+", "Alt+Control", "   "} {

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"voke/internal/i18n"
 	"voke/internal/providers"
 )
 
@@ -51,22 +52,22 @@ func (s Status) remainingSecs(now int64) *int64 {
 func (s Status) remainingLabel(now int64) string {
 	secs := s.remainingSecs(now)
 	if secs == nil {
-		return "永久"
+		return i18n.L("永久", "Forever")
 	}
 	v := *secs
 	switch {
 	case v <= 0:
-		return "即将结束"
+		return i18n.L("即将结束", "Ending")
 	case v < 60:
-		return fmt.Sprintf("还剩 %d 秒", v)
+		return fmt.Sprintf(i18n.L("还剩 %d 秒", "%ds left"), v)
 	case v < 3600:
-		return fmt.Sprintf("还剩 %d 分钟", v/60)
+		return fmt.Sprintf(i18n.L("还剩 %d 分钟", "%d min left"), v/60)
 	default:
 		h, m := v/3600, (v%3600)/60
 		if m == 0 {
-			return fmt.Sprintf("还剩 %d 小时", h)
+			return fmt.Sprintf(i18n.L("还剩 %d 小时", "%dh left"), h)
 		}
-		return fmt.Sprintf("还剩 %d 小时 %d 分钟", h, m)
+		return fmt.Sprintf(i18n.L("还剩 %d 小时 %d 分钟", "%dh %dm left"), h, m)
 	}
 }
 
@@ -93,18 +94,22 @@ func NewWithSource(fetch Fetcher, clock func() int64) *Provider {
 	return &Provider{
 		config: providers.ProviderConfig{
 			Enabled: true,
-			// §3 配置示例：直接输入 awake 即命中，无需前缀。
-			IsGlobal: true, Weight: 1.0, Prefix: "", Activation: "Direct", Count: 5,
+			// 默认 `@a` 直接进入；用户配置可覆盖。
+			IsGlobal: false, Weight: 1.0, Prefix: "@a", Activation: "Direct", Count: 5,
 		},
 		fetch: fetch,
 		now:   clock,
 	}
 }
 
-func (p *Provider) ID() string                           { return ID }
-func (p *Provider) Name() string                         { return "保持唤醒" }
-func (p *Provider) Aliases() []string                    { return []string{"awake", "a"} }
-func (p *Provider) Description() string                  { return "阻止系统休眠（可选连屏幕一起）" }
+func (p *Provider) ID() string { return ID }
+func (p *Provider) Name() string {
+	return i18n.L("保持唤醒", "Keep Awake")
+}
+func (p *Provider) Aliases() []string { return []string{"awake", "a"} }
+func (p *Provider) Description() string {
+	return i18n.L("阻止系统休眠（可选连屏幕一起）", "Prevent system sleep (optionally keep the screen on)")
+}
 func (p *Provider) Config() providers.ProviderConfig     { return p.config }
 func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 
@@ -112,11 +117,12 @@ func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 func (p *Provider) Placeholder(subMode string) string {
 	switch subMode {
 	case subModeSystem:
-		return "输入分钟数（1–1440），或选上方档位"
+		return i18n.L("输入分钟数（1–1440），或选上方档位", "Enter minutes (1–1440) or pick a preset above")
 	case subModeScreen:
-		return "输入分钟数（1–1440），或选上方档位（连屏幕一起保持）"
+		return i18n.L("输入分钟数（1–1440），或选上方档位（连屏幕一起保持）",
+			"Enter minutes (1–1440) or pick a preset above (keeps the screen on)")
 	default:
-		return "选择亮屏方式，或输入分钟数快捷设置"
+		return i18n.L("选择亮屏方式，或输入分钟数快捷设置", "Choose whether to keep the screen on, or enter minutes")
 	}
 }
 
@@ -140,11 +146,11 @@ func (p *Provider) Query(ctx providers.QueryCtx) []providers.Match {
 func (p *Provider) optionMatch(minutes *int, keepScreen bool, score float64, note string) providers.Match {
 	var label string
 	if minutes == nil {
-		label = "永久"
+		label = i18n.L("永久", "Forever")
 	} else if m := *minutes; m%60 == 0 && m >= 60 {
-		label = fmt.Sprintf("%d 小时", m/60)
+		label = fmt.Sprintf(i18n.L("%d 小时", "%d h"), m/60)
 	} else {
-		label = fmt.Sprintf("%d 分钟", *minutes)
+		label = fmt.Sprintf(i18n.L("%d 分钟", "%d min"), *minutes)
 	}
 	scope := scopeLabel(keepScreen)
 	subtitle := scope
@@ -161,13 +167,13 @@ func (p *Provider) queryLevel1(status *Status, now int64, query string) []provid
 
 	var activeScreen *bool
 	if status != nil {
-		scope := "屏幕关闭"
+		scope := i18n.L("屏幕关闭", "Screen may sleep")
 		if status.KeepScreen {
-			scope = "屏幕打开"
+			scope = i18n.L("屏幕打开", "Screen stays on")
 		}
 		out = append(out, providers.MatchExecute(ID,
-			fmt.Sprintf("保持唤醒中 · %s（%s）", scope, status.remainingLabel(now)),
-			"选中取消，恢复正常休眠",
+			fmt.Sprintf(i18n.L("保持唤醒中 · %s（%s）", "Keeping awake · %s (%s)"), scope, status.remainingLabel(now)),
+			i18n.L("选中取消，恢复正常休眠", "Select to cancel and restore normal sleep"),
 			providers.Action{Kind: providers.ActionCancelAwake}, 1.0))
 		s := status.KeepScreen
 		activeScreen = &s
@@ -179,29 +185,34 @@ func (p *Provider) queryLevel1(status *Status, now int64, query string) []provid
 
 	if minutes, err := strconv.Atoi(query); err == nil {
 		if minutes >= 1 && minutes <= maxCustomMinutes {
-			return []providers.Match{p.optionMatch(&minutes, false, 1.0, "连屏幕请进入「连屏幕一起保持」")}
+			return []providers.Match{p.optionMatch(&minutes, false, 1.0,
+				i18n.L("连屏幕请进入「连屏幕一起保持」", "To keep the screen on, choose “Keep screen on”"))}
 		}
-		return []providers.Match{hintRow("时长超出范围", fmt.Sprintf("请输入 1–%d 分钟", maxCustomMinutes), 1.0)}
+		return []providers.Match{hintRow(i18n.L("时长超出范围", "Duration out of range"),
+			fmt.Sprintf(i18n.L("请输入 1–%d 分钟", "Enter 1–%d minutes"), maxCustomMinutes), 1.0)}
 	}
 
 	// 非数字：导航留在上方 + 错误提示。
 	out = p.pushDirections(out, activeScreen)
-	return append(out, hintRow("无效输入", "输入分钟数（1–1440），或选择上方选项", 0.0))
+	return append(out, hintRow(i18n.L("无效输入", "Invalid input"),
+		i18n.L("输入分钟数（1–1440），或选择上方选项", "Enter minutes (1–1440) or choose an option above"), 0.0))
 }
 
 // pushDirections 追加两个进入二级的方向（EnterSubquery）；当前生效的方向带「当前」。
 func (p *Provider) pushDirections(out []providers.Match, activeScreen *bool) []providers.Match {
 	mark := func(title string, isCurrent bool) string {
 		if isCurrent {
-			return title + "（当前）"
+			return title + i18n.L("（当前）", " (current)")
 		}
 		return title
 	}
 	sysCurrent := activeScreen != nil && !*activeScreen
 	scrCurrent := activeScreen != nil && *activeScreen
 	out = append(out,
-		providers.MatchSubquery(ID, mark("仅系统唤醒", sysCurrent), "进入后选时长档位（30 分钟 ~ 永久）", subModeSystem, 0.9),
-		providers.MatchSubquery(ID, mark("连屏幕一起保持", scrCurrent), "进入后选时长档位，连屏幕一起保持", subModeScreen, 0.8),
+		providers.MatchSubquery(ID, mark(i18n.L("仅系统唤醒", "System only"), sysCurrent),
+			i18n.L("进入后选时长档位（30 分钟 ~ 永久）", "Pick a duration (30 min – forever)"), subModeSystem, 0.9),
+		providers.MatchSubquery(ID, mark(i18n.L("连屏幕一起保持", "Keep screen on"), scrCurrent),
+			i18n.L("进入后选时长档位，连屏幕一起保持", "Pick a duration and keep the screen on"), subModeScreen, 0.8),
 	)
 	return out
 }
@@ -223,17 +234,19 @@ func (p *Provider) queryLevel2(query, subMode string) []providers.Match {
 		if minutes >= 1 && minutes <= maxCustomMinutes {
 			return []providers.Match{p.optionMatch(&minutes, keepScreen, 1.0, "")}
 		}
-		return []providers.Match{hintRow("时长超出范围", fmt.Sprintf("请输入 1–%d 分钟", maxCustomMinutes), 1.0)}
+		return []providers.Match{hintRow(i18n.L("时长超出范围", "Duration out of range"),
+			fmt.Sprintf(i18n.L("请输入 1–%d 分钟", "Enter 1–%d minutes"), maxCustomMinutes), 1.0)}
 	}
-	return []providers.Match{hintRow("无效输入", "仅支持分钟数（1–1440）", 0.0)}
+	return []providers.Match{hintRow(i18n.L("无效输入", "Invalid input"),
+		i18n.L("仅支持分钟数（1–1440）", "Only minutes (1–1440) are supported"), 0.0)}
 }
 
 // scopeLabel 保持范围的副标题文案（方案 A：动词短语「保持系统唤醒」）。
 func scopeLabel(keepScreen bool) string {
 	if keepScreen {
-		return "保持系统唤醒 + 屏幕"
+		return i18n.L("保持系统唤醒 + 屏幕", "Keep system and screen awake")
 	}
-	return "保持系统唤醒"
+	return i18n.L("保持系统唤醒", "Keep system awake")
 }
 
 // MenuLabel 托盘「保持唤醒」状态条目的文案（1:1 对照 voke-sys/src/awake.rs 的
@@ -245,13 +258,13 @@ func scopeLabel(keepScreen bool) string {
 // 「屏幕打开 / 屏幕关闭」是**结果描述**（屏幕会不会被保持），与插件一级那条状态展示行同口径。
 func MenuLabel(status *Status, now int64) string {
 	if status == nil {
-		return "保持唤醒：未激活"
+		return i18n.L("保持唤醒：未激活", "Keep Awake: off")
 	}
-	scope := "屏幕关闭"
+	scope := i18n.L("屏幕关闭", "Screen may sleep")
 	if status.KeepScreen {
-		scope = "屏幕打开"
+		scope = i18n.L("屏幕打开", "Screen stays on")
 	}
-	return fmt.Sprintf("保持唤醒：%s · %s", status.remainingLabel(now), scope)
+	return fmt.Sprintf(i18n.L("保持唤醒：%s · %s", "Keep Awake: %s · %s"), status.remainingLabel(now), scope)
 }
 
 func hintRow(title, subtitle string, score float64) providers.Match {

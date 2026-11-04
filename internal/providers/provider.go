@@ -118,7 +118,7 @@ const (
 type RowAction struct {
 	// ID 是稳定标识（同时作为默认图标键）：paste / paste-plain / pin / unpin / delete。
 	ID string
-	// Label 是 tooltip 里的中文动作名。
+	// Label 是 tooltip 里的动作名（随界面语言变化）。
 	Label string
 	// Shortcut 是展示用快捷键串（实际按键由 app 层消费）。
 	Shortcut string

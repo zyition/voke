@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"voke/internal/i18n"
 	"voke/internal/match"
 	"voke/internal/providers"
 )
@@ -79,7 +80,7 @@ func sshLoc(user, host string, port *int64) Location {
 func (l Location) label() string {
 	switch l.Kind {
 	case "local":
-		return "本地"
+		return i18n.L("本地", "Local")
 	case "wsl":
 		if l.Distro != "" {
 			return "WSL " + l.Distro
@@ -96,14 +97,14 @@ func (l Location) label() string {
 		return "SSH " + base
 	case "container":
 		if l.ID != "" {
-			return "容器 " + l.ID
+			return i18n.L("容器 ", "Container ") + l.ID
 		}
-		return "容器"
+		return i18n.L("容器", "Container")
 	default:
 		if l.HasLabel {
-			return "其它 " + l.Label
+			return i18n.L("其它 ", "Other ") + l.Label
 		}
-		return "其它 " + l.RawKind
+		return i18n.L("其它 ", "Other ") + l.RawKind
 	}
 }
 
@@ -723,8 +724,8 @@ func WithTTL(fetch Fetcher, zed, code *EditorCommand, ttl time.Duration) *Provid
 	}
 	return &Provider{
 		config: providers.ProviderConfig{
-			Enabled: true, IsGlobal: true, Weight: 1.0,
-			Prefix: "", Activation: "Direct", Count: 5,
+			Enabled: true, IsGlobal: false, Weight: 1.0,
+			Prefix: "{", Activation: "Direct", Count: 5,
 		},
 		fetch: fetch, zed: zed, code: code, ttl: ttl,
 		keys: match.NewSearchKeysCache(),
@@ -734,17 +735,20 @@ func WithTTL(fetch Fetcher, zed, code *EditorCommand, ttl time.Duration) *Provid
 // NewEmpty 返回空数据源实例（非 Windows 平台 / 未读到编辑器历史占位）。
 func NewEmpty() *Provider { return WithTTL(func() []Entry { return nil }, nil, nil, defaultTTL) }
 
-func (p *Provider) ID() string        { return ID }
-func (p *Provider) Name() string      { return "工作区" }
+func (p *Provider) ID() string { return ID }
+func (p *Provider) Name() string {
+	return i18n.L("工作区", "Workspaces")
+}
 func (p *Provider) Aliases() []string { return []string{"ws", "gzq"} }
 func (p *Provider) Description() string {
-	return "Zed / VSCode 最近打开的工作区，用记录它的编辑器打开"
+	return i18n.L("Zed / VSCode 最近打开的工作区，用记录它的编辑器打开",
+		"Recent Zed / VS Code workspaces, opened with the editor that recorded them")
 }
 func (p *Provider) Config() providers.ProviderConfig     { return p.config }
 func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 
 func (p *Provider) Placeholder(string) string {
-	return "输入工作区名过滤，Enter 用对应编辑器打开"
+	return i18n.L("输入工作区名过滤，Enter 用对应编辑器打开", "Filter workspaces; Enter opens with the matching editor")
 }
 
 // entries：TTL 内用缓存，过期重读并更新缓存。

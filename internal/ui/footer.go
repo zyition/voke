@@ -12,6 +12,7 @@ import (
 
 	goui "github.com/egoist/mygo/ui"
 
+	"voke/internal/i18n"
 	"voke/internal/ui/theme"
 )
 
@@ -25,7 +26,7 @@ type FooterHint struct {
 
 // FooterHotkey 渲染底栏左侧的主热键（键帽 + 显示/隐藏说明）。
 func FooterHotkey(c *goui.Context, hotkey string) {
-	footerGroup(c, FooterHint{Keys: hotkey, Label: "显示/隐藏"})
+	footerGroup(c, FooterHint{Keys: hotkey, Label: i18n.L("显示/隐藏", "Show/Hide")})
 }
 
 // FooterHints 渲染底栏右侧的提示组；组间 1 DIP 竖线分隔。

@@ -4,27 +4,33 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"strconv"
 	"strings"
 	"unicode"
 
+	"voke/internal/i18n"
 	"voke/internal/logic/engine"
 )
+
+// sentinelError 是带中英文案的可比较哨兵错误：errors.Is 按指针身份匹配，
+// Error() 在每次调用时按当前界面语言给出文案（设置页会把错误原样展示）。
+type sentinelError struct{ zh, en string }
+
+func (e *sentinelError) Error() string { return i18n.L(e.zh, e.en) }
 
 // 校验失败的哨兵错误：接线层用 errors.Is 区分「该退出」还是「该降级」。
 var (
 	// ErrUnknownProviderID 是 C1：用户写了注册表里不存在的 provider id。
-	ErrUnknownProviderID = errors.New("未知的 provider id")
+	ErrUnknownProviderID = &sentinelError{"未知的 provider id", "Unknown provider id"}
 	// ErrPrefixConflict 是 C2：两条前缀展开后的触发串互为前缀（含完全相同），
 	// 逐键扫描时先命中的一条会遮蔽另一条。判定见 prefix.go。
-	ErrPrefixConflict = errors.New("前缀冲突")
+	ErrPrefixConflict = &sentinelError{"前缀冲突", "Prefix conflict"}
 	// ErrReservedPrefix 是 C4：前缀撞上保留键。
-	ErrReservedPrefix = errors.New("保留键冲突")
+	ErrReservedPrefix = &sentinelError{"保留键冲突", "Reserved-key conflict"}
 	// ErrDuplicateDescriptor 是注册表自身出错（同一 id 出现多次，属于装配期 bug）。
-	ErrDuplicateDescriptor = errors.New("注册表 id 重复")
+	ErrDuplicateDescriptor = &sentinelError{"注册表 id 重复", "Duplicate registry id"}
 )
 
 // 归一化的数值边界（§7.3.4 的 C5 / C6，沿用生产 config.rs:406-415 的取值）。
@@ -59,10 +65,12 @@ func Normalize(descriptors []Descriptor, overrides []UserOverride) (Configs, err
 	seen := make(map[string]bool, len(descriptors))
 	for _, d := range descriptors {
 		if d.ID == "" {
-			return Configs{}, fmt.Errorf("注册表里有插件未声明 id（Descriptor.ID 为空串）")
+			return Configs{}, fmt.Errorf("%s", i18n.L("注册表里有插件未声明 id（Descriptor.ID 为空串）",
+				"A plugin in the registry has no id (Descriptor.ID is empty)"))
 		}
 		if seen[d.ID] {
-			return Configs{}, fmt.Errorf("%w：%s（注册表 id 必须唯一）", ErrDuplicateDescriptor, d.ID)
+			return Configs{}, fmt.Errorf(i18n.L("%w：%s（注册表 id 必须唯一）", "%w: %s (registry ids must be unique)"),
+				ErrDuplicateDescriptor, d.ID)
 		}
 		seen[d.ID] = true
 		regIDs = append(regIDs, d.ID)
@@ -85,7 +93,7 @@ func Normalize(descriptors []Descriptor, overrides []UserOverride) (Configs, err
 		ovByID[ov.ID] = ov // 同 id 出现多次：后写覆盖先写（另记警告，见下）
 	}
 	if len(unknown) > 0 {
-		return Configs{}, fmt.Errorf("%w：%s（注册表里的 id：%s）",
+		return Configs{}, fmt.Errorf(i18n.L("%w：%s（注册表里的 id：%s）", "%w: %s (registry ids: %s)"),
 			ErrUnknownProviderID, joinIDs(sortedCopy(unknown)), joinIDs(regIDs))
 	}
 
@@ -142,8 +150,8 @@ func Normalize(descriptors []Descriptor, overrides []UserOverride) (Configs, err
 		}
 
 		// C8：插件快捷键必须可解析且至少带一个修饰键；否则置空 + 中文警告。
-		// 没有 Descriptor 默认值——不配置就等于不绑定。
-		p.Hotkey = strings.TrimSpace(derefString(ov.Hotkey, ""))
+		// 未配置时使用 Descriptor.DefaultHotkey（多数插件为空 = 不绑定）。
+		p.Hotkey = strings.TrimSpace(derefString(ov.Hotkey, d.DefaultHotkey))
 		if p.Hotkey != "" && !HasModifier(p.Hotkey) {
 			out.warnf("插件 %s 的 hotkey %q 无效（需可解析且至少一个修饰键），已忽略（C8）",
 				d.ID, p.Hotkey)
@@ -157,11 +165,13 @@ func Normalize(descriptors []Descriptor, overrides []UserOverride) (Configs, err
 	var reserved []string
 	for _, p := range out.Providers {
 		if why, bad := reservedViolation(p.Prefix); bad {
-			reserved = append(reserved, fmt.Sprintf("%s 的前缀 %q 是%s", p.ID, p.Prefix, why))
+			reserved = append(reserved, fmt.Sprintf(i18n.L("%s 的前缀 %q 是%s", "%s prefix %q is a %s"),
+				p.ID, p.Prefix, why))
 		}
 	}
 	if len(reserved) > 0 {
-		return Configs{}, fmt.Errorf("%w：%s（§7.3.6b：前缀按符号键分配，不占用字母与数字）",
+		return Configs{}, fmt.Errorf(i18n.L("%w：%s（§7.3.6b：前缀按符号键分配，不占用字母与数字）",
+			"%w: %s (§7.3.6b: prefixes use symbol keys, not letters or digits)"),
 			ErrReservedPrefix, strings.Join(reserved, "；"))
 	}
 
@@ -186,14 +196,16 @@ func Normalize(descriptors []Descriptor, overrides []UserOverride) (Configs, err
 				continue
 			}
 			clashes = append(clashes, fmt.Sprintf(
-				"%s（%s，%s）的前缀 %q 与 %s（%s，%s）的前缀 %q 冲突：触发串 %q 与 %q 互为前缀",
+				i18n.L("%s（%s，%s）的前缀 %q 与 %s（%s，%s）的前缀 %q 冲突：触发串 %q 与 %q 互为前缀",
+					"%s (%s, %s) prefix %q conflicts with %s (%s, %s) prefix %q: triggers %q and %q are prefixes of each other"),
 				a.id, a.name, activationChinese(a.activation), a.prefix,
 				b.id, b.name, activationChinese(b.activation), b.prefix,
 				ActivationTarget(a.prefix, a.activation), ActivationTarget(b.prefix, b.activation)))
 		}
 	}
 	if len(clashes) > 0 {
-		return Configs{}, fmt.Errorf("%w：%s（C2：各前缀展开后的触发串不能互为前缀）",
+		return Configs{}, fmt.Errorf(i18n.L("%w：%s（C2：各前缀展开后的触发串不能互为前缀）",
+			"%w: %s (C2: expanded triggers must not be prefixes of each other)"),
 			ErrPrefixConflict, strings.Join(clashes, "；"))
 	}
 
@@ -232,9 +244,9 @@ func reservedViolation(prefix string) (string, bool) {
 	first := []rune(prefix)[0]
 	switch {
 	case unicode.IsLetter(first):
-		return "字母键", true
+		return i18n.L("字母键", "letter key"), true
 	case first >= '0' && first <= '9':
-		return "数字键", true
+		return i18n.L("数字键", "digit key"), true
 	default:
 		return "", false
 	}

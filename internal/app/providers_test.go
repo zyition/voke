@@ -132,37 +132,37 @@ func TestBuildPrefixTableHappyPath(t *testing.T) {
 			ID: "clipboard", Name: "剪贴板", Description: "剪贴板历史（文本 / 富文本 / 图片）",
 			Aliases: []string{"clip", "nbt", "jqb"},
 			Enabled: true, IsGlobal: false,
-			Prefix: "@c", Activation: engine.Indirect, Weight: 1.0, Count: 5,
+			Prefix: "@c", Activation: engine.Direct, Weight: 1.0, Count: 5, Hotkey: "Alt+`",
 		},
 		{
 			ID: "calculator", Name: "计算器", Description: "算术表达式求值，如 1+1",
 			Aliases: []string{"calc", "jsq", "c"},
-			Enabled: true, IsGlobal: false,
+			Enabled: true, IsGlobal: true,
 			Prefix: "=", Activation: engine.Direct, Weight: 1.0, Count: 5,
 		},
 		{
 			ID: "awake", Name: "保持唤醒", Description: "阻止系统休眠（可选连屏幕一起）",
 			Aliases: []string{"awake", "a"},
-			Enabled: true, IsGlobal: true,
-			Prefix: "", Activation: engine.Direct, Weight: 1.0, Count: 5,
+			Enabled: true, IsGlobal: false,
+			Prefix: "@a", Activation: engine.Direct, Weight: 1.0, Count: 5,
 		},
 		{
 			ID: "windows", Name: "窗口", Description: "切换到已打开的窗口",
 			Aliases: []string{"win", "ck"},
 			Enabled: true, IsGlobal: true,
-			Prefix: "", Activation: engine.Direct, Weight: 1.0, Count: 5,
+			Prefix: "<", Activation: engine.Direct, Weight: 1.0, Count: 5,
 		},
 		{
 			ID: "terminal", Name: "终端配置", Description: "用 Windows Terminal 打开某个配置（profile）",
 			Aliases: []string{"wt", "terminal"},
-			Enabled: true, IsGlobal: true,
-			Prefix: "", Activation: engine.Direct, Weight: 1.0, Count: 5,
+			Enabled: true, IsGlobal: false,
+			Prefix: "_", Activation: engine.Direct, Weight: 1.0, Count: 5,
 		},
 		{
 			ID: "workspaces", Name: "工作区", Description: "Zed / VSCode 最近打开的工作区，用记录它的编辑器打开",
 			Aliases: []string{"ws", "gzq"},
-			Enabled: true, IsGlobal: true,
-			Prefix: "", Activation: engine.Direct, Weight: 1.0, Count: 5,
+			Enabled: true, IsGlobal: false,
+			Prefix: "{", Activation: engine.Direct, Weight: 1.0, Count: 5,
 		},
 	}
 	if len(cfg.Providers) != len(wantProviders) {
@@ -207,14 +207,18 @@ func TestBuildPrefixTableHappyPath(t *testing.T) {
 		{Prefix: "@u", PluginID: "uuid", Activation: engine.Indirect},
 		{Prefix: "@t", PluginID: "timestamp", Activation: engine.Indirect},
 		{Prefix: "@r", PluginID: "random", Activation: engine.Indirect},
-		{Prefix: "@c", PluginID: "clipboard", Activation: engine.Indirect},
+		{Prefix: "@c", PluginID: "clipboard", Activation: engine.Direct},
 		{Prefix: "=", PluginID: "calculator", Activation: engine.Direct},
+		{Prefix: "@a", PluginID: "awake", Activation: engine.Direct},
+		{Prefix: "<", PluginID: "windows", Activation: engine.Direct},
+		{Prefix: "_", PluginID: "terminal", Activation: engine.Direct},
+		{Prefix: "{", PluginID: "workspaces", Activation: engine.Direct},
 	}
 	if !reflect.DeepEqual(table, wantTable) {
 		t.Errorf("engine.Table 全量内容不一致\n得到：%+v\n想要：%+v", table, wantTable)
 	}
-	if len(table) != 7 {
-		t.Errorf("前缀表条目数 = %d，想要 7（picker/base64/uuid/timestamp/random/clipboard/calculator；apps 无前缀不进表）", len(table))
+	if len(table) != 11 {
+		t.Errorf("前缀表条目数 = %d，想要 11（picker/base64/uuid/timestamp/random/clipboard/calculator/awake/windows/terminal/workspaces）", len(table))
 	}
 	var prefixes []string
 	for _, e := range table {
@@ -223,8 +227,8 @@ func TestBuildPrefixTableHappyPath(t *testing.T) {
 			t.Errorf("前缀表里出现了 apps 条目 {Prefix:%q}：apps 必须无前缀，否则裸查询词会被劫持（Global 回归）", e.Prefix)
 		}
 	}
-	if got := strings.Join(prefixes, ","); got != "#,@b,@u,@t,@r,@c,=" {
-		t.Errorf("前缀集合（表序）= %q，想要 \"#,@b,@u,@t,@r,@c,=\"", got)
+	if got := strings.Join(prefixes, ","); got != "#,@b,@u,@t,@r,@c,=,@a,<,_,{" {
+		t.Errorf("前缀集合（表序）= %q，想要 \"#,@b,@u,@t,@r,@c,=,@a,<,_,{\"", got)
 	}
 
 	// ── 这张真实表喂给 engine 的判定结果（装配产物的可用性闭环）──
@@ -332,8 +336,8 @@ func TestBuiltinDescriptorsInvariants(t *testing.T) {
 		}
 	}
 
-	if got := strings.Join(prefixed, ","); got != "#,@b,@u,@t,@r,@c,=" {
-		t.Errorf("带前缀的 Descriptor 的前缀序列 = %q，想要 \"#,@b,@u,@t,@r=\"（picker #、base64 @b、uuid @u、timestamp @t、random @r、calculator =）", got)
+	if got := strings.Join(prefixed, ","); got != "#,@b,@u,@t,@r,@c,=,@a,<,_,{" {
+		t.Errorf("带前缀的 Descriptor 的前缀序列 = %q，想要 \"#,@b,@u,@t,@r,@c,=,@a,<,_,{\"", got)
 	}
 
 	// 不变式（升级自旧「只 apps+picker」）：除 picker 外，每条「带前缀」的 Descriptor
@@ -358,16 +362,11 @@ func TestBuiltinDescriptorsInvariants(t *testing.T) {
 			"想要 {\"\" true true}：apps 一旦有了前缀，那个字符就不再是合法搜索输入（Global 回归）",
 			apps.DefaultPrefix, apps.DefaultIsGlobal, apps.DefaultEnabled)
 	}
-	// Global 通道口径：现有**五条** is_global —— apps（空前缀，裸查询词主链路）、
-	// awake / windows / terminal / workspaces（均空前缀、靠名字/打字触发）。
-	// 复核结论：接线层的 Global 渲染当前仍**只走 apps**（providerActive 仅认 Plugin/
-	// SubMode），其余四条的 Global 直接触发要等 step8b 多 provider 聚合链路接上才生效，
-	// 现在它们经 `#` picker 可达。故 TestPickerEnterThenAppsSearchEqualsGlobal 的
-	// 「Global 结果集 ≡ apps 单插件」零回归断言在此阶段仍成立。钉死为恰好 5，再加全局
-	// 插件必须重新复核这条口径。
-	if globalCount != 5 {
-		t.Errorf("DefaultIsGlobal = true 的 Descriptor 有 %d 条，想要恰好 5（apps + awake + windows + terminal + workspaces）："+
-			"多一条全局插件都要重新复核「Global 渲染是否仍只走 apps、聚合是否已接」这条口径",
+	// Global 通道口径：现有**三条** is_global —— apps（空前缀，裸查询词主链路）、
+	// calculator（前缀 "="，同时在裸查询里求值）、windows（前缀 "<"，同时在裸查询里
+	// 按窗口标题命中）。awake / terminal / workspaces 已改为前缀直达，不再参与裸查询。
+	if globalCount != 3 {
+		t.Errorf("DefaultIsGlobal = true 的 Descriptor 有 %d 条，想要恰好 3（apps + calculator + windows）",
 			globalCount)
 	}
 	// picker 是「表里的普通一条」（决策②）：id 就是 engine 的哨兵、前缀由 Descriptor
@@ -407,7 +406,7 @@ func TestBuiltinDescriptorsReturnFreshSlice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("污染后 buildPrefixTable 报错（注册表被写脏了）：%v", err)
 	}
-	if len(table) != 7 || len(cfg.Providers) != 12 {
+	if len(table) != 11 || len(cfg.Providers) != 12 {
 		t.Fatalf("污染后装配产物条数不对：table=%+v providers=%+v", table, cfg.Providers)
 	}
 	if table[0].Prefix != "#" || cfg.Providers[0].Name != wantAppsName {

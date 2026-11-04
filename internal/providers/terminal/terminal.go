@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"voke/internal/i18n"
 	"voke/internal/match"
 	"voke/internal/providers"
 )
@@ -24,9 +25,12 @@ const (
 	ID = "terminal"
 
 	maxResults = 50
-	// 空 commandline 时的兜底副标题。
-	noCommandlineSubtitle = "Windows Terminal 配置"
 )
+
+// noCommandlineSubtitle 是空 commandline 时的兜底副标题（随界面语言变化）。
+func noCommandlineSubtitle() string {
+	return i18n.L("Windows Terminal 配置", "Windows Terminal profile")
+}
 
 // Profile 是一条 WT profile（合并去重后的形态）。
 type Profile struct {
@@ -91,8 +95,8 @@ func WithTTL(fetch Fetcher, wtPath string, ttl time.Duration) *Provider {
 	}
 	return &Provider{
 		config: providers.ProviderConfig{
-			Enabled: true, IsGlobal: true, Weight: 1.0,
-			Prefix: "", Activation: "Direct", Count: 5,
+			Enabled: true, IsGlobal: false, Weight: 1.0,
+			Prefix: "_", Activation: "Direct", Count: 5,
 		},
 		fetch:  fetch,
 		wtPath: wtPath,
@@ -115,16 +119,20 @@ func (p *Provider) entries() []Profile {
 // NewEmpty 返回空数据源实例（非 Windows 平台 / 未读配置占位）。
 func NewEmpty() *Provider { return New(func() []Profile { return nil }, "") }
 
-func (p *Provider) ID() string        { return ID }
-func (p *Provider) Name() string      { return "终端配置" }
+func (p *Provider) ID() string { return ID }
+func (p *Provider) Name() string {
+	return i18n.L("终端配置", "Terminal")
+}
 func (p *Provider) Aliases() []string { return []string{"wt", "terminal"} }
 func (p *Provider) Description() string {
-	return "用 Windows Terminal 打开某个配置（profile）"
+	return i18n.L("用 Windows Terminal 打开某个配置（profile）", "Open a Windows Terminal profile")
 }
 func (p *Provider) Config() providers.ProviderConfig     { return p.config }
 func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 
-func (p *Provider) Placeholder(string) string { return "输入配置名过滤，Enter 用 wt 启动" }
+func (p *Provider) Placeholder(string) string {
+	return i18n.L("输入配置名过滤，Enter 用 wt 启动", "Filter profiles; Enter opens with Windows Terminal")
+}
 
 // Query 按 TTL 取 profile 快照（defaultTTL）；空查询全返回 score=1.0（保 default 置顶 + stable 优先），
 // 非空按 name/commandline 取最高分排序、截断 maxResults。
@@ -198,10 +206,10 @@ func (p *Provider) toMatch(prof indexedProfile, ms match.MatchScore) providers.M
 	}
 	subtitle := prof.entry.Commandline
 	if subtitle == "" {
-		subtitle = noCommandlineSubtitle
+		subtitle = noCommandlineSubtitle()
 	}
 	if prof.entry.IsDefault {
-		subtitle = fmt.Sprintf("默认配置 · %s", subtitle)
+		subtitle = fmt.Sprintf(i18n.L("默认配置 · %s", "Default profile · %s"), subtitle)
 	}
 	action := providers.Action{
 		Kind:         providers.ActionLaunchTerminalProfile,
@@ -220,9 +228,9 @@ func (p *Provider) toMatch(prof indexedProfile, ms match.MatchScore) providers.M
 		// 由 app 层按当前插件分派）。App Activation 不能提权，执行层会直启 wt.exe。
 		Actions: []providers.RowAction{{
 			ID:       "open-admin",
-			Label:    "以管理员身份打开",
+			Label:    i18n.L("以管理员身份打开", "Open as administrator"),
 			Shortcut: "Ctrl+Enter",
-			Tooltip:  "以管理员身份打开 · Ctrl+Enter",
+			Tooltip:  i18n.L("以管理员身份打开 · Ctrl+Enter", "Open as administrator · Ctrl+Enter"),
 			Icon:     "shield",
 			Action:   admin,
 		}},

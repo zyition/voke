@@ -1,8 +1,9 @@
 // Package appcfg 是配置**解码层**（§4 / §7.3.4）：把落盘的配置文件字节解码成
-// `config.UserOverride` + 顶层设置（hotkey / autostart / theme），交给 logic/config 的
-// `Normalize` 合并 + 校验。对照生产 `voke-core/src/config.rs` 的 `ConfigPatch` /
-// `AppConfig::from_toml`——**本侧落盘同样用 TOML**（顶层三键 + `[providers.<id>]`，与
-// 生产 config.toml 同格式，可互相读取；旧版 `config.json` 仅保留只读迁移路径）。
+// `config.UserOverride` + 顶层设置（hotkey / autostart / theme / language），交给
+// logic/config 的 `Normalize` 合并 + 校验。对照生产 `voke-core/src/config.rs` 的
+// `ConfigPatch` / `AppConfig::from_toml`——**本侧落盘同样用 TOML**（顶层四键 +
+// `[providers.<id>]`，与生产 config.toml 同格式，可互相读取；旧版 `config.json`
+// 仅保留只读迁移路径）。
 //
 // 分层：本包**不做文件 IO**（读盘 / %APPDATA% 路径解析在接线层 platform），只吃字节切片、
 // 吐已解码的 Go 值——与 logic/config「只吃已解码值」同源，把「解码」从「归一」里分离。
@@ -29,6 +30,15 @@ const (
 	ThemeLight  Theme = "light"
 )
 
+// Language 是界面语言的解码值（"system" / "zh" / "en"）。
+type Language string
+
+const (
+	LanguageSystem  Language = "system"
+	LanguageChinese Language = "zh"
+	LanguageEnglish Language = "en"
+)
+
 // Loaded 是解码后的配置：顶层设置（带「有没有写」标记，未写交给上层默认）+ 按 provider
 // id 稳定序的覆盖表。
 type Loaded struct {
@@ -36,7 +46,8 @@ type Loaded struct {
 	HasHotkey    bool
 	Autostart    bool
 	HasAutostart bool
-	Theme        Theme // 未写 / 非法 → 空串（上层回落 System）
+	Theme        Theme    // 未写 / 非法 → 空串（上层回落 System）
+	Language     Language // 未写 / 非法 → 空串（上层回落 System）
 	// ClipboardMaxEntries 是剪贴板历史的普通条目上限；HasClipboardMaxEntries=false
 	// 表示没写，由调用方回落 cliphist.DefaultMaxEntries。
 	ClipboardMaxEntries    int
@@ -57,11 +68,12 @@ type providerPatch struct {
 	Hotkey     *string  `json:"hotkey,omitempty" toml:"hotkey,omitempty"`
 }
 
-// configFile 是顶层 schema（与生产 config.toml 同形：顶层三键 + [providers.<id>] 表）。
+// configFile 是顶层 schema（与生产 config.toml 同形：顶层四键 + [providers.<id>] 表）。
 type configFile struct {
 	Hotkey    *string                  `json:"hotkey" toml:"hotkey"`
 	Autostart *bool                    `json:"autostart" toml:"autostart"`
 	Theme     *string                  `json:"theme" toml:"theme"`
+	Language  *string                  `json:"language" toml:"language"`
 	Clipboard *clipboardPatch          `json:"clipboard,omitempty" toml:"clipboard"`
 	Providers map[string]providerPatch `json:"providers" toml:"providers"`
 }
@@ -109,6 +121,11 @@ func decodeFile(f configFile) Loaded {
 	if f.Theme != nil {
 		if t, ok := normalizeTheme(*f.Theme); ok {
 			out.Theme = t
+		}
+	}
+	if f.Language != nil {
+		if l, ok := normalizeLanguage(*f.Language); ok {
+			out.Language = l
 		}
 	}
 	if f.Clipboard != nil && f.Clipboard.MaxEntries != nil {
@@ -169,29 +186,50 @@ func normalizeTheme(raw string) (Theme, bool) {
 	}
 }
 
+// normalizeLanguage：宽松匹配 system/zh/en（也接受 zh-cn / zh_CN 这类写法）。
+func normalizeLanguage(raw string) (Language, bool) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	switch {
+	case v == "system" || v == "auto":
+		return LanguageSystem, true
+	case v == "zh" || strings.HasPrefix(v, "zh-") || strings.HasPrefix(v, "zh_"):
+		return LanguageChinese, true
+	case v == "en" || strings.HasPrefix(v, "en-") || strings.HasPrefix(v, "en_"):
+		return LanguageEnglish, true
+	default:
+		return "", false
+	}
+}
+
 // Top 是顶层设置（Encode 用）。Theme 空串 → 落 "system"。
 type Top struct {
 	Hotkey    string
 	Autostart bool
 	Theme     Theme
+	Language  Language
 	// ClipboardMaxEntries > 0 时落 `[clipboard] max_entries`；0 = 不写该节
 	// （旧配置迁移 / 非设置页路径保持文件原样）。
 	ClipboardMaxEntries int
 }
 
 // Encode 把顶层设置 + provider 覆盖序列化回 **TOML**（与生产 config.toml 同形：
-// 顶层 hotkey/autostart/theme + [providers.<id>] 表）。provider 字段为指针：nil（没写）
-// 不落盘；前缀为空串时与生产一致**省略**该键。
+// 顶层 hotkey/autostart/theme/language + [providers.<id>] 表）。provider 字段为指针：
+// nil（没写）不落盘；前缀为空串时与生产一致**省略**该键。
 func Encode(top Top, overrides []config.UserOverride) ([]byte, error) {
 	theme := top.Theme
 	if theme == "" {
 		theme = ThemeSystem
 	}
-	hotkey, autostart, themeStr := top.Hotkey, top.Autostart, string(theme)
+	language := top.Language
+	if language == "" {
+		language = LanguageSystem
+	}
+	hotkey, autostart, themeStr, languageStr := top.Hotkey, top.Autostart, string(theme), string(language)
 	file := configFile{
 		Hotkey:    &hotkey,
 		Autostart: &autostart,
 		Theme:     &themeStr,
+		Language:  &languageStr,
 		Providers: map[string]providerPatch{},
 	}
 	if top.ClipboardMaxEntries > 0 {

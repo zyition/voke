@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"voke/internal/i18n"
 	"voke/internal/providers"
 )
 
@@ -29,23 +30,29 @@ type Provider struct {
 
 var _ providers.Provider = (*Provider)(nil)
 
-// New 返回默认配置的 calculator provider（is_global=false、prefix==、Direct）。
+// New 返回默认配置的 calculator provider（is_global=true、prefix==、Direct）。
 func New() *Provider {
 	return &Provider{config: providers.ProviderConfig{
-		Enabled: true, IsGlobal: false, Weight: 1.0,
+		Enabled: true, IsGlobal: true, Weight: 1.0,
 		Prefix: prefix, Activation: "Direct", Count: 5,
 	}}
 }
 
-func (p *Provider) ID() string                           { return ID }
-func (p *Provider) Name() string                         { return "计算器" }
-func (p *Provider) Aliases() []string                    { return []string{"calc", "jsq", "c"} }
-func (p *Provider) Description() string                  { return "算术表达式求值，如 1+1" }
+func (p *Provider) ID() string { return ID }
+func (p *Provider) Name() string {
+	return i18n.L("计算器", "Calculator")
+}
+func (p *Provider) Aliases() []string { return []string{"calc", "jsq", "c"} }
+func (p *Provider) Description() string {
+	return i18n.L("算术表达式求值，如 1+1", "Evaluate arithmetic, e.g. 1+1")
+}
 func (p *Provider) Config() providers.ProviderConfig     { return p.config }
 func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 
 // Placeholder 对照 Rust：无子模式，激活后直接输表达式。
-func (p *Provider) Placeholder(string) string { return "输入计算式，如 1+1" }
+func (p *Provider) Placeholder(string) string {
+	return i18n.L("输入计算式，如 1+1", "Enter an expression, e.g. 1+1")
+}
 
 // Query 对照 Rust：非法 / 非有限结果返回空列表（用户逐字符输入过程不该闪结果）。
 // RegeneratesOnQuery：表达式求值确定性 → false。

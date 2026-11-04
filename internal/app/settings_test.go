@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/egoist/mygo/ui"
+	"voke/internal/i18n"
 	"voke/internal/logic/appcfg"
 	"voke/internal/logic/config"
 	"voke/internal/logic/engine"
@@ -50,8 +52,8 @@ func TestThemeLabelCodeRoundTrip(t *testing.T) {
 		}
 	}
 	// 未知 / 空 → 跟随系统。
-	if themeLabel("bogus") != themeLabels[0] {
-		t.Errorf("未知码应回落 %q，拿到 %q", themeLabels[0], themeLabel("bogus"))
+	if themeLabel("bogus") != themeLabels()[0] {
+		t.Errorf("未知码应回落 %q，拿到 %q", themeLabels()[0], themeLabel("bogus"))
 	}
 	if got := themeCode("乱标签"); got != appcfg.ThemeSystem {
 		t.Errorf("未知标签应回落 system，拿到 %q", got)
@@ -134,7 +136,88 @@ func TestSeedSettingsDefaultHotkey(t *testing.T) {
 	if s.hotkey != hotkeyShow {
 		t.Errorf("空配置应回落默认热键 %q，拿到 %q", hotkeyShow, s.hotkey)
 	}
-	if s.theme != themeLabels[0] {
+	if s.theme != themeLabels()[0] {
 		t.Errorf("空主题应回落跟随系统，拿到 %q", s.theme)
+	}
+}
+
+// TestLanguageLabelCodeRoundTrip 锁语言下拉标签↔配置码值往返（当前语言下）。
+func TestLanguageLabelCodeRoundTrip(t *testing.T) {
+	for _, code := range languageCodes {
+		label := languageLabel(code)
+		if got := languageCode(label); got != code {
+			t.Errorf("往返不符：code=%q → label=%q → code=%q", code, label, got)
+		}
+	}
+	if languageLabel("bogus") != languageLabels()[0] {
+		t.Errorf("未知码应回落跟随系统")
+	}
+}
+
+// TestResolveLanguage 锁语言偏好解析：显式 zh/en 直接用；system 交给系统语言。
+func TestResolveLanguage(t *testing.T) {
+	if got := resolveLanguage(appcfg.LanguageChinese); got != i18n.Chinese {
+		t.Errorf("zh 应解析成中文，实得 %q", got)
+	}
+	if got := resolveLanguage(appcfg.LanguageEnglish); got != i18n.English {
+		t.Errorf("en 应解析成英文，实得 %q", got)
+	}
+	if got := resolveLanguage(appcfg.LanguageSystem); got != i18n.Chinese {
+		// 非 Windows 的 SystemLanguage 占位恒为中文。
+		t.Errorf("非 Windows 下 system 应回落中文，实得 %q", got)
+	}
+}
+
+// TestProviderOverridesKeepsClearedDefaultHotkey：剪贴板有默认 Alt+`，用户清除后必须
+// 显式写空串覆盖默认值，不能省略（否则 Normalize 会回落到默认热键、清不掉）。
+func TestProviderOverridesKeepsClearedDefaultHotkey(t *testing.T) {
+	edits := []providerEdit{
+		{id: "clipboard", name: "剪贴板", enabled: true, activation: "直接"},
+		{id: "base64", name: "Base64", enabled: true, activation: "间接"},
+	}
+	ovs := providerOverrides(edits)
+	byID := map[string]config.UserOverride{}
+	for _, ov := range ovs {
+		byID[ov.ID] = ov
+	}
+	clip := byID["clipboard"]
+	if clip.Hotkey == nil || *clip.Hotkey != "" {
+		t.Errorf("剪贴板清除热键后应写空串覆盖默认值，实得 %+v", clip.Hotkey)
+	}
+	if base := byID["base64"]; base.Hotkey != nil {
+		t.Errorf("无默认热键的插件清空后应省略该键，实得 %+v", base.Hotkey)
+	}
+}
+
+// TestSettingsViewRendersSidebarAndPages 用 mygo 的 headless Tester 跑真实设置视图：
+// 首屏出「通用」页与语言选项，点左侧「插件」后切到插件卡片，验证新布局不 panic、
+// 导航确实生效。只渲染不点击会落盘的控件，故不需要窗口/平台副作用。
+func TestSettingsViewRendersSidebarAndPages(t *testing.T) {
+	cfg, _, err := buildPrefixTable()
+	if err != nil {
+		t.Fatalf("buildPrefixTable 失败：%v", err)
+	}
+	st := &appState{
+		cfg:              appcfg.Loaded{Hotkey: hotkeyShow, Theme: appcfg.ThemeSystem},
+		providers:        cfg,
+		pluginHotkeyErrs: map[string]string{},
+	}
+	s := &settingsWindow{section: settingsSectionGeneral}
+	st.settings = s
+	st.seedSettings(s)
+
+	tt := ui.NewTester(st.settingsView, 880, 600)
+	tt.Frame()
+	for _, want := range []string{"通用", "界面语言", "跟随系统", "开机自启"} {
+		if !tt.HasText(want) {
+			t.Errorf("通用页应包含文案 %q", want)
+		}
+	}
+	if err := tt.Click("插件"); err != nil {
+		t.Fatalf("点击左侧「插件」失败：%v", err)
+	}
+	tt.Frame()
+	if !tt.HasText("参与全局搜索") || !tt.HasText("前缀") {
+		t.Errorf("切到插件页后应显示插件配置项")
 	}
 }

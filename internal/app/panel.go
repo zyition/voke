@@ -8,6 +8,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"voke/internal/i18n"
 	"voke/internal/logic/appcfg"
 	"voke/internal/logic/appsmodel"
 	"voke/internal/logic/cliphist"
@@ -196,6 +197,15 @@ func (st *appState) ready() {
 	loaded, providers, table, err := loadConfigs()
 	if err != nil {
 		log.Printf("voke 前缀表装配失败，退回纯全局模式（不打前缀）：%v", err)
+	}
+	// 界面语言先于配置装配落位：Descriptor 的名称 / 描述在构建时取当前语言，所以
+	// 语言变化（首次启动即英文 / 配置里写死英文）需要重跑一次装配，否则 picker 与
+	// 设置页会残留中文名。重跑只多读一次 config.toml，启动期无感。
+	if st.applyLanguage(loaded.Language) {
+		loaded, providers, table, err = loadConfigs()
+		if err != nil {
+			log.Printf("voke 前缀表装配失败，退回纯全局模式（不打前缀）：%v", err)
+		}
 	}
 	st.providers, st.table = providers, table
 	st.cfg = loaded // 供设置窗 seed 当前热键 / 自启 / 主题
@@ -774,10 +784,10 @@ func (st *appState) trayMenuItems() []*mygo.MenuItem {
 		// （main.rs:301 → panel_toggle_win32：前台可见则隐藏、否则唤起），不是无条件 show；
 		// 也与 Go 自身热键的 togglePanel 一致。二次启动 OnSecondInstance 仍走无条件 showPanel
 		// （对应生产 ShellCommand::ShowPanel 固定显示），二者不同、各自对齐生产。
-		{Label: "显示面板", Click: func(*mygo.MenuItem, *mygo.Window) { st.togglePanel() }},
-		{Label: "设置…", Click: func(*mygo.MenuItem, *mygo.Window) { st.openSettings() }},
+		{Label: i18n.L("显示面板", "Show Panel"), Click: func(*mygo.MenuItem, *mygo.Window) { st.togglePanel() }},
+		{Label: i18n.L("设置…", "Settings…"), Click: func(*mygo.MenuItem, *mygo.Window) { st.openSettings() }},
 		mygo.Separator(),
-		{Label: "退出", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
+		{Label: i18n.L("退出", "Quit"), Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
 	}
 }
 

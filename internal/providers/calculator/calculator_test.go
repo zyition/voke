@@ -31,8 +31,8 @@ func TestMetadata(t *testing.T) {
 		t.Errorf("元数据不符：%s/%s/%s", p.ID(), p.Name(), p.Description())
 	}
 	c := p.Config()
-	if c.IsGlobal {
-		t.Error("计算器不得进全局")
+	if !c.IsGlobal {
+		t.Error("计算器默认参与全局搜索")
 	}
 	if c.Prefix != "=" || c.Activation != "Direct" || !c.Enabled {
 		t.Errorf("配置不符（=/Direct/enabled）：%+v", c)

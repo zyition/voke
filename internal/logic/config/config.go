@@ -65,6 +65,9 @@ type Descriptor struct {
 	DefaultWeight float64
 	// DefaultCount 是默认条数（random 这类插件用；归一时 clamp 到 1..50）。
 	DefaultCount int
+	// DefaultHotkey 是默认插件全局快捷键（Electron 风格加速器串，如 "Alt+`"）。
+	// 空串 = 不绑定；用户覆盖优先。只有极少数插件需要默认值（剪贴板），其余留空。
+	DefaultHotkey string
 }
 
 // UserOverride 是用户配置层的一条（§7.3.4 第二层的 Go 建模）。
@@ -88,7 +91,7 @@ type UserOverride struct {
 	// Count 对应 count。
 	Count *int
 	// Hotkey 对应 hotkey：插件全局快捷键（Electron 风格加速器串，如 "Alt+`"）。
-	// 刻意没有 Descriptor 默认值：所有插件默认不绑定，由用户在设置页手动录制。
+	// 未写时回落 Descriptor.DefaultHotkey（多数插件为空 = 不绑定）。
 	Hotkey *string
 }
 
@@ -115,8 +118,8 @@ type ProviderConfig struct {
 	Weight float64
 	// Count 是生效条数（C6 后恒在 1..50；不用条数概念的插件忽略它）。
 	Count int
-	// Hotkey 是生效的插件全局快捷键（"" = 未绑定）。只有用户显式配置才有值；
-	// 是否注册还要看 Enabled（见 app/hotkeys.go）。
+	// Hotkey 是生效的插件全局快捷键（"" = 未绑定）。来自用户覆盖或 Descriptor
+	// 默认值；是否注册还要看 Enabled（见 app/hotkeys.go）。
 	Hotkey string
 }
 

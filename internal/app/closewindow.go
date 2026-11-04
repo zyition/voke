@@ -6,6 +6,7 @@ package app
 import (
 	"log"
 
+	"voke/internal/i18n"
 	"voke/internal/platform"
 )
 
@@ -14,7 +15,7 @@ import (
 func (st *appState) closeWindow(hwnd uintptr, title string) bool {
 	if !platform.CloseWindow(hwnd) {
 		log.Printf("voke：关闭窗口失败（窗口 %q，hwnd=%#x）", title, hwnd)
-		st.setNotice("无法关闭窗口（窗口可能已退出或权限不足）")
+		st.setNotice(i18n.L("无法关闭窗口（窗口可能已退出或权限不足）", "Could not close the window (it may have exited or require higher privileges)"))
 		return false
 	}
 	log.Printf("voke：已请求关闭窗口 %q（hwnd=%#x）", title, hwnd)

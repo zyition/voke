@@ -135,6 +135,55 @@ func TestThemeLenient(t *testing.T) {
 	}
 }
 
+func TestLanguageLenientAndRoundtrip(t *testing.T) {
+	if l, _ := FromJSON([]byte(`{"language":"EN-us"}`)); l.Language != LanguageEnglish {
+		t.Errorf("language 大小写 / 区域后缀应识别：%q", l.Language)
+	}
+	if l, _ := FromJSON([]byte(`{"language":"zh_CN"}`)); l.Language != LanguageChinese {
+		t.Errorf("zh_CN 应识别为中文：%q", l.Language)
+	}
+	if l, _ := FromJSON([]byte(`{"language":"klingon"}`)); l.Language != "" {
+		t.Errorf("未知语言应丢弃为空串：%q", l.Language)
+	}
+	data, err := Encode(Top{Hotkey: "alt+space", Language: LanguageEnglish}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `language = "en"`) {
+		t.Errorf("落盘应包含 language = \"en\"：\n%s", data)
+	}
+	back, err := FromTOML(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Language != LanguageEnglish {
+		t.Errorf("language 往返失败：%q", back.Language)
+	}
+}
+
+// TestEncodeExplicitEmptyHotkey：设置页「清除」有默认值的插件热键时必须显式落
+// hotkey = ""（指针非 nil），否则读回 nil 会让 Normalize 回落到 Descriptor 默认值。
+func TestEncodeExplicitEmptyHotkey(t *testing.T) {
+	empty := ""
+	data, err := Encode(Top{}, []config.UserOverride{{ID: "clipboard", Hotkey: &empty}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `hotkey = ""`) {
+		t.Errorf("空热键覆盖应显式落盘：\n%s", data)
+	}
+	back, err := FromTOML(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(back.Overrides) != 1 || back.Overrides[0].Hotkey == nil {
+		t.Fatalf("空热键读回应是指针：%+v", back.Overrides)
+	}
+	if got := *back.Overrides[0].Hotkey; got != "" {
+		t.Errorf("空热键读回值 = %q，想要空串", got)
+	}
+}
+
 func TestOverridesSortedStable(t *testing.T) {
 	loaded, _ := FromJSON([]byte(`{"providers":{"uuid":{},"base64":{},"apps":{}}}`))
 	var ids []string

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"voke/internal/i18n"
 	"voke/internal/match"
 	"voke/internal/providers"
 )
@@ -89,7 +90,7 @@ func WithTTL(fetch Fetcher, ttl time.Duration) *Provider {
 	return &Provider{
 		config: providers.ProviderConfig{
 			Enabled: true, IsGlobal: true, Weight: 1.0,
-			Prefix: "", Activation: "Direct", Count: 5,
+			Prefix: "<", Activation: "Direct", Count: 5,
 		},
 		fetch: fetch,
 		keys:  match.NewSearchKeysCache(),
@@ -111,14 +112,20 @@ func (p *Provider) entries() []Entry {
 // NewEmpty 返回空数据源实例（非 Windows 平台 / 未枚举占位）。
 func NewEmpty() *Provider { return New(func() []Entry { return nil }) }
 
-func (p *Provider) ID() string                           { return ID }
-func (p *Provider) Name() string                         { return "窗口" }
-func (p *Provider) Aliases() []string                    { return []string{"win", "ck"} }
-func (p *Provider) Description() string                  { return "切换到已打开的窗口" }
+func (p *Provider) ID() string { return ID }
+func (p *Provider) Name() string {
+	return i18n.L("窗口", "Windows")
+}
+func (p *Provider) Aliases() []string { return []string{"win", "ck"} }
+func (p *Provider) Description() string {
+	return i18n.L("切换到已打开的窗口", "Switch to an open window")
+}
 func (p *Provider) Config() providers.ProviderConfig     { return p.config }
 func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 
-func (p *Provider) Placeholder(string) string { return "输入窗口标题或进程名" }
+func (p *Provider) Placeholder(string) string {
+	return i18n.L("输入窗口标题或进程名", "Type a window title or process name")
+}
 
 // Query 按 TTL 取窗口快照（defaultTTL）；空查询全返回（score=1.0，交给引擎按频率
 // 重排、不截断），非空按 title/process_name 取最高分排序、截断 maxResults。
@@ -206,13 +213,13 @@ func (p *Provider) toMatch(w indexedWindow, ms match.MatchScore) providers.Match
 		Actions: []providers.RowAction{
 			// 关闭窗口放在左侧、结束任务保持最右：老用户对电源图标的肌肉记忆不变。
 			{
-				ID: CloseWindowActionID, Label: "关闭窗口", Shortcut: "Ctrl+Delete",
-				Tooltip: "关闭窗口 · Ctrl+Delete",
+				ID: CloseWindowActionID, Label: i18n.L("关闭窗口", "Close window"), Shortcut: "Ctrl+Delete",
+				Tooltip: i18n.L("关闭窗口 · Ctrl+Delete", "Close window · Ctrl+Delete"),
 				Action:  providers.Action{Kind: providers.ActionCloseWindow, Hwnd: uintptr(w.entry.Hwnd)},
 			},
 			{
-				ID: EndTaskActionID, Label: "结束任务", Shortcut: "Ctrl+Shift+Delete",
-				Tooltip: "结束任务 · Ctrl+Shift+Delete",
+				ID: EndTaskActionID, Label: i18n.L("结束任务", "End task"), Shortcut: "Ctrl+Shift+Delete",
+				Tooltip: i18n.L("结束任务 · Ctrl+Shift+Delete", "End task · Ctrl+Shift+Delete"),
 				Action:  providers.Action{Kind: providers.ActionEndTask, Hwnd: uintptr(w.entry.Hwnd)},
 			},
 		},

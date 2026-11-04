@@ -40,11 +40,11 @@ func TestMetadata(t *testing.T) {
 		t.Errorf("元数据不符：%s/%s/%s", p.ID(), p.Name(), p.Description())
 	}
 	c := p.Config()
-	if !c.IsGlobal {
-		t.Error("awake 应 is_global（直接输 awake 命中）")
+	if c.IsGlobal {
+		t.Error("awake 默认不再参与全局搜索")
 	}
-	if c.Prefix != "" || c.Activation != "Direct" {
-		t.Errorf("配置不符（无前缀/Direct）：%+v", c)
+	if c.Prefix != "@a" || c.Activation != "Direct" {
+		t.Errorf("配置不符（@a/Direct）：%+v", c)
 	}
 }
 

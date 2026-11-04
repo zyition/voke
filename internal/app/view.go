@@ -36,6 +36,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"voke/internal/i18n"
 	"voke/internal/logic/appsmodel"
 	"voke/internal/logic/engine"
 	"voke/internal/logic/frequency"
@@ -141,7 +142,7 @@ func (st *appState) providerActive() bool {
 func (st *appState) placeholder() string {
 	switch st.engineState.Mode() {
 	case engine.PluginPicker:
-		return "搜索插件"
+		return i18n.L("搜索插件", "Search plugins")
 	case engine.Plugin, engine.SubMode:
 		// 已注册插件：用其（子模式）占位符（如 base64「输入要加密/解密的内容」）。
 		// 占位符为空则回落；apps / 未注册走下面的默认。
@@ -153,7 +154,7 @@ func (st *appState) placeholder() string {
 			}
 		}
 	}
-	return "搜索应用"
+	return i18n.L("搜索应用", "Search apps")
 }
 
 func (st *appState) hintLine() []appui.FooterHint {
@@ -161,24 +162,24 @@ func (st *appState) hintLine() []appui.FooterHint {
 	if st.notice != "" {
 		return []appui.FooterHint{{Label: st.notice}}
 	}
-	enter := "启动"
+	enter := i18n.L("启动", "Open")
 	switch {
 	case st.engineState.Mode() == engine.PluginPicker:
-		enter = "进入"
+		enter = i18n.L("进入", "Open")
 	case st.isClipboardPlugin():
-		enter = "粘贴"
+		enter = i18n.L("粘贴", "Paste")
 	case st.providerActive() && st.engineState.PluginID() == providerWindowsID:
-		enter = "切换"
+		enter = i18n.L("切换", "Switch")
 	case st.providerActive() && st.engineState.PluginID() == terminal.ID:
-		enter = "打开"
+		enter = i18n.L("打开", "Open")
 	case st.providerActive():
-		enter = "执行"
+		enter = i18n.L("执行", "Run")
 	}
 	return []appui.FooterHint{
-		{Keys: "↑↓", Label: "选择"},
+		{Keys: "↑↓", Label: i18n.L("选择", "Select")},
 		{Keys: "Enter", Label: enter},
-		{Keys: "Ctrl+Backspace", Label: "重置"},
-		{Keys: "Esc", Label: "隐藏"},
+		{Keys: "Ctrl+Backspace", Label: i18n.L("重置", "Reset")},
+		{Keys: "Esc", Label: i18n.L("隐藏", "Hide")},
 	}
 }
 
@@ -198,16 +199,17 @@ func (st *appState) pluginPending() bool {
 
 // pendingHint 是未落地插件的占位文案（把 id 带出来，方便真机/日志对照）。
 func (st *appState) pendingHint() string {
-	return "插件「" + st.engineState.PluginID() + "」尚未接入"
+	return i18n.L("插件「"+st.engineState.PluginID()+"」尚未接入",
+		"Plugin “"+st.engineState.PluginID()+"” is not available")
 }
 
 // pickerHint 是 picker 列表空态文案：「一个可选插件都没有」与「过滤词不中」
 // 是两回事（前者是注册表只有 picker 自己，属配置问题，得说清）。
 func (st *appState) pickerHint() string {
 	if st.engineState.Query() == "" {
-		return "没有已启用的插件"
+		return i18n.L("没有已启用的插件", "No plugins enabled")
 	}
-	return "没有匹配的插件"
+	return i18n.L("没有匹配的插件", "No matching plugins")
 }
 
 // filter 委托 panelstate.Model.Filter，把返回的意图就地执行。
@@ -436,7 +438,7 @@ func (st *appState) breadcrumbs() []appui.Crumb {
 		label, pid := sc.PluginID, sc.PluginID
 		switch sc.Kind {
 		case engine.PluginPicker:
-			label, pid = "插件列表", engine.PickerPluginID
+			label, pid = i18n.L("插件列表", "Plugin List"), engine.PickerPluginID
 		case engine.Plugin:
 			label = st.providerName(sc.PluginID)
 		case engine.SubMode:
@@ -783,10 +785,10 @@ func (st *appState) launchTerminalElevated(a providers.Action) bool {
 	err := platform.RunElevated(exe, []string{"-p", a.Profile}, false, nil)
 	if err != nil {
 		if errors.Is(err, platform.ErrElevationCanceled) {
-			st.showNoticePanel("已取消管理员权限请求")
+			st.showNoticePanel(i18n.L("已取消管理员权限请求", "Administrator request canceled"))
 		} else {
 			log.Printf("voke：以管理员身份启动终端失败（%s profile=%s）：%v", exe, a.Profile, err)
-			st.showNoticePanel("以管理员身份启动失败")
+			st.showNoticePanel(i18n.L("以管理员身份启动失败", "Failed to launch as administrator"))
 		}
 		return false
 	}

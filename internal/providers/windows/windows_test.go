@@ -61,8 +61,8 @@ func TestMetadata(t *testing.T) {
 	if c.Weight != 1.0 || !c.Enabled || !c.IsGlobal {
 		t.Errorf("配置不符（weight=1.0 enabled is_global）：%+v", c)
 	}
-	if c.Prefix != "" {
-		t.Errorf("窗口不能被前缀门控，实得 %q", c.Prefix)
+	if c.Prefix != "<" {
+		t.Errorf("窗口默认前缀应为 <，实得 %q", c.Prefix)
 	}
 }
 

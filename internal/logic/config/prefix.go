@@ -22,6 +22,7 @@ package config
 import (
 	"strings"
 
+	"voke/internal/i18n"
 	"voke/internal/logic/engine"
 )
 
@@ -90,10 +91,10 @@ func PrefixConflictIDs(descriptors []Descriptor, overrides []UserOverride) []str
 	return out
 }
 
-// activationChinese 给 C2 报错消息一个可读的激活方式（配置层不依赖 UI 的中文标签）。
+// activationChinese 给 C2 报错消息一个可读的激活方式（随界面语言变化）。
 func activationChinese(a engine.Activation) string {
 	if a == engine.Indirect {
-		return "间接"
+		return i18n.L("间接", "indirect")
 	}
-	return "直接"
+	return i18n.L("直接", "direct")
 }

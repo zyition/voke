@@ -7,6 +7,7 @@ package app
 import (
 	"log"
 
+	"voke/internal/i18n"
 	"voke/internal/platform"
 	"voke/internal/providers"
 	"voke/internal/providers/windows"
@@ -55,7 +56,7 @@ func (st *appState) selectedWindowMatch() (providers.Match, bool) {
 func (st *appState) endTask(hwnd uintptr, title string) bool {
 	if err := platform.EndTask(hwnd); err != nil {
 		log.Printf("voke：结束任务失败（窗口 %q，hwnd=%#x）：%v", title, hwnd, err)
-		st.setNotice("无法结束任务（窗口可能受保护或权限不足）")
+		st.setNotice(i18n.L("无法结束任务（窗口可能受保护或权限不足）", "Could not end the task (the window may be protected or require higher privileges)"))
 		return false
 	}
 	log.Printf("voke：已结束任务 %q（hwnd=%#x）", title, hwnd)

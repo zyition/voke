@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"voke/internal/i18n"
 	"voke/internal/providers"
 )
 
@@ -57,16 +58,21 @@ func NewFixedOffset(nowSecs int64, offsetSecs int32) *Provider {
 	return p
 }
 
-func (p *Provider) ID() string                           { return ID }
-func (p *Provider) Name() string                         { return "时间戳" }
-func (p *Provider) Aliases() []string                    { return []string{"t", "sj", "ts", "time"} }
-func (p *Provider) Description() string                  { return "时间戳 ⇄ 可读时间" }
+func (p *Provider) ID() string { return ID }
+func (p *Provider) Name() string {
+	return i18n.L("时间戳", "Timestamp")
+}
+func (p *Provider) Aliases() []string { return []string{"t", "sj", "ts", "time"} }
+func (p *Provider) Description() string {
+	return i18n.L("时间戳 ⇄ 可读时间", "Timestamp ⇄ readable time")
+}
 func (p *Provider) Config() providers.ProviderConfig     { return p.config }
 func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 
 // Placeholder 对照 Rust：timestamp 无子模式，输时间戳 / now / 日期串，或留空看 now。
 func (p *Provider) Placeholder(string) string {
-	return "输入时间戳（如 1700000000）、now 或日期（2026-10-10 12:30）"
+	return i18n.L("输入时间戳（如 1700000000）、now 或日期（2026-10-10 12:30）",
+		"Enter a timestamp (e.g. 1700000000), now, or a date (2026-10-10 12:30)")
 }
 
 // Query 对照 Rust：按当前时间把查询解析成候选，分数依次递减保证稳定顺序。
@@ -142,20 +148,20 @@ func conversions(nowSecs int64, offsetSecs int32, query string) []conversion {
 		secs = v / 1000
 	default:
 		return []conversion{hintRow(
-			fmt.Sprintf("%s 是 %d 位", q, len(q)),
-			"换算只认 10 位（秒）/ 13 位（毫秒）",
+			fmt.Sprintf(i18n.L("%s 是 %d 位", "%s has %d digits"), q, len(q)),
+			i18n.L("换算只认 10 位（秒）/ 13 位（毫秒）", "Only 10-digit (seconds) or 13-digit (milliseconds) values are converted"),
 		)}
 	}
 
-	unit := "秒"
+	unit := i18n.L("秒", "seconds")
 	if len(q) == 13 {
-		unit = "毫秒"
+		unit = i18n.L("毫秒", "milliseconds")
 	}
-	tag := fmt.Sprintf("%s（按%s）", q, unit)
+	tag := fmt.Sprintf(i18n.L("%s（按%s）", "%s (as %s)"), q, unit)
 	var out []conversion
 	// 偏移为 0 时「本地」与「UTC」文本相同，只给一份，不造重复行。
 	if offsetSecs != 0 {
-		out = append(out, copyRow(formatTimestampOffset(secs, offsetSecs), fmt.Sprintf("%s → 本地时间", tag)))
+		out = append(out, copyRow(formatTimestampOffset(secs, offsetSecs), fmt.Sprintf(i18n.L("%s → 本地时间", "%s → local time"), tag)))
 	}
 	out = append(out, copyRow(formatTimestamp(secs), fmt.Sprintf("%s → UTC", tag)))
 	return out
@@ -165,8 +171,8 @@ func conversions(nowSecs int64, offsetSecs int32, query string) []conversion {
 func nowRows(nowSecs int64, offsetSecs int32) []conversion {
 	local := formatTimestampOffset(nowSecs, offsetSecs)
 	return []conversion{
-		copyRow(strconv.FormatInt(nowSecs, 10), fmt.Sprintf("当前时间戳（秒）· %s", local)),
-		copyRow(strconv.FormatInt(nowSecs*1000, 10), fmt.Sprintf("当前时间戳（毫秒）· %s", local)),
+		copyRow(strconv.FormatInt(nowSecs, 10), fmt.Sprintf(i18n.L("当前时间戳（秒）· %s", "Current timestamp (seconds) · %s"), local)),
+		copyRow(strconv.FormatInt(nowSecs*1000, 10), fmt.Sprintf(i18n.L("当前时间戳（毫秒）· %s", "Current timestamp (milliseconds) · %s"), local)),
 	}
 }
 
@@ -177,8 +183,8 @@ func dateRows(dt civilDateTime, offsetSecs int32) []conversion {
 	utcSecs := localSecs - int64(offsetSecs)
 	local := formatTimestampOffset(utcSecs, offsetSecs)
 	return []conversion{
-		copyRow(strconv.FormatInt(utcSecs, 10), fmt.Sprintf("%s · 按秒", local)),
-		copyRow(strconv.FormatInt(utcSecs*1000, 10), fmt.Sprintf("%s · 按毫秒", local)),
+		copyRow(strconv.FormatInt(utcSecs, 10), fmt.Sprintf(i18n.L("%s · 按秒", "%s · seconds"), local)),
+		copyRow(strconv.FormatInt(utcSecs*1000, 10), fmt.Sprintf(i18n.L("%s · 按毫秒", "%s · milliseconds"), local)),
 	}
 }
 

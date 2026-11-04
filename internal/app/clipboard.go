@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	"voke/internal/i18n"
 	"voke/internal/logic/appcfg"
 	"voke/internal/logic/cliphist"
 	"voke/internal/platform"
@@ -189,7 +190,7 @@ func (st *appState) pasteClipboardItem(ref string, plain bool) {
 	}
 	if err != nil {
 		log.Printf("voke：剪贴板历史写入失败（plain=%v）：%v", plain, err)
-		st.setNotice("粘贴失败：无法写入剪贴板")
+		st.setNotice(i18n.L("粘贴失败：无法写入剪贴板", "Paste failed: could not write to the clipboard"))
 		return
 	}
 	// 程序化写入也会让序列号递增；先同步到已处理位，并记下内容指纹抑制
@@ -201,7 +202,7 @@ func (st *appState) pasteClipboardItem(ref string, plain bool) {
 	target := st.clipTarget
 	if !target.Valid() {
 		// 没有可恢复的目标窗口：面板保持可见，内容已在剪贴板里，用户可手动粘贴。
-		st.setNotice("内容已复制，请手动粘贴")
+		st.setNotice(i18n.L("内容已复制，请手动粘贴", "Copied. Paste it manually."))
 		return
 	}
 	// 管理员窗口：UIPI 会静默吞掉 SendInput（连失败都拿不到），必须改走临时
@@ -216,7 +217,7 @@ func (st *appState) pasteClipboardItem(ref string, plain bool) {
 			if platform.PasteToTarget(target, plain) {
 				return
 			}
-			st.showPasteFallback("粘贴失败：内容已复制，请手动粘贴")
+			st.showPasteFallback(i18n.L("粘贴失败：内容已复制，请手动粘贴", "Paste failed. Content copied—paste it manually."))
 		})
 	})
 }
@@ -227,7 +228,7 @@ func (st *appState) pasteElevated(target platform.ClipTarget) {
 	exe, err := os.Executable()
 	if err != nil {
 		log.Printf("voke：提权粘贴无法定位 voke.exe：%v", err)
-		st.showPasteFallback("粘贴失败：内容已复制，请手动粘贴")
+		st.showPasteFallback(i18n.L("粘贴失败：内容已复制，请手动粘贴", "Paste failed. Content copied—paste it manually."))
 		return
 	}
 	mode := "gui"
@@ -246,7 +247,7 @@ func (st *appState) pasteElevated(target platform.ClipTarget) {
 			if st.quitting || st.panel == nil || st.panel.IsDestroyed() {
 				return
 			}
-			st.showPasteFallback("粘贴失败：内容已复制，请手动粘贴")
+			st.showPasteFallback(i18n.L("粘贴失败：内容已复制，请手动粘贴", "Paste failed. Content copied—paste it manually."))
 		})
 	})
 	if err == nil {
@@ -254,9 +255,9 @@ func (st *appState) pasteElevated(target platform.ClipTarget) {
 			target.Hwnd, target.Terminal)
 		return
 	}
-	msg := "管理员粘贴启动失败：内容已复制，请手动粘贴"
+	msg := i18n.L("管理员粘贴启动失败：内容已复制，请手动粘贴", "Elevated paste failed to start. Content copied—paste it manually.")
 	if errors.Is(err, platform.ErrElevationCanceled) {
-		msg = "未获得管理员权限，内容已复制，请手动粘贴"
+		msg = i18n.L("未获得管理员权限，内容已复制，请手动粘贴", "Administrator permission not granted. Content copied—paste it manually.")
 	}
 	log.Printf("voke：提权粘贴启动失败（hwnd=%#x）：%v", target.Hwnd, err)
 	st.showPasteFallback(msg)
@@ -298,7 +299,7 @@ func (st *appState) toggleClipboardPin(ref string) {
 	if it.Pinned {
 		st.hist.Unpin(ref)
 	} else if !st.hist.Pin(ref) {
-		st.setNotice("置顶最多 10 条，请先取消一条")
+		st.setNotice(i18n.L("置顶最多 10 条，请先取消一条", "At most 10 pinned items—unpin one first"))
 		return
 	}
 	st.refreshClipboardRows()
@@ -343,7 +344,7 @@ func (st *appState) pasteSelectedPlain() bool {
 		return false
 	}
 	if it.Text == "" {
-		st.setNotice("该条目没有文本，无法纯文本粘贴")
+		st.setNotice(i18n.L("该条目没有文本，无法纯文本粘贴", "This item has no text to paste as plain text"))
 		return true
 	}
 	st.pasteClipboardItem(it.ID, true)

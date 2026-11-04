@@ -4,7 +4,7 @@
 // apps 无前缀、picker 前缀 "#"、各插件默认前缀/激活方式/权重/条数全都写在
 // 本文件的 Descriptor 中，engine / ui / platform 一处都不再抄第二份。
 //
-// 当前注册 10 个内置插件 + picker；用户覆盖由 appcfg 从 config.toml 解码后
+// 当前注册 11 个内置插件 + picker；用户覆盖由 appcfg 从 config.toml 解码后
 // 交给 config.Normalize 合并，再经 BuildTable 产出前缀表。前缀冲突（C2）、
 // 旧版 #b/#u/#t/#r 的自动修复都在这一层接线（见 loadConfigs / repairPrefixConflicts）。
 package app
@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"voke/internal/i18n"
 	"voke/internal/logic/appcfg"
 	"voke/internal/logic/cliphist"
 	"voke/internal/logic/config"
@@ -64,7 +65,7 @@ const providerWindowsID = windows.ID
 func builtinDescriptors() []config.Descriptor {
 	return []config.Descriptor{
 		{
-			ID: providerAppsID, Name: "应用", Description: "搜索并启动开始菜单应用",
+			ID: providerAppsID, Name: i18n.L("应用", "Apps"), Description: i18n.L("搜索并启动开始菜单应用", "Search and launch Start menu apps"),
 			Aliases: []string{"app", "yy"},
 			// DefaultIsGlobal：裸查询词走它（§7.3.4 的 is_global）。
 			DefaultEnabled: true, DefaultIsGlobal: true,
@@ -72,7 +73,7 @@ func builtinDescriptors() []config.Descriptor {
 			DefaultWeight: 1.2, DefaultCount: 5,
 		},
 		{
-			ID: engine.PickerPluginID, Name: "插件列表", Description: "按名称或别名筛选插件",
+			ID: engine.PickerPluginID, Name: i18n.L("插件列表", "Plugin List"), Description: i18n.L("按名称或别名筛选插件", "Filter plugins by name or alias"),
 			DefaultEnabled: true, DefaultIsGlobal: false,
 			DefaultPrefix: "#", DefaultActivation: engine.Direct,
 			DefaultWeight: 1.0, DefaultCount: 5,
@@ -81,91 +82,83 @@ func builtinDescriptors() []config.Descriptor {
 			// 二级前缀统一 `@+字母`：picker 用 Direct 的 "#" 独占 `#` 命名空间，
 			// 任何 "#…" 触发串都会被它的 "#" 抢先命中（C2 也会直接拒绝），
 			// 故 #b/#u/#t/#r 迁到 @b/@u/@t/@r。
-			ID: base64.ID, Name: "Base64", Description: "base64 编解码（加密 / 解密）",
+			ID: base64.ID, Name: "Base64", Description: i18n.L("base64 编解码（加密 / 解密）", "Base64 encoding and decoding"),
 			Aliases:        []string{"b", "b64"},
 			DefaultEnabled: true, DefaultIsGlobal: false,
 			DefaultPrefix: "@b", DefaultActivation: engine.Indirect,
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
-			ID: uuid.ID, Name: "UUID", Description: "生成 UUID v4（可指定个数）",
+			ID: uuid.ID, Name: "UUID", Description: i18n.L("生成 UUID v4（可指定个数）", "Generate UUID v4 (optionally several)"),
 			Aliases:        []string{"u"},
 			DefaultEnabled: true, DefaultIsGlobal: false,
 			DefaultPrefix: "@u", DefaultActivation: engine.Indirect,
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
-			ID: timestamp.ID, Name: "时间戳", Description: "时间戳 ⇄ 可读时间",
+			ID: timestamp.ID, Name: i18n.L("时间戳", "Timestamp"), Description: i18n.L("时间戳 ⇄ 可读时间", "Timestamp ⇄ readable time"),
 			Aliases:        []string{"t", "sj", "ts", "time"},
 			DefaultEnabled: true, DefaultIsGlobal: false,
 			DefaultPrefix: "@t", DefaultActivation: engine.Indirect,
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
-			ID: random.ID, Name: "随机值", Description: "随机整数 / 随机字符串",
+			ID: random.ID, Name: i18n.L("随机值", "Random"), Description: i18n.L("随机整数 / 随机字符串", "Random integers / strings"),
 			Aliases:        []string{"r", "sj", "rand"},
 			DefaultEnabled: true, DefaultIsGlobal: false,
 			DefaultPrefix: "@r", DefaultActivation: engine.Indirect,
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
-			// clipboard：`@c` 二级前缀、Indirect。历史数据只在内存，退出即清；
-			// 条数上限走顶层 `[clipboard] max_entries`，不占 provider Count（后者
-			// 上限 50，且历史本身已有自己的淘汰规则）。
-			ID: clipboardprovider.ID, Name: "剪贴板", Description: "剪贴板历史（文本 / 富文本 / 图片）",
+			// clipboard：`@c` 二级前缀、Direct（敲 `@c` 即进入）。历史数据只在内存，
+			// 退出即清；条数上限走顶层 `[clipboard] max_entries`，不占 provider Count
+			// （后者上限 50，且历史本身已有自己的淘汰规则）。默认绑定 Alt+`，让常用
+			// 的剪贴板历史可以一键直达。
+			ID: clipboardprovider.ID, Name: i18n.L("剪贴板", "Clipboard"), Description: i18n.L("剪贴板历史（文本 / 富文本 / 图片）", "Clipboard history (text / rich text / images)"),
 			Aliases:        []string{"clip", "nbt", "jqb"},
 			DefaultEnabled: true, DefaultIsGlobal: false,
-			DefaultPrefix: "@c", DefaultActivation: engine.Indirect,
-			DefaultWeight: 1.0, DefaultCount: 5,
+			DefaultPrefix: "@c", DefaultActivation: engine.Direct,
+			DefaultWeight: 1.0, DefaultCount: 5, DefaultHotkey: "Alt+`",
 		},
 		{
-			ID: calculator.ID, Name: "计算器", Description: "算术表达式求值，如 1+1",
+			ID: calculator.ID, Name: i18n.L("计算器", "Calculator"), Description: i18n.L("算术表达式求值，如 1+1", "Evaluate arithmetic, e.g. 1+1"),
 			Aliases:        []string{"calc", "jsq", "c"},
-			DefaultEnabled: true, DefaultIsGlobal: false,
+			DefaultEnabled: true, DefaultIsGlobal: true,
 			DefaultPrefix: "=", DefaultActivation: engine.Direct,
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
-			// awake 是继 apps 之后**第二条 is_global**：无前缀、靠名字「保持唤醒 / awake」
-			// 触发（对齐 §3 `[provider.awake] is_global = true`）。空前缀不进前缀表；裸查询
-			// 里由 Global 聚合链路（collectGlobalBatches→Registry.Aggregate→globalActive）
-			// 直接命中成组（`TestCollectGlobalBatches` 锁 awake 在裸查询批次里），也可经 `#`
-			// picker 进 Plugin(awake)，或点托盘 awake 项经 openAwake 直达第一级。
-			ID: awake.ID, Name: "保持唤醒", Description: "阻止系统休眠（可选连屏幕一起）",
+			// awake 不再参与裸查询：`@a` 直接进入（对齐用户给定的默认配置）。
+			// 仍可经 `#` picker 进入，或点托盘 awake 项经 openAwake 直达第一级。
+			ID: awake.ID, Name: i18n.L("保持唤醒", "Keep Awake"), Description: i18n.L("阻止系统休眠（可选连屏幕一起）", "Prevent system sleep (optionally keep the screen on)"),
 			Aliases:        []string{"awake", "a"},
-			DefaultEnabled: true, DefaultIsGlobal: true,
-			DefaultPrefix: "", DefaultActivation: engine.Direct,
+			DefaultEnabled: true, DefaultIsGlobal: false,
+			DefaultPrefix: "@a", DefaultActivation: engine.Direct,
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
-			// windows：第三条 is_global、同样无前缀（靠打字命中，对齐 PTR Window Walker）。
-			// 权重 1.0 < apps 1.2（同名优先启动应用）。数据源已接 `platform.EnumerateWindows`
-			// （Windows 出真实窗口、Linux/测试侧 NewEmpty 恒空被聚合跳过）；Global 聚合链路
-			// 同 awake 已接，只是 Linux 无窗口数据时不出组（真机 V3/V5 验实际命中）。
-			ID: windows.ID, Name: "窗口", Description: "切换到已打开的窗口",
+			// windows：保持 is_global（裸查询仍按窗口标题命中），同时给 `<` 前缀
+			// 作为显式入口（对齐用户给定的默认配置）。
+			ID: windows.ID, Name: i18n.L("窗口", "Windows"), Description: i18n.L("切换到已打开的窗口", "Switch to an open window"),
 			Aliases:        []string{"win", "ck"},
 			DefaultEnabled: true, DefaultIsGlobal: true,
-			DefaultPrefix: "", DefaultActivation: engine.Direct,
+			DefaultPrefix: "<", DefaultActivation: engine.Direct,
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
-			// terminal：第四条 is_global、无前缀（直接打 profile 名命中，对齐 PTR Terminal）。
-			// 数据源已接 `platform.ReadTerminalSettings`（Windows 现读 %LOCALAPPDATA%\Packages
-			// 下 stable/preview 的 settings.json 合并去重 profile；Linux/测试侧返回 nil 恒空）。
-			ID: terminal.ID, Name: "终端配置", Description: "用 Windows Terminal 打开某个配置（profile）",
+			// terminal：`_` 直接进入（不再参与裸查询，避免 profile 名与普通应用搜索混在一起）。
+			ID: terminal.ID, Name: i18n.L("终端配置", "Terminal"), Description: i18n.L("用 Windows Terminal 打开某个配置（profile）", "Open a Windows Terminal profile"),
 			Aliases:        []string{"wt", "terminal"},
-			DefaultEnabled: true, DefaultIsGlobal: true,
-			DefaultPrefix: "", DefaultActivation: engine.Direct,
+			DefaultEnabled: true, DefaultIsGlobal: false,
+			DefaultPrefix: "_", DefaultActivation: engine.Direct,
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
-			// workspaces：第五条 is_global、无前缀。数据源已接 `platform` 的编辑器历史只读
-			// 读取器（纯 Go SQLite：Zed db.sqlite + VS Code state.vscdb 最近工作区，Linux 亦可
-			// 测；无 env/未装时返回 nil 恒空）。
-			ID: workspaces.ID, Name: "工作区", Description: "Zed / VSCode 最近打开的工作区，用记录它的编辑器打开",
+			// workspaces：`{` 直接进入（同样退出裸查询）。
+			ID: workspaces.ID, Name: i18n.L("工作区", "Workspaces"), Description: i18n.L("Zed / VSCode 最近打开的工作区，用记录它的编辑器打开", "Recent Zed / VS Code workspaces, opened with the editor that recorded them"),
 			Aliases:        []string{"ws", "gzq"},
-			DefaultEnabled: true, DefaultIsGlobal: true,
-			DefaultPrefix: "", DefaultActivation: engine.Direct,
+			DefaultEnabled: true, DefaultIsGlobal: false,
+			DefaultPrefix: "{", DefaultActivation: engine.Direct,
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 	}
