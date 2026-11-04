@@ -255,3 +255,40 @@ func TestSettingsSidebarPluginItemJumps(t *testing.T) {
 		t.Errorf("应显示 Base64 插件卡片")
 	}
 }
+
+// TestSettingsAboutShowsProjectURL：关于页展示项目地址，且是可点击链接。
+func TestSettingsAboutShowsProjectURL(t *testing.T) {
+	cfg, _, err := buildPrefixTable()
+	if err != nil {
+		t.Fatalf("buildPrefixTable 失败：%v", err)
+	}
+	st := &appState{
+		cfg:              appcfg.Loaded{Hotkey: hotkeyShow, Theme: appcfg.ThemeSystem},
+		providers:        cfg,
+		pluginHotkeyErrs: map[string]string{},
+	}
+	s := &settingsWindow{section: settingsSectionGeneral, pluginsOpen: true}
+	st.settings = s
+	st.seedSettings(s)
+
+	tt := ui.NewTester(st.settingsView, 880, 600)
+	tt.Frame()
+	// 插件列表默认展开时「关于」在侧栏可视区外；先折叠插件分组再点。
+	if err := tt.Click("插件"); err != nil {
+		t.Fatalf("折叠插件分组失败：%v", err)
+	}
+	tt.Frame()
+	if tt.HasText("全部插件") {
+		t.Errorf("折叠后不应再显示插件子项")
+	}
+	if err := tt.Click("关于"); err != nil {
+		t.Fatalf("点击左侧关于失败：%v", err)
+	}
+	tt.Frame()
+	if !tt.HasText(projectURL) {
+		t.Errorf("关于页应显示项目地址 %q", projectURL)
+	}
+	if err := tt.Click(projectURL); err != nil {
+		t.Errorf("项目地址应可点击：%v", err)
+	}
+}

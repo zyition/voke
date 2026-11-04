@@ -65,6 +65,9 @@ func pluginIDFromNav(nav string) (string, bool) {
 	return nav[len(pluginNavPrefix):], true
 }
 
+// projectURL 是「关于」里展示的项目地址（GitHub 仓库）。
+const projectURL = "https://github.com/zyition/voke/"
+
 // buildVersion 是发布流水线通过 `-ldflags -X .../internal/app.buildVersion=<tag 版本>`
 // 注入的版本号（与安装器 -dVokeVersion 同源）。本地 / 未注入构建为空串。
 var buildVersion string
@@ -763,6 +766,7 @@ func (st *appState) settingsAbout(c *ui.Context) {
 		ui.Column(c).Gap(12).Children(func() {
 			settingsInfoRow(c, i18n.L("版本", "Version"), aboutVersion())
 			settingsInfoRow(c, i18n.L("配置文件", "Config file"), aboutConfigPath())
+			settingsLinkRow(c, i18n.L("项目地址", "Project"), projectURL)
 		})
 	})
 }
@@ -817,6 +821,15 @@ func settingsInfoRow(c *ui.Context, label, value string) {
 	ui.Row(c).Gap(16).AlignItems(ui.Start).Children(func() {
 		ui.Text(c, label).Width(100).Shrink(0).FontSize(theme.DetailSize + 1).TextColor(t.TextMuted)
 		ui.Text(c, value).Grow(1).FontSize(theme.DetailSize).TextColor(t.Text)
+	})
+}
+
+// settingsLinkRow 是带可点击链接的信息行（项目地址用；点击或回车打开浏览器）。
+func settingsLinkRow(c *ui.Context, label, url string) {
+	t := c.Theme()
+	ui.Row(c).Gap(16).AlignItems(ui.Start).Children(func() {
+		ui.Text(c, label).Width(100).Shrink(0).FontSize(theme.DetailSize + 1).TextColor(t.TextMuted)
+		ui.Link(c, url, url).Grow(1).FontSize(theme.DetailSize)
 	})
 }
 
