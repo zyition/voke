@@ -35,7 +35,9 @@ type PluginRow struct {
 // 行视觉与 apps 行同款（药丸 + 间隙 + 单击即执行，§7.5.1 / 决策⑤），差别只在
 // 没有图标：插件行没有磁盘图标可取（取图标要走 platform.AppIcon，背后是
 // Shell.FileIcon，白交一次平台调用）。
-func PickerResults(c *goui.Context, rows []PluginRow, chosen *int, ls *goui.ListState, hs *HoverSelect, onOpen func(), onPick func(i int), emptyText string) {
+// pointerMoved 是本帧指针是否真的移动过（app 侧逐帧采样屏幕指针）；
+// hover 即选中只在该信号为真时生效，打开面板 / 键盘输入不跟随鼠标。
+func PickerResults(c *goui.Context, rows []PluginRow, chosen *int, ls *goui.ListState, hs *HoverSelect, pointerMoved bool, onOpen func(), onPick func(i int), emptyText string) {
 	t := c.Theme()
 	ls.Selected = chosen
 	// 同 apps.go：不设 Key，避免 mygo 的 key-follow 在过滤词换掉旧选中行时
@@ -48,7 +50,7 @@ func PickerResults(c *goui.Context, rows []PluginRow, chosen *int, ls *goui.List
 			goui.Text(c, emptyText).TextColor(t.TextMuted).Padding(16)
 		}
 	})
-	applyHoverSelect(c, hs, hovered, chosen)
+	applyHoverSelect(c, hs, hovered, chosen, pointerMoved)
 	if list.Submitted() {
 		onOpen()
 	}

@@ -26,14 +26,14 @@ import (
 // 结果列表：虚拟化 List，只建可见行（ui/list.go:11-33）。
 //
 // 特效取舍（PoC 文档 §11.5，2026-10-16 用户逐条拍板）：
-//   - E5 hover：**不做自实现**。mygo 的 ui.List 其实自带行 hover
+//   - E5 hover：mygo 的 ui.List 自带行 hover
 //     （ui/list.go:599-602 给行节点挂 styleFn，命中且非选中时铺
 //     t.SurfaceHover；驱动重绘的机制在 ui/input.go:154-179
 //     setHover——指针一动就比对 hover 链、变了就 requestFrame，
-//     且只对带 flagHover 的元素要帧）。所以列表行的高亮 hover
-//     是白送的、无需指针轮询启发式；真正的成本在「键盘输入后
-//     抑制 hover」那套状态（要记住最后一次输入是键还是指针），
-//     收益不抵成本，本轮不做。
+//     且只对带 flagHover 的元素要帧）。所以行的高亮是白送的；
+//     但「hover 即选中」不能只看 Hovered()——面板打开、输入过滤都会
+//     让静止指针下的行号变化，故另吃 app 侧的 pointerMoved 信号
+//     （见 hoverselect.go）。
 //   - E10/E11/E12 动画（滚动/行入场出场/颜色过渡）：**砍掉**。
 //     硬阻塞是隐藏 ≠ 停帧：rt.next() 里只有
 //     `case moving && rt.host.occluded(): rt.held = true`
@@ -48,7 +48,10 @@ import (
 //     入场出场动画、不做颜色过渡。
 //   - E4 元素阴影：只留给 tooltip 与设置窗分组头，不给列表行，
 //     约束写在 Row() 的注释里。
-func AppsResults(c *goui.Context, m *panelstate.Model, icons *IconCache, ls *goui.ListState, hs *HoverSelect, onOpen func(), onClick func(i int)) {
+//
+// pointerMoved 是本帧指针是否真的移动过（app 侧逐帧采样屏幕指针）；
+// hover 即选中只在该信号为真时生效，打开面板 / 键盘输入不跟随鼠标。
+func AppsResults(c *goui.Context, m *panelstate.Model, icons *IconCache, ls *goui.ListState, hs *HoverSelect, pointerMoved bool, onOpen func(), onClick func(i int)) {
 	t := c.Theme()
 	ls.Selected = &m.Chosen
 	// 不设 ls.Key：mygo 的 ListState.sync 会按上一帧选中项的 Key 在新结果里
@@ -62,7 +65,7 @@ func AppsResults(c *goui.Context, m *panelstate.Model, icons *IconCache, ls *gou
 			goui.Text(c, EmptyHint(m)).TextColor(t.TextMuted).Padding(16)
 		}
 	})
-	applyHoverSelect(c, hs, hovered, &m.Chosen)
+	applyHoverSelect(c, hs, hovered, &m.Chosen, pointerMoved)
 	// 双击与 Enter 都收敛到同一条路（list.Submitted）。单击执行已改到
 	// Row() 内部的 Button.Clicked()，见该处「单击即执行」的注释。
 	if list.Submitted() {

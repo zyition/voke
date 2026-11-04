@@ -146,6 +146,13 @@ type appState struct {
 	// trayLastClick 是托盘左键上一次点击的时刻：mygo 原生只上报单击（wmLButtonUp），
 	// 双击表现为两次 Clicked；据此在系统双击时间窗内识别双击并唤出面板。只主线程读写。
 	trayLastClick time.Time
+	// cursorPoint 是屏幕指针采样入口（ready() 接 platform.CursorScreenPoint）；
+	// nil = 不采样（headless 测试），此时 pointerMoved 恒 false。
+	cursorPoint func() (x, y int)
+	// pointer / pointerMoved 是「指针这一帧真的动过」的跨帧状态与当帧信号，
+	// 供列表的 hover 即选中判定用（见 pointer.go 与 ui/hoverselect.go）。
+	pointer      pointerSample
+	pointerMoved bool
 	// shownOnce 保证「面板首次唤起」只打一次（诊断脚手架，2026-10-16
 	// 内存增长定因加）：首帧会真正构建 view 树、解码可见行图标，是内存
 	// 从地板往上跳的第一个可归因点，之后的唤起不再重复打点。
@@ -214,6 +221,10 @@ func (st *appState) ready() {
 	// 防止长会话里不同 exe 路径把堆无限推高；隐藏 10s 后另裁到 64 条。
 	// 只主线程读写，见 internal/ui/iconcache.go。
 	st.icons = appui.NewIconCache()
+	// 指针采样入口：列表的「hover 即选中」只在指针真的动过时才跟随
+	// （见 pointer.go 与 internal/ui/hoverselect.go）。必须在建窗之前接上，
+	// 首帧起就有信号。
+	st.cursorPoint = platform.CursorScreenPoint
 	// 剪贴板内存历史：条数上限来自顶层 `[clipboard] max_entries`，未写则默认 100。
 	st.hist = cliphist.New(clipboardMaxEntries(loaded))
 	// 已落地 provider 注册表 + 进程内频率表（装配一次）。剪贴板 provider 接
@@ -434,6 +445,11 @@ func (st *appState) showPanelKeep() {
 // 已可见时不切会话（只重新定位、聚焦、refreshOnShow）。
 func (st *appState) showPanelEntry(entry panelEntry) {
 	if !st.panel.IsVisible() {
+		// 从隐藏变可见：丢掉上一轮的指针基准。唤起前后指针位置可能相差很大，
+		// 不 reset 的话首帧会被判成「指针正在移动」，把选中跳到鼠标所在行
+		// （用户反馈的「打开面板就跟随鼠标」就是这个）。
+		st.pointer.reset()
+		st.pointerMoved = false
 		switch entry.kind {
 		case entryPlugin:
 			st.preparePluginSession(entry.pluginID)

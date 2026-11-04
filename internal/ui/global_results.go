@@ -23,8 +23,9 @@ type GlobalRow struct {
 }
 
 // GlobalResults 渲染合并列表；ls/chosen 驱动单列表键盘导航，onOpen=Enter，
-// onClick(i)=单击，onAction(i,id)=行尾操作图标被点击，hs=hover 即选中状态。
-func GlobalResults(c *goui.Context, rows []GlobalRow, chosen *int, ls *goui.ListState, hs *HoverSelect, icons *IconCache, onOpen func(), onClick func(i int), onAction func(i int, id string)) {
+// onClick(i)=单击，onAction(i,id)=行尾操作图标被点击，hs=hover 即选中状态，
+// pointerMoved=本帧指针是否真的移动过（只在它为真时跟随 hover）。
+func GlobalResults(c *goui.Context, rows []GlobalRow, chosen *int, ls *goui.ListState, hs *HoverSelect, pointerMoved bool, icons *IconCache, onOpen func(), onClick func(i int), onAction func(i int, id string)) {
 	ls.Selected = chosen
 	ls.Key = func(i int) any { return i }
 	ls.Label = func(i int) string { return rows[i].Title }
@@ -38,7 +39,7 @@ func GlobalResults(c *goui.Context, rows []GlobalRow, chosen *int, ls *goui.List
 	list := goui.List(c, ls, len(rows), func(i int) {
 		globalRow(c, rows[i], *chosen, maxActions, icons, onClick, onAction, i, &hovered)
 	}).Grow(1).Padding(6)
-	applyHoverSelect(c, hs, hovered, chosen)
+	applyHoverSelect(c, hs, hovered, chosen, pointerMoved)
 	if list.Submitted() {
 		onOpen()
 	}

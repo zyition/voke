@@ -53,6 +53,10 @@ import (
 // 的具体过程都在 internal/ui。键盘路由 / 输入框 / 令牌 / 提示行的布局与原 view() 逐字
 // 相同，只是搬进了 ui.View；副作用经回调回到本文件的执行器。
 func (st *appState) view(c *ui.Context) {
+	// 每帧先采一次指针位置：列表的 hover 即选中只在「指针这一帧真的动过」时
+	// 跟随（见 pointer.go）。必须在这一帧构建列表之前刷新，renderResults 读到的
+	// 才是同一帧的信号。
+	st.samplePointer()
 	appui.View(c, st.viewInput())
 }
 
@@ -96,19 +100,19 @@ func (st *appState) renderResults(c *ui.Context) {
 		for i, r := range st.pickerRows {
 			rows[i] = appui.PluginRow{ID: r.ID, Name: r.Name, Description: r.Description}
 		}
-		appui.PickerResults(c, rows, &st.pickerChosen, &st.pickerList, &st.pickerHover, st.open, st.pickRow, st.pickerHint())
+		appui.PickerResults(c, rows, &st.pickerChosen, &st.pickerList, &st.pickerHover, st.pointerMoved, st.open, st.pickRow, st.pickerHint())
 	case st.providerActive():
 		// 已落地 provider 的插件态：出 providers.RunOne 的排序结果（provRows 在
 		// applyEngineState 刷新）；空态文案 provHint（解码失败提示 / 用法占位）。
-		appui.ProviderResults(c, st.provRows, &st.provChosen, &st.provList, &st.provHover, st.icons, st.open, st.providerClick, st.providerAction, st.provHint)
+		appui.ProviderResults(c, st.provRows, &st.provChosen, &st.provList, &st.provHover, st.pointerMoved, st.icons, st.open, st.providerClick, st.providerAction, st.provHint)
 	case st.globalActive():
 		// 全局搜索且命中了 apps 以外的全局插件组 → 合并分组列表（apps 组在最前）。
-		appui.GlobalResults(c, st.globalView(), &st.globalChosen, &st.globalList, &st.globalHover, st.icons, st.open, st.clickGlobal, st.globalAction)
+		appui.GlobalResults(c, st.globalView(), &st.globalChosen, &st.globalList, &st.globalHover, st.pointerMoved, st.icons, st.open, st.clickGlobal, st.globalAction)
 	case st.pluginPending():
 		// 表里有、既非 apps 也未落地实现（不在 pluginReg）的插件：明说未接入。
 		appui.PendingResults(c, st.pendingHint())
 	default:
-		appui.AppsResults(c, &st.model, st.icons, &st.list, &st.appsHover, st.open, st.clickRow)
+		appui.AppsResults(c, &st.model, st.icons, &st.list, &st.appsHover, st.pointerMoved, st.open, st.clickRow)
 	}
 }
 

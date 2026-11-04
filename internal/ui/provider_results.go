@@ -37,8 +37,10 @@ type ProviderRow struct {
 //     按条目类型给出，UI 不判断「图片没有纯文本粘贴」这类语义；
 //   - icons：与 apps 行共用的进程内图标缓存（按 Match.Icon 里的路径懒取；纯计算型 provider
 //     的 Match.Icon 为空串 → 该行不画图标，布局与原「标题+副标题」逐字不变）；
-//   - hs：hover 即选中的差分状态（调用方每列表一份）。
-func ProviderResults(c *goui.Context, rows []providers.RankedMatch, chosen *int, ls *goui.ListState, hs *HoverSelect, icons *IconCache, onOpen func(), onClick func(i int), onAction func(i int, id string), hintText string) {
+//   - hs：hover 即选中的差分状态（调用方每列表一份）；
+//   - pointerMoved：本帧指针是否真的移动过（app 侧逐帧采样屏幕指针），
+//     hover 即选中只在它为真时生效，打开面板 / 键盘输入不跟随鼠标。
+func ProviderResults(c *goui.Context, rows []providers.RankedMatch, chosen *int, ls *goui.ListState, hs *HoverSelect, pointerMoved bool, icons *IconCache, onOpen func(), onClick func(i int), onAction func(i int, id string), hintText string) {
 	t := c.Theme()
 	ls.Selected = chosen
 	ls.Key = func(i int) any { return i }
@@ -57,7 +59,7 @@ func ProviderResults(c *goui.Context, rows []providers.RankedMatch, chosen *int,
 			goui.Text(c, hintText).TextColor(t.TextMuted).Padding(16)
 		}
 	})
-	applyHoverSelect(c, hs, hovered, chosen)
+	applyHoverSelect(c, hs, hovered, chosen, pointerMoved)
 	if list.Submitted() {
 		onOpen()
 	}
