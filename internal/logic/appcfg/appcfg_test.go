@@ -3,9 +3,11 @@
 package appcfg
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
+	"voke/internal/logic/charset"
 	"voke/internal/logic/config"
 	"voke/internal/logic/engine"
 	"voke/internal/logic/frequency"
@@ -313,5 +315,71 @@ func TestClipboardMaxEntriesRoundtrip(t *testing.T) {
 	}
 	if strings.Contains(string(data), "[clipboard]") {
 		t.Fatalf("MaxEntries=0 时不应写 [clipboard]：\n%s", data)
+	}
+}
+
+func TestCharsetRoundtrip(t *testing.T) {
+	specs := []charset.Spec{
+		{Name: "小写十六进制", Pattern: "a-f0-9", Enabled: true, Length: 32},
+		{Name: "大写", Pattern: "A-Z", Enabled: false},
+	}
+	defaultLength := 24
+	data, err := Encode(Top{}, []config.UserOverride{{
+		ID: "random", DefaultLength: &defaultLength, Charsets: specs,
+	}})
+	if err != nil {
+		t.Fatalf("Encode 失败：%v", err)
+	}
+	if !strings.Contains(string(data), "[[providers.random.charsets]]") ||
+		!strings.Contains(string(data), "default_length = 24") ||
+		!strings.Contains(string(data), "length = 32") {
+		t.Fatalf("字符集 / 默认长度应落成 TOML：\n%s", data)
+	}
+	back, err := FromTOML(data)
+	if err != nil {
+		t.Fatalf("FromTOML 失败：%v", err)
+	}
+	if len(back.Overrides) != 1 || !reflect.DeepEqual(back.Overrides[0].Charsets, specs) {
+		t.Errorf("字符集往返不符：%+v", back.Overrides)
+	}
+	if l := back.Overrides[0].DefaultLength; l == nil || *l != 24 {
+		t.Errorf("default_length 往返不符：%v", l)
+	}
+}
+
+func TestCharsetEnabledDefaultsTrue(t *testing.T) {
+	back, err := FromTOML([]byte("[providers.random]\n[[providers.random.charsets]]\nname = \"hex\"\npattern = \"a-f\"\n"))
+	if err != nil {
+		t.Fatalf("FromTOML 失败：%v", err)
+	}
+	got := back.Overrides[0].Charsets
+	if len(got) != 1 || !got[0].Enabled || got[0].Length != 0 {
+		t.Errorf("缺省 enabled 应按 true、length 按 0（跟随全局）：%+v", got)
+	}
+	if back.Overrides[0].DefaultLength != nil {
+		t.Errorf("没写 default_length 时应保持 nil：%+v", back.Overrides[0].DefaultLength)
+	}
+	if back2, _ := FromTOML([]byte("hotkey = \"ctrl+space\"\n")); back2.Overrides != nil {
+		t.Errorf("没写 charsets 时应保持 nil（回落默认）：%+v", back2.Overrides)
+	}
+}
+
+func TestMergeAppliesCharsetOverride(t *testing.T) {
+	descs := []config.Descriptor{{
+		ID: "random", Name: "随机值", DefaultEnabled: true,
+		DefaultActivation: engine.Direct, DefaultWeight: 1, DefaultCount: 5, DefaultLength: 16,
+		DefaultCharsets: []charset.Spec{{Name: "默认", Pattern: "a-z", Enabled: true}},
+	}}
+	data := []byte("[providers.random]\ndefault_length = 24\n[[providers.random.charsets]]\nname = \"hex\"\npattern = \"a-f\"\nlength = 8\n")
+	_, cfg, _, err := Merge(descs, data)
+	if err != nil {
+		t.Fatalf("Merge 失败：%v", err)
+	}
+	p, _ := cfg.Lookup("random")
+	if p.DefaultLength != 24 {
+		t.Errorf("default_length 应覆盖为 24：%d", p.DefaultLength)
+	}
+	if len(p.Charsets) != 1 || p.Charsets[0].Name != "hex" || !p.Charsets[0].Enabled || p.Charsets[0].Length != 8 {
+		t.Errorf("用户字符集应整份替换默认值：%+v", p.Charsets)
 	}
 }

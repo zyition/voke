@@ -128,6 +128,68 @@ func TestPrefixSettingsError(t *testing.T) {
 	}
 }
 
+// TestCharsetSettingsError 锁随机值字符集的保存前校验：空列表、空名称、重名、
+// 坏正则都在落盘前拦下；大小写不同的名称是合法的两套。
+func TestCharsetSettingsError(t *testing.T) {
+	valid := []providerEdit{{id: "random", defaultLength: 16, charsets: []charsetEdit{
+		{name: "hex", pattern: "a-f", enabled: true},
+		{name: "Hex", pattern: "A-F", enabled: true},
+	}}}
+	if msg := charsetSettingsError(valid); msg != "" {
+		t.Fatalf("合法字符集不应报错：%q", msg)
+	}
+
+	cases := []struct {
+		name string
+		edit providerEdit
+		want string
+	}{
+		{"空列表", providerEdit{id: "random", defaultLength: 16}, "至少需要保留一个"},
+		{"默认长度越界", providerEdit{id: "random", defaultLength: 0, charsets: []charsetEdit{{name: "hex", pattern: "a-f"}}}, "默认长度"},
+		{"空名称", providerEdit{id: "random", defaultLength: 16, charsets: []charsetEdit{{pattern: "a-z"}}}, "名称不能为空"},
+		{"重名", providerEdit{id: "random", defaultLength: 16, charsets: []charsetEdit{
+			{name: "hex", pattern: "a-f"}, {name: "hex", pattern: "A-F"},
+		}}, "重复"},
+		{"坏正则", providerEdit{id: "random", defaultLength: 16, charsets: []charsetEdit{{name: "bad", pattern: "z-a"}}}, "正则无效"},
+		{"字符集长度越界", providerEdit{id: "random", defaultLength: 16, charsets: []charsetEdit{{name: "bad", pattern: "a-f", length: 999}}}, "长度必须"},
+	}
+	for _, tc := range cases {
+		if msg := charsetSettingsError([]providerEdit{tc.edit}); !strings.Contains(msg, tc.want) {
+			t.Errorf("%s：错误应包含 %q，实得 %q", tc.name, tc.want, msg)
+		}
+	}
+}
+
+// TestProviderOverridesIncludesRandomCharsets：设置页保存时字符集会整份写回（名称 /
+// 正则裁剪首尾空白），非随机插件不受影响。
+func TestProviderOverridesIncludesRandomCharsets(t *testing.T) {
+	edits := []providerEdit{
+		{id: "random", enabled: true, activation: "直接", defaultLength: 24, charsets: []charsetEdit{
+			{name: " hex ", pattern: " a-f ", length: 8, enabled: false},
+			{name: "跟随", pattern: "A-F", length: 0, enabled: true},
+		}},
+		{id: "base64", enabled: true, activation: "间接"},
+	}
+	byID := map[string]config.UserOverride{}
+	for _, ov := range providerOverrides(edits) {
+		byID[ov.ID] = ov
+	}
+	got := byID["random"].Charsets
+	if len(got) != 2 || got[0].Name != "hex" || got[0].Pattern != "a-f" ||
+		got[0].Length != 8 || got[0].Enabled {
+		t.Errorf("随机值字符集应裁剪后写回：%+v", got)
+	}
+	if got[1].Length != 0 {
+		t.Errorf("长度 0 应原样写回（跟随全局）：%+v", got[1])
+	}
+	if l := byID["random"].DefaultLength; l == nil || *l != 24 {
+		t.Errorf("随机值默认长度应写回：%v", l)
+	}
+	if byID["base64"].Charsets != nil {
+		t.Errorf("非随机插件不应写 charsets：%+v", byID["base64"].Charsets)
+	}
+}
+
 // TestSeedSettingsDefaultHotkey：st.cfg.Hotkey 空（无配置文件）→ 回落 hotkeyShow。
 func TestSeedSettingsDefaultHotkey(t *testing.T) {
 	st := &appState{}
@@ -250,6 +312,46 @@ func TestSettingsSidebarPluginItemJumps(t *testing.T) {
 	}
 	if !tt.HasText("base64 编解码（加密 / 解密）") || !tt.HasText("参与全局搜索") {
 		t.Errorf("应显示 Base64 插件卡片且从顶部开始")
+	}
+}
+
+// TestSettingsRandomCharsetEditorRenders：随机值插件卡片应有字符集编辑器（名称 / 正则 /
+// 添加按钮），且默认三套预设从配置 seed 进来。
+func TestSettingsRandomCharsetEditorRenders(t *testing.T) {
+	cfg, _, err := buildPrefixTable()
+	if err != nil {
+		t.Fatalf("buildPrefixTable 失败：%v", err)
+	}
+	st := &appState{
+		cfg:              appcfg.Loaded{Hotkey: hotkeyShow, Theme: appcfg.ThemeSystem},
+		providers:        cfg,
+		pluginHotkeyErrs: map[string]string{},
+	}
+	s := &settingsWindow{section: settingsSectionGeneral, pluginsOpen: true}
+	st.settings = s
+	st.seedSettings(s)
+
+	tt := ui.NewTester(st.settingsView, 880, 600)
+	tt.Frame()
+	if err := tt.Click("随机值"); err != nil {
+		t.Fatalf("点击左侧随机值失败：%v", err)
+	}
+	tt.Frame()
+	tt.Frame()
+	for _, want := range []string{"字符集", "添加字符集"} {
+		if !tt.HasText(want) {
+			t.Errorf("随机值卡片应显示 %q", want)
+		}
+	}
+	idx := providerEditIndex(s.edits, "random")
+	if idx < 0 || len(s.edits[idx].charsets) != 3 {
+		t.Fatalf("随机值应 seed 三套默认字符集：%+v", s.edits)
+	}
+	if s.edits[idx].defaultLength != 16 {
+		t.Errorf("默认长度应 seed 为 16：%v", s.edits[idx].defaultLength)
+	}
+	if s.edits[idx].charsets[2].name != "十六进制" || s.edits[idx].charsets[2].length != 32 {
+		t.Errorf("十六进制预设应为 32 位：%+v", s.edits[idx].charsets)
 	}
 }
 

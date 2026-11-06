@@ -443,6 +443,13 @@ func (st *appState) breadcrumbs() []appui.Crumb {
 			label = st.providerName(sc.PluginID)
 		case engine.SubMode:
 			label = sc.SubMode // 子命令标识（enc/dec 等），图标沿用所属插件
+			if st.pluginReg != nil {
+				if p, ok := st.pluginReg.Get(sc.PluginID); ok {
+					if labeler, ok := p.(providers.SubModeLabeler); ok {
+						label = labeler.SubModeLabel(sc.SubMode)
+					}
+				}
+			}
 		}
 		out = append(out, appui.Crumb{Label: label, ProviderID: pid, Current: i == len(scs)-1})
 	}

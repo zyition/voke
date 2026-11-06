@@ -16,6 +16,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -107,7 +108,8 @@ func builtinDescriptors() []config.Descriptor {
 			Aliases:        []string{"r", "sj", "rand"},
 			DefaultEnabled: true, DefaultIsGlobal: false,
 			DefaultPrefix: "@r", DefaultActivation: engine.Indirect,
-			DefaultWeight: 1.0, DefaultCount: 5,
+			DefaultWeight: 1.0, DefaultCount: 5, DefaultLength: 16,
+			DefaultCharsets: random.DefaultCharsets(),
 		},
 		{
 			// clipboard：`@c` 二级前缀、Direct（敲 `@c` 即进入）。历史数据只在内存，
@@ -286,6 +288,8 @@ func applyProviderConfigs(cfg config.Configs, reg *providers.Registry) {
 		p.SetConfig(providers.ProviderConfig{
 			Enabled: c.Enabled, IsGlobal: c.IsGlobal, Weight: c.Weight,
 			Prefix: c.Prefix, Activation: c.Activation.String(), Count: c.Count,
+			DefaultLength: c.DefaultLength,
+			Charsets:      c.Charsets,
 		})
 	}
 }
@@ -596,9 +600,57 @@ func (st *appState) reloadConfigs() {
 	if err != nil {
 		log.Printf("voke 重载配置退回纯全局模式：%v", err)
 	}
+	old := st.providers
 	applyProviderConfigs(cfg, st.pluginReg) // 下发到当前 live 注册表（appState 持有）
 	st.cfg, st.providers, st.table = loaded, cfg, table
+	st.invalidateChangedProviderResults(changedProviderIDs(old, st.providers))
 	st.syncClipboardWatch() // 剪贴板插件被停用后，后台轮询随即空转
+}
+
+// changedProviderIDs 返回新旧归一配置里 ProviderConfig 发生变化的插件 id。
+// 用来精确失效受影响的 provider 结果缓存，不误伤无关插件（例如改 base64 时
+// 不该重掷正在看的随机值）。
+func changedProviderIDs(old, next config.Configs) map[string]bool {
+	oldByID := make(map[string]config.ProviderConfig, len(old.Providers))
+	for _, p := range old.Providers {
+		oldByID[p.ID] = p
+	}
+	nextByID := make(map[string]config.ProviderConfig, len(next.Providers))
+	for _, p := range next.Providers {
+		nextByID[p.ID] = p
+	}
+	changed := make(map[string]bool)
+	for id, oldCfg := range oldByID {
+		newCfg, ok := nextByID[id]
+		if !ok || !reflect.DeepEqual(oldCfg, newCfg) {
+			changed[id] = true
+		}
+	}
+	for id := range nextByID {
+		if _, ok := oldByID[id]; !ok {
+			changed[id] = true
+		}
+	}
+	return changed
+}
+
+// invalidateChangedProviderResults 在插件配置变化后丢掉该 provider 的结果缓存。
+//
+// 重掷类 provider（random / uuid / timestamp）平时靠「输入指纹没变」跳过重查，
+// 避免唤回时把用户正要复制的值换掉；但字符集 / 条数这类配置改动后，旧结果和
+// 一级列表本身已经过期，必须让下一次 refreshOnShow 重新查询。只清指纹，不动
+// 作用域栈与查询词，所以用户仍停在原来的插件 / 字符集层级。
+func (st *appState) invalidateChangedProviderResults(changed map[string]bool) {
+	if changed[st.engineState.PluginID()] {
+		st.provLastKey = ""
+	}
+	if st.mainSession.regenValid && changed[st.mainSession.state.PluginID()] {
+		st.mainSession.regenValid = false
+		st.mainSession.regenRows = nil
+		st.mainSession.regenHint = ""
+		st.mainSession.regenLastKey = ""
+		st.mainSession.regenChosen = 0
+	}
 }
 
 // pluginRow 是 picker 模式列表的一行（id 用于 SelectPlugin，两行文本用于渲染）。

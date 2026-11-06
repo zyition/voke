@@ -30,6 +30,7 @@ import (
 	"testing"
 	"unicode"
 
+	"voke/internal/logic/charset"
 	"voke/internal/logic/config"
 	"voke/internal/logic/engine"
 )
@@ -127,6 +128,12 @@ func TestBuildPrefixTableHappyPath(t *testing.T) {
 			Aliases: []string{"r", "sj", "rand"},
 			Enabled: true, IsGlobal: false,
 			Prefix: "@r", Activation: engine.Indirect, Weight: 1.0, Count: 5,
+			DefaultLength: 16,
+			Charsets: []charset.Spec{
+				{Name: "字母 + 数字", Pattern: "a-zA-Z0-9", Enabled: true},
+				{Name: "含特殊字符", Pattern: `a-zA-Z0-9!@#$%^&*\-_=+`, Enabled: true},
+				{Name: "十六进制", Pattern: "0-9a-f", Enabled: true, Length: 32},
+			},
 		},
 		{
 			ID: "clipboard", Name: "剪贴板", Description: "剪贴板历史（文本 / 富文本 / 图片）",

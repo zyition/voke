@@ -1,6 +1,6 @@
-// random provider 测试：以 `voke-core/random.rs` 行为为 oracle——一级纯选择器（空→
-// 四方向、非空→提示）、二级首条「重新生成」+ count 条 Copy、范围 / 长度解析、
-// 固定种子可复现、每次查询重掷。范围越界与非法参数各归其位。
+// random provider 测试：一级纯选择器（空 → 随机整数 + 启用字符集、非空 → 提示）、
+// 二级首条「重新生成」+ count 条 Copy、范围 / 长度解析、固定种子可复现、每次查询重掷。
+// 字符串子模式由配置里的字符集驱动（cs:<名称>），默认预设与 Descriptor 共用同一份定义。
 package random
 
 import (
@@ -8,7 +8,15 @@ import (
 	"strings"
 	"testing"
 
+	"voke/internal/logic/charset"
 	"voke/internal/providers"
+)
+
+const (
+	nameAlnum    = "字母 + 数字"
+	nameSymbols  = "含特殊字符"
+	nameHex      = "十六进制"
+	charsSymbols = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*-_=+"
 )
 
 func seeded() *Provider { return newSeeded(2024) }
@@ -37,6 +45,17 @@ func titles(ms []providers.Match) []string {
 	return out
 }
 
+func alphabetOf(t *testing.T, p *Provider, name string) []rune {
+	t.Helper()
+	for _, cs := range p.charsets {
+		if cs.name == name {
+			return cs.alphabet
+		}
+	}
+	t.Fatalf("找不到字符集 %q", name)
+	return nil
+}
+
 func TestMetadata(t *testing.T) {
 	p := seeded()
 	if p.ID() != "random" || p.Name() != "随机值" || p.Description() != "随机整数 / 随机字符串" {
@@ -49,15 +68,27 @@ func TestMetadata(t *testing.T) {
 	if c.Prefix != "@r" || c.Activation != "Indirect" || c.Count != 5 {
 		t.Errorf("配置不符（@r/Indirect/count=5）：%+v", c)
 	}
+	if c.DefaultLength != 16 {
+		t.Errorf("插件级默认长度应为 16：%d", c.DefaultLength)
+	}
+	if len(c.Charsets) != 3 || c.Charsets[0].Name != nameAlnum || c.Charsets[2].Pattern != "0-9a-f" {
+		t.Errorf("默认字符集不符：%+v", c.Charsets)
+	}
+	if c.Charsets[0].Length != 0 || c.Charsets[2].Length != 32 {
+		t.Errorf("字符集默认长度应：前两套跟随全局、十六进制 32：%+v", c.Charsets)
+	}
 }
 
-func TestLevel1EmptyListsFourTypes(t *testing.T) {
+func TestLevel1EmptyListsIntAndEnabledCharsets(t *testing.T) {
 	hits := rand(seeded(), "")
 	if len(hits) != 4 {
-		t.Fatalf("一级空输入应 4 个方向：%v", titles(hits))
+		t.Fatalf("一级空输入应 1 整数 + 3 字符集：%v", titles(hits))
 	}
 	want := []struct{ title, mode string }{
-		{"随机整数", "int"}, {"随机字符串", "str"}, {"含特殊字符", "sym"}, {"十六进制", "hex"},
+		{"随机整数", "int"},
+		{nameAlnum, "cs:" + nameAlnum},
+		{nameSymbols, "cs:" + nameSymbols},
+		{nameHex, "cs:" + nameHex},
 	}
 	for i, h := range hits {
 		if h.Title != want[i].title {
@@ -99,8 +130,8 @@ func TestLevel2IntEmptyGeneratesCount(t *testing.T) {
 		if h.Action.Kind != providers.ActionCopy {
 			t.Fatalf("结果行必须 Copy：%+v", h.Action)
 		}
-		var v int64
-		if _, err := parseInto(h.Action.Text, &v); err != nil {
+		v, err := strconv.ParseInt(h.Action.Text, 10, 64)
+		if err != nil {
 			t.Fatalf("整数标题应可解析：%q", h.Action.Text)
 		}
 		if v < 1 || v > 100 {
@@ -128,8 +159,8 @@ func TestLevel2IntParamUsesRange(t *testing.T) {
 		t.Fatalf("1 重新生成 + 3 结果：%v", titles(hits))
 	}
 	for _, h := range hits[1:] {
-		var v int64
-		if _, err := parseInto(h.Title, &v); err != nil {
+		v, err := strconv.ParseInt(h.Title, 10, 64)
+		if err != nil {
 			t.Fatalf("标题应为整数：%q", h.Title)
 		}
 		if v < 5 || v > 10 {
@@ -141,30 +172,29 @@ func TestLevel2IntParamUsesRange(t *testing.T) {
 	}
 }
 
-func TestLevel2StringParamUsesLength(t *testing.T) {
+func TestLevel2CharsetParamUsesLength(t *testing.T) {
 	p := withCount(2)
-	for _, tc := range []struct{ mode, q string }{{"str", "24"}, {"sym", "20"}, {"hex", "40"}} {
-		hits := randMode(p, tc.q, tc.mode)
+	for _, tc := range []struct {
+		name  string
+		valid func(string) bool
+	}{
+		{nameAlnum, isAlnum},
+		{nameSymbols, func(s string) bool { return allIn(s, charsSymbols) }},
+		{nameHex, isHex},
+	} {
+		hits := randMode(p, "24", "cs:"+tc.name)
 		if len(hits) != 3 {
-			t.Fatalf("%s/%s 应 3 条：%v", tc.mode, tc.q, titles(hits))
+			t.Fatalf("%s 应 3 条：%v", tc.name, titles(hits))
 		}
 		for _, h := range hits[1:] {
-			if len(h.Title) != mustInt(tc.q) {
-				t.Errorf("%s 长度应 %s：%q", tc.mode, tc.q, h.Title)
+			if len(h.Title) != 24 {
+				t.Errorf("%s 长度应 24：%q", tc.name, h.Title)
 			}
-			switch tc.mode {
-			case "str":
-				if !isAlnum(h.Title) {
-					t.Errorf("str 应全字母数字：%q", h.Title)
-				}
-			case "sym":
-				if !allIn(h.Title, charsSym) {
-					t.Errorf("sym 应全在符号表：%q", h.Title)
-				}
-			case "hex":
-				if !isHex(h.Title) {
-					t.Errorf("hex 应全十六进制：%q", h.Title)
-				}
+			if !tc.valid(h.Title) {
+				t.Errorf("%s 生成了字符集之外的字符：%q", tc.name, h.Title)
+			}
+			if !strings.Contains(h.Subtitle, tc.name) {
+				t.Errorf("副标题应带字符集名称 %q：%q", tc.name, h.Subtitle)
 			}
 		}
 	}
@@ -172,7 +202,7 @@ func TestLevel2StringParamUsesLength(t *testing.T) {
 
 func TestLevel2ParseFailureHint(t *testing.T) {
 	p := seeded()
-	for _, tc := range []struct{ mode, q string }{{"int", "abc"}, {"str", "abc"}, {"hex", "x:y"}} {
+	for _, tc := range []struct{ mode, q string }{{"int", "abc"}, {"cs:" + nameHex, "abc"}, {"cs:" + nameHex, "x:y"}} {
 		hits := randMode(p, tc.q, tc.mode)
 		if len(hits) != 2 {
 			t.Fatalf("%s/%s 应 2 条：%v", tc.mode, tc.q, titles(hits))
@@ -186,27 +216,111 @@ func TestLevel2ParseFailureHint(t *testing.T) {
 	}
 }
 
+func TestUnknownSubModeShowsUnavailableHint(t *testing.T) {
+	p := seeded()
+	for _, mode := range []string{"cs:不存在", "str", "sym", "hex"} {
+		hits := randMode(p, "", mode)
+		if len(hits) != 1 || !hits[0].IsHint() || hits[0].Title != "字符集不可用" {
+			t.Errorf("未知子模式 %q 应给不可用提示：%v", mode, titles(hits))
+		}
+	}
+}
+
 func TestPlaceholder(t *testing.T) {
 	p := seeded()
 	if got := p.Placeholder(""); got != "选择随机类型" {
 		t.Errorf("一级占位符 = %q", got)
 	}
 	if !strings.Contains(p.Placeholder("int"), "范围") ||
-		!strings.Contains(p.Placeholder("str"), "长度") ||
-		!strings.Contains(p.Placeholder("hex"), "64") {
-		t.Error("二级占位符应随类型变化")
+		!strings.Contains(p.Placeholder("cs:"+nameAlnum), "16") ||
+		!strings.Contains(p.Placeholder("cs:"+nameHex), "32") {
+		t.Error("二级占位符应随类型与默认长度变化")
 	}
 }
 
-func TestSymbolAndHexAlphabets(t *testing.T) {
+func TestDefaultLengthFallback(t *testing.T) {
 	p := seeded()
-	sym := p.randomStringWith(256, alphaSym)
-	if !strings.ContainsAny(sym, "!@#$%^&*-_=+") {
-		t.Errorf("256 位符号串应至少含一个特殊字符：%q", sym)
+	cfg := p.Config()
+	cfg.DefaultLength = 24
+	cfg.Charsets = []charset.Spec{
+		{Name: "跟随全局", Pattern: "a-z", Enabled: true},
+		{Name: "自有长度", Pattern: "A-Z", Enabled: true, Length: 8},
 	}
-	hx := p.randomStringWith(256, alphaHex)
-	if !isHex(hx) {
-		t.Errorf("十六进制表不含 g-z：%q", hx)
+	p.SetConfig(cfg)
+
+	hits := rand(p, "")
+	if len(hits) != 3 {
+		t.Fatalf("应 1 整数 + 2 字符集：%v", titles(hits))
+	}
+	if !strings.Contains(hits[1].Subtitle, "24") || !strings.Contains(hits[2].Subtitle, "8") {
+		t.Errorf("一级副标题应显示各自生效长度：%q / %q", hits[1].Subtitle, hits[2].Subtitle)
+	}
+
+	follow := randMode(p, "", "cs:跟随全局")
+	if len(follow[1].Title) != 24 {
+		t.Errorf("未配置长度的字符集应跟随插件默认 24：%q", follow[1].Title)
+	}
+	own := randMode(p, "", "cs:自有长度")
+	if len(own[1].Title) != 8 {
+		t.Errorf("字符集自有长度应优先：%q", own[1].Title)
+	}
+
+	cfg.DefaultLength = 0 // 直接 SetConfig 时缺失 / 越界 → 回落内置 16
+	p.SetConfig(cfg)
+	if got := randMode(p, "", "cs:跟随全局")[1].Title; len(got) != 16 {
+		t.Errorf("全局长度缺失时应回落 16：%q", got)
+	}
+}
+
+func TestDefaultHexUses32(t *testing.T) {
+	hits := randMode(seeded(), "", "cs:"+nameHex)
+	if len(hits[1].Title) != 32 {
+		t.Errorf("十六进制默认应 32 位，实得 %d：%q", len(hits[1].Title), hits[1].Title)
+	}
+}
+
+func TestCustomCharsetsDriveValues(t *testing.T) {
+	p := seeded()
+	cfg := p.Config()
+	cfg.Charsets = []charset.Spec{
+		{Name: "大写十六进制", Pattern: "A-F0-9", Enabled: true},
+		{Name: "小写十六进制", Pattern: "a-f0-9", Enabled: true},
+		{Name: "停用项", Pattern: "xyz", Enabled: false},
+	}
+	p.SetConfig(cfg)
+
+	hits := rand(p, "")
+	if len(hits) != 3 {
+		t.Fatalf("应 1 整数 + 2 个启用字符集：%v", titles(hits))
+	}
+	if hits[1].Title != "大写十六进制" || hits[2].Title != "小写十六进制" {
+		t.Errorf("字符集顺序 / 停用过滤错误：%v", titles(hits))
+	}
+
+	upper := randMode(p, "32", "cs:大写十六进制")
+	if !allIn(upper[1].Title, "ABCDEF0123456789") {
+		t.Errorf("大写字符集生成了集合外字符：%q", upper[1].Title)
+	}
+	if strings.ContainsAny(upper[1].Title, "abcdefghijklmnopqrstuvwxyz") {
+		t.Errorf("字符集必须区分大小写：%q", upper[1].Title)
+	}
+	lower := randMode(p, "32", "cs:小写十六进制")
+	if !allIn(lower[1].Title, "abcdef0123456789") {
+		t.Errorf("小写字符集生成了集合外字符：%q", lower[1].Title)
+	}
+	// 停用的字符集不能作为子模式使用 → 给不可用提示。
+	if got := randMode(p, "", "cs:停用项"); len(got) != 1 || !got[0].IsHint() {
+		t.Errorf("停用字符集应给不可用提示：%v", titles(got))
+	}
+}
+
+func TestSubModeLabel(t *testing.T) {
+	p := seeded()
+	if got := p.SubModeLabel("cs:" + nameHex); got != nameHex {
+		t.Errorf("字符集子模式应显示名称，实得 %q", got)
+	}
+	if got := p.SubModeLabel("enc"); got != "enc" {
+		t.Errorf("非字符集子模式应原样返回，实得 %q", got)
 	}
 }
 
@@ -219,12 +333,16 @@ func TestDegenerateRange(t *testing.T) {
 
 func TestStringAlnumAndNotConstant(t *testing.T) {
 	p := seeded()
-	a, b := p.randomString(32), p.randomString(32)
+	alpha := alphabetOf(t, p, nameAlnum)
+	a, b := p.randomStringWith(32, alpha), p.randomStringWith(32, alpha)
 	if !isAlnum(a) || len(a) != 32 {
 		t.Errorf("随机串应 32 位全字母数字：%q", a)
 	}
 	if a == b {
 		t.Error("连续生成不能相同")
+	}
+	if p.randomStringWith(8, nil) != "" {
+		t.Error("空字符集应返回空串而不是 panic")
 	}
 }
 
@@ -239,8 +357,8 @@ func TestSeededReproducible(t *testing.T) {
 	if randMode(seeded(), "5-10", "int")[1].Title != randMode(newSeeded(2024), "5-10", "int")[1].Title {
 		t.Error("固定种子下 int 应可复现")
 	}
-	if randMode(seeded(), "20", "str")[1].Title != randMode(newSeeded(2024), "20", "str")[1].Title {
-		t.Error("固定种子下 str 应可复现")
+	if randMode(seeded(), "20", "cs:"+nameHex)[1].Title != randMode(newSeeded(2024), "20", "cs:"+nameHex)[1].Title {
+		t.Error("固定种子下字符集应可复现")
 	}
 }
 
@@ -273,41 +391,20 @@ func TestParseRangeForms(t *testing.T) {
 	}
 }
 
-func TestParseNamedAlphabets(t *testing.T) {
-	for q, want := range map[string]alphabetKind{
-		"str": alphaAlnum, "string": alphaAlnum, "alnum": alphaAlnum,
-		"sym": alphaSym, "special": alphaSym, "symbols": alphaSym,
-		"hex": alphaHex, "STR": alphaAlnum,
-	} {
-		r, ok := parse(q)
-		if !ok || !r.isString || r.alpha != want || r.length != defaultStringLen {
-			t.Errorf("parse(%q) = %+v ok=%v，想要 String(len=16,%v)", q, r, ok, want)
+func TestParseLengthParam(t *testing.T) {
+	for q, want := range map[string]int{"24": 24, "x:24": 24, "str:8": 8, " 16 ": 16} {
+		if got, ok := parseLengthParam(q); !ok || got != want {
+			t.Errorf("parseLengthParam(%q) = %d,%v，想要 %d,true", q, got, ok, want)
+		}
+	}
+	for _, q := range []string{"0", "-3", "abc", ""} {
+		if _, ok := parseLengthParam(q); ok {
+			t.Errorf("parseLengthParam(%q) 应拒绝", q)
 		}
 	}
 }
 
-func TestParseLengthColon(t *testing.T) {
-	r, ok := parse("str:8")
-	if !ok || !r.isString || r.length != 8 || r.alpha != alphaAlnum {
-		t.Errorf("parse(str:8) = %+v ok=%v", r, ok)
-	}
-	if _, ok := parse("str:0"); ok {
-		t.Error("str:0 长度非法应拒绝")
-	}
-}
-
 // ── 测试小工具 ──
-
-func parseInto(s string, out *int64) (int64, error) {
-	n, err := strconv.ParseInt(s, 10, 64)
-	*out = n
-	return n, err
-}
-
-func mustInt(s string) int {
-	n, _ := strconv.Atoi(s)
-	return n
-}
 
 func isAlnum(s string) bool {
 	for i := 0; i < len(s); i++ {

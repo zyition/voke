@@ -46,6 +46,18 @@ The configuration file lives at `%APPDATA%\voke\config.toml`:
 - Plugin shortcuts are written under `[providers.<id>]` as `hotkey` (for example ``hotkey = "Alt+`"``). Clipboard ships with ``Alt+` ``; all other plugins are unbound by default. Only **enabled** plugins register their shortcut, and disabling one unregisters it immediately. Duplicates with the main hotkey or another enabled plugin are reported inline and are not saved. A combination may also be reserved by the system or another app; if Voke reports it as taken, choose another one (for example, ``Alt+` `` is already used by some tools on some machines).
 - Prefix conflicts, whitespace, or reserved letter/digit prefixes are reported inline and are not saved.
 - Clipboard history size is edited in the Clipboard plugin card, or by writing `[clipboard] max_entries` (default 100, range 1–1000). Up to 10 pinned items do not count toward the limit. History is memory-only and is cleared on exit.
+- Random string types are driven by **character sets**: the Random plugin card lets you add, remove and edit a name, pattern, default length and enabled switch. Names are unique within the plugin and case-sensitive; patterns are interpreted as **character-class contents** such as `a-zA-Z0-9`, `a-f0-9`, `[A-F0-9]`, and may contain literal non-ASCII characters such as `￥` or `…`. The plugin-level default length applies to every character set without its own length (default 16); set a character-set length to 0 to follow it. Defaults are letters + digits, letters + digits + symbols (`!@#$%^&*-_=+`), and lowercase hex (`0-9a-f`, 32 chars by default). You can also write them directly:
+
+  ```toml
+  [providers.random]
+  default_length = 16
+
+  [[providers.random.charsets]]
+  name = "uppercase hex"
+  pattern = "A-F0-9"
+  length = 32
+  enabled = true
+  ```
 
 ## Keyboard
 
@@ -99,7 +111,7 @@ prefixes require the prefix plus one space.
 | `timestamp` | Convert between timestamps and readable time | `@t` + space (Indirect) |
 | `base64` | Base64 encode / decode | `@b` + space (Indirect) |
 | `uuid` | Generate UUID v4 values | `@u` + space (Indirect) |
-| `random` | Random integers / strings / symbols / hex, with regenerate | `@r` + space (Indirect) |
+| `random` | Random integers / strings with configurable character sets, with regenerate | `@r` + space (Indirect) |
 | `clipboard` | Clipboard history (text / HTML / RTF / images; paste, plain-text paste, pin, delete) | `@c` (Direct), default shortcut ``Alt+` `` |
 
 > `#` is reserved for the plugin picker. Plugin prefixes live under the `@` namespace to avoid a

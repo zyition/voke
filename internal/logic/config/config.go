@@ -30,6 +30,7 @@ import (
 	"sort"
 	"strings"
 
+	"voke/internal/logic/charset"
 	"voke/internal/logic/engine"
 )
 
@@ -65,9 +66,14 @@ type Descriptor struct {
 	DefaultWeight float64
 	// DefaultCount 是默认条数（random 这类插件用；归一时 clamp 到 1..50）。
 	DefaultCount int
+	// DefaultLength 是默认生成长度（目前仅 random 使用；0 = 该插件不使用）。
+	DefaultLength int
 	// DefaultHotkey 是默认插件全局快捷键（Electron 风格加速器串，如 "Alt+`"）。
 	// 空串 = 不绑定；用户覆盖优先。只有极少数插件需要默认值（剪贴板），其余留空。
 	DefaultHotkey string
+	// DefaultCharsets 是默认字符集预设（目前仅随机值插件使用）。nil = 该插件不支持
+	// 字符集配置；用户一旦写了 charsets，整份列表替换默认值。
+	DefaultCharsets []charset.Spec
 }
 
 // UserOverride 是用户配置层的一条（§7.3.4 第二层的 Go 建模）。
@@ -90,9 +96,14 @@ type UserOverride struct {
 	Weight *float64
 	// Count 对应 count。
 	Count *int
+	// DefaultLength 对应 default_length：字符串生成的默认长度（目前仅 random）。
+	DefaultLength *int
 	// Hotkey 对应 hotkey：插件全局快捷键（Electron 风格加速器串，如 "Alt+`"）。
 	// 未写时回落 Descriptor.DefaultHotkey（多数插件为空 = 不绑定）。
 	Hotkey *string
+	// Charsets 对应 charsets：nil = 用户没写（回落 Descriptor 默认），非 nil（含空
+	// 列表）= 整份替换。字符集是插件级选项，目前仅 random 消费。
+	Charsets []charset.Spec
 }
 
 // ProviderConfig 是归一后的**唯一一份真相**（§7.3.4 第三层）。
@@ -118,9 +129,13 @@ type ProviderConfig struct {
 	Weight float64
 	// Count 是生效条数（C6 后恒在 1..50；不用条数概念的插件忽略它）。
 	Count int
+	// DefaultLength 是生效的默认生成长度（仅 random 使用；0 = 未配置）。
+	DefaultLength int
 	// Hotkey 是生效的插件全局快捷键（"" = 未绑定）。来自用户覆盖或 Descriptor
 	// 默认值；是否注册还要看 Enabled（见 app/hotkeys.go）。
 	Hotkey string
+	// Charsets 是生效的字符集列表（已裁剪、去重、校验；仅 random 消费）。
+	Charsets []charset.Spec
 }
 
 // Configs 是 Normalize 的产物：注册顺序的 ProviderConfig + 要落日志的中文警告。

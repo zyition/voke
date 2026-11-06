@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"voke/internal/i18n"
+	"voke/internal/logic/charset"
 	"voke/internal/logic/engine"
 )
 
@@ -141,6 +142,30 @@ func Normalize(descriptors []Descriptor, overrides []UserOverride) (Configs, err
 
 		// C6：count clamp 到 1..50（静默夹紧）。
 		p.Count = clampInt(derefInt(ov.Count, d.DefaultCount), MinCount, MaxCount)
+
+		// default_length：仅在使用该配置的插件上归一，clamp 到 1..256（静默夹紧，
+		// 与 C6 同口径）。0 = 插件不使用，不用凭空塞一个值。
+		if ov.DefaultLength != nil || d.DefaultLength != 0 {
+			p.DefaultLength = clampInt(derefInt(ov.DefaultLength, d.DefaultLength),
+				charset.MinLength, charset.MaxLength)
+		}
+
+		// 字符集（目前仅 random）：用户写了就整份替换默认值，否则沿用 Descriptor
+		// 默认。名称 / 正则逐条校验；坏条目丢弃并告警，避免一份坏配置让插件失效。
+		p.Charsets = mergeCharsets(d.DefaultCharsets, ov.Charsets)
+		if len(p.Charsets) > 0 {
+			cleaned, warns := charset.Sanitize(p.Charsets)
+			for _, w := range warns {
+				out.warnf("插件 %s 的字符集配置：%s", d.ID, w)
+			}
+			if len(cleaned) == 0 && ov.Charsets != nil && len(ov.Charsets) > 0 {
+				if fallback, _ := charset.Sanitize(d.DefaultCharsets); len(fallback) > 0 {
+					out.warnf("插件 %s 的字符集全部无效，已回退默认值", d.ID)
+					cleaned = fallback
+				}
+			}
+			p.Charsets = cleaned
+		}
 
 		// C3：前缀含空白 → 该项置空 + 中文警告；空串是合法值（"" = 无前缀）。
 		p.Prefix = derefString(ov.Prefix, d.DefaultPrefix)
@@ -320,6 +345,14 @@ func derefInt(p *int, def int) int {
 		return def
 	}
 	return *p
+}
+
+// mergeCharsets：用户没写（nil）才回落默认值；显式空列表按「没有字符集」处理。
+func mergeCharsets(def, user []charset.Spec) []charset.Spec {
+	if user != nil {
+		return append([]charset.Spec(nil), user...)
+	}
+	return append([]charset.Spec(nil), def...)
 }
 
 // warnf 追加一条中文警告（接线层负责落日志）。

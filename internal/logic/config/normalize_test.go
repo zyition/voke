@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"voke/internal/logic/charset"
 	"voke/internal/logic/engine"
 )
 
@@ -456,4 +457,87 @@ func TestNormalizeDuplicateOverrideWarnsAndLastWins(t *testing.T) {
 		t.Errorf("最后一条整项为准没生效：%+v", p)
 	}
 	wantWarnings(t, c, "插件 calculator 在用户配置里出现 2 次，以最后一条为准")
+}
+
+func TestNormalizeCharsets(t *testing.T) {
+	ds := []Descriptor{{
+		ID: "random", Name: "随机值", DefaultEnabled: true,
+		DefaultActivation: engine.Direct, DefaultWeight: 1, DefaultCount: 5,
+		DefaultCharsets: []charset.Spec{{Name: "默认", Pattern: "a-z", Enabled: true}},
+	}}
+
+	// 没写 → 用 Descriptor 默认。
+	c := mustNormalize(t, ds, nil)
+	if got := c.Providers[0].Charsets; len(got) != 1 || got[0].Name != "默认" {
+		t.Errorf("未写时应回落默认字符集：%+v", got)
+	}
+
+	// 写了 → 整份替换，并裁剪首尾空白。
+	c = mustNormalize(t, ds, []UserOverride{{ID: "random", Charsets: []charset.Spec{
+		{Name: " 十六进制 ", Pattern: " a-f0-9 ", Enabled: true},
+	}}})
+	if got := c.Providers[0].Charsets; len(got) != 1 || got[0].Name != "十六进制" || got[0].Pattern != "a-f0-9" {
+		t.Errorf("用户字符集应替换默认并裁剪：%+v", got)
+	}
+	wantWarnings(t, c)
+
+	// 部分无效 → 丢弃坏条目、保留好条目并告警。
+	c = mustNormalize(t, ds, []UserOverride{{ID: "random", Charsets: []charset.Spec{
+		{Name: "hex", Pattern: "a-f", Enabled: true},
+		{Name: "坏", Pattern: "z-a", Enabled: true},
+	}}})
+	if got := c.Providers[0].Charsets; len(got) != 1 || got[0].Name != "hex" {
+		t.Errorf("坏条目应被丢弃：%+v", got)
+	}
+	if len(c.Warnings) != 1 || !strings.Contains(c.Warnings[0], "无效") {
+		t.Errorf("应产生无效字符集警告：%v", c.Warnings)
+	}
+
+	// 全部无效 → 回退 Descriptor 默认并告警。
+	c = mustNormalize(t, ds, []UserOverride{{ID: "random", Charsets: []charset.Spec{
+		{Name: "坏", Pattern: "z-a", Enabled: true},
+	}}})
+	if got := c.Providers[0].Charsets; len(got) != 1 || got[0].Name != "默认" {
+		t.Errorf("全部无效应回退默认：%+v", got)
+	}
+	if len(c.Warnings) != 2 || !strings.Contains(strings.Join(c.Warnings, "；"), "回退默认值") {
+		t.Errorf("应告警坏条目并说明回退：%v", c.Warnings)
+	}
+}
+
+func TestNormalizeDefaultLengthAndCharsetLength(t *testing.T) {
+	ds := []Descriptor{{
+		ID: "random", Name: "随机值", DefaultEnabled: true,
+		DefaultActivation: engine.Direct, DefaultWeight: 1, DefaultCount: 5, DefaultLength: 16,
+		DefaultCharsets: []charset.Spec{{Name: "默认", Pattern: "a-z", Enabled: true}},
+	}}
+
+	// 未写 → Descriptor 默认长度；字符集长度保持 0（跟随全局）。
+	c := mustNormalize(t, ds, nil)
+	if got := c.Providers[0]; got.DefaultLength != 16 || got.Charsets[0].Length != 0 {
+		t.Errorf("默认长度 / 字符集长度不符：%+v", got)
+	}
+
+	// 用户写的长度：插件级 clamp 到 1..256，字符集级保留（0 = 跟随全局）。
+	dl, eight := 999, 8
+	c = mustNormalize(t, ds, []UserOverride{{ID: "random", DefaultLength: &dl, Charsets: []charset.Spec{
+		{Name: "跟随", Pattern: "a-z", Enabled: true},
+		{Name: "自有", Pattern: "A-Z", Enabled: true, Length: eight},
+	}}})
+	if got := c.Providers[0]; got.DefaultLength != charset.MaxLength {
+		t.Errorf("default_length 应 clamp 到 %d：%d", charset.MaxLength, got.DefaultLength)
+	} else if len(got.Charsets) != 2 || got.Charsets[0].Length != 0 || got.Charsets[1].Length != 8 {
+		t.Errorf("字符集长度不符：%+v", got.Charsets)
+	}
+
+	// 字符集长度越界 → 该条目被丢弃并告警。
+	c = mustNormalize(t, ds, []UserOverride{{ID: "random", Charsets: []charset.Spec{
+		{Name: "坏长度", Pattern: "a-z", Enabled: true, Length: charset.MaxLength + 1},
+	}}})
+	if got := c.Providers[0].Charsets; len(got) != 1 || got[0].Name != "默认" {
+		t.Errorf("越界长度应丢弃并回退默认：%+v", got)
+	}
+	if len(c.Warnings) == 0 || !strings.Contains(strings.Join(c.Warnings, "；"), "长度") {
+		t.Errorf("应有长度越界警告：%v", c.Warnings)
+	}
 }

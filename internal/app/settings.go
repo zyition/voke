@@ -32,10 +32,12 @@ import (
 	"github.com/egoist/mygo/ui"
 	"voke/internal/i18n"
 	"voke/internal/logic/appcfg"
+	"voke/internal/logic/charset"
 	"voke/internal/logic/cliphist"
 	"voke/internal/logic/config"
 	"voke/internal/logic/engine"
 	"voke/internal/platform"
+	"voke/internal/providers/random"
 	appui "voke/internal/ui"
 	"voke/internal/ui/theme"
 )
@@ -112,6 +114,18 @@ type providerEdit struct {
 	prefix      string
 	activation  string // 显示值（本地化后的 Direct / Indirect 标签），save 时映射回 "direct"/"indirect"
 	hotkey      string // 插件全局快捷键；空 = 未绑定
+	// defaultLength 仅随机值插件使用：字符集未单独设置长度时的默认值。
+	defaultLength float64
+	// charsets 仅随机值插件使用：名称 + 字符类正则 + 默认长度 + 启用开关。
+	charsets []charsetEdit
+}
+
+// charsetEdit 是设置页里一套字符集的绑定态。
+type charsetEdit struct {
+	name    string
+	pattern string
+	length  float64 // 0 = 跟随插件级默认长度
+	enabled bool
 }
 
 // settingsWindow 是设置窗的绑定态（只在主线程、只在窗口存活期读写）。theme / language
@@ -247,12 +261,25 @@ func (st *appState) seedSettings(s *settingsWindow) {
 	s.clipboardMax = float64(clipboardMaxEntries(st.cfg))
 	s.edits = s.edits[:0]
 	for _, p := range st.providers.Providers {
-		s.edits = append(s.edits, providerEdit{
+		ed := providerEdit{
 			id: p.ID, name: p.Name, description: p.Description,
 			enabled: p.Enabled, isGlobal: p.IsGlobal,
 			weight: p.Weight, prefix: p.Prefix, activation: activationLabel(p.Activation),
 			hotkey: p.Hotkey,
-		})
+		}
+		if p.ID == random.ID {
+			ed.defaultLength = float64(p.DefaultLength)
+			if ed.defaultLength < 1 {
+				ed.defaultLength = 16
+			}
+			ed.charsets = make([]charsetEdit, 0, len(p.Charsets))
+			for _, cs := range p.Charsets {
+				ed.charsets = append(ed.charsets, charsetEdit{
+					name: cs.Name, pattern: cs.Pattern, length: float64(cs.Length), enabled: cs.Enabled,
+				})
+			}
+		}
+		s.edits = append(s.edits, ed)
 	}
 }
 
@@ -776,8 +803,82 @@ func (st *appState) settingsProviderCard(c *ui.Context, s *settingsWindow, p *pr
 						}
 					})
 			}
+			if p.id == random.ID {
+				settingsRow(c, i18n.L("默认长度", "Default length"),
+					i18n.L("字符集未单独设置长度时使用（1–256）", "Used when a character set does not set its own length (1–256)"), func() {
+						if ui.NumberInput(c, &p.defaultLength, charset.MinLength, charset.MaxLength, 1).Changed() {
+							st.applySettings()
+						}
+					})
+				st.settingsCharsets(c, p)
+			}
 		})
 	})
+}
+
+// settingsCharsets 画随机值插件的字符集编辑器：每行「启用 / 名称 / 字符类正则 /
+// 删除」，底部可新增。名称区分大小写且必须唯一；正则语义见 internal/logic/charset。
+func (st *appState) settingsCharsets(c *ui.Context, p *providerEdit) {
+	t := c.Theme()
+	ui.Column(c).Gap(8).Children(func() {
+		ui.Text(c, i18n.L("字符集", "Character sets")).FontSize(theme.TitleSize).Bold().TextColor(t.Text)
+		ui.Text(c, i18n.L("左侧开关控制是否出现在一级列表；长度 0 = 跟随默认长度；名称唯一（区分大小写）；正则为字符类内容，如 a-zA-Z0-9、a-f0-9、!@#$%",
+			"The switch controls whether an entry appears in the first level; length 0 follows the default length; names are unique (case-sensitive); patterns are character classes such as a-zA-Z0-9, a-f0-9, !@#$%")).
+			FontSize(theme.HintSize).TextColor(t.TextMuted)
+
+		deleteAt := -1
+		for i := range p.charsets {
+			cs := &p.charsets[i]
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				if ui.Switch(c, &cs.enabled).Changed() {
+					st.applySettings()
+				}
+				if ui.TextInput(c, &cs.name).Grow(1).FontSize(theme.InputSize).
+					Placeholder(i18n.L("名称", "Name")).
+					Label(i18n.L("字符集名称", "Character-set name")).Changed() {
+					st.applySettings()
+				}
+				if ui.TextInput(c, &cs.pattern).Grow(2).FontSize(theme.InputSize).
+					Placeholder(i18n.L("正则，如 a-zA-Z0-9", "Pattern, e.g. a-zA-Z0-9")).
+					Label(i18n.L("字符集正则", "Character-set pattern")).Changed() {
+					st.applySettings()
+				}
+				if ui.NumberInput(c, &cs.length, 0, charset.MaxLength, 1).Width(78).
+					Label(i18n.L("字符集长度", "Character-set length")).Changed() {
+					st.applySettings()
+				}
+				if len(p.charsets) > 1 {
+					if ui.Button(c, i18n.L("删除", "Delete")).Clicked() {
+						deleteAt = i
+					}
+				}
+			})
+		}
+		if deleteAt >= 0 {
+			p.charsets = append(p.charsets[:deleteAt], p.charsets[deleteAt+1:]...)
+			st.applySettings()
+		}
+		if ui.Button(c, i18n.L("添加字符集", "Add character set")).Clicked() {
+			p.charsets = append(p.charsets, charsetEdit{
+				name: nextCharsetName(p.charsets), pattern: "a-zA-Z0-9", enabled: true,
+			})
+			st.applySettings()
+		}
+	})
+}
+
+// nextCharsetName 生成一个不与现有条目重复的新字符集名称。
+func nextCharsetName(list []charsetEdit) string {
+	used := make(map[string]bool, len(list))
+	for _, cs := range list {
+		used[strings.TrimSpace(cs.name)] = true
+	}
+	for i := 1; ; i++ {
+		name := fmt.Sprintf(i18n.L("自定义 %d", "Custom %d"), i)
+		if !used[name] {
+			return name
+		}
+	}
 }
 
 // settingsAbout 画「关于」页。
@@ -920,6 +1021,10 @@ func (st *appState) applySettings() {
 		return
 	}
 	overrides := providerOverrides(s.edits)
+	if msg := charsetSettingsError(s.edits); msg != "" {
+		s.configErr = msg
+		return
+	}
 	if msg := prefixSettingsError(s.edits, overrides); msg != "" {
 		// 前缀无效时不落盘、不重载：界面与生效配置都停在上一次有效状态，
 		// 错误提示就地显示（见 settingsView 的「插件」区）。
@@ -1024,6 +1129,18 @@ func providerOverrides(edits []providerEdit) []config.UserOverride {
 			hk := p.hotkey
 			ov.Hotkey = &hk
 		}
+		if p.id == random.ID {
+			length := int(p.defaultLength)
+			ov.DefaultLength = &length
+			list := make([]charset.Spec, 0, len(p.charsets))
+			for _, cs := range p.charsets {
+				list = append(list, charset.Spec{
+					Name: strings.TrimSpace(cs.name), Pattern: strings.TrimSpace(cs.pattern),
+					Length: int(cs.length), Enabled: cs.enabled,
+				})
+			}
+			ov.Charsets = list
+		}
 		overrides = append(overrides, ov)
 	}
 	return overrides
@@ -1068,6 +1185,43 @@ func hotkeySettingsError(edits []providerEdit, mainHotkey string) string {
 				p.name, p.hotkey, owner)
 		}
 		owners[key] = fmt.Sprintf(i18n.L("插件「%s」的快捷键", "plugin “%s” shortcut"), p.name)
+	}
+	return ""
+}
+
+// charsetSettingsError 校验随机值插件的字符集：至少保留一套；名称非空、不重复
+// （区分大小写）；正则可编译且至少匹配一个可打印字符。空串 = 通过。
+func charsetSettingsError(edits []providerEdit) string {
+	for _, p := range edits {
+		if p.id != random.ID {
+			continue
+		}
+		if len(p.charsets) == 0 {
+			return i18n.L("随机值至少需要保留一个字符集", "Random needs at least one character set")
+		}
+		if n := int(p.defaultLength); n < charset.MinLength || n > charset.MaxLength {
+			return fmt.Sprintf(i18n.L("随机值的默认长度必须在 %d–%d 之间",
+				"Random default length must be between %d and %d"), charset.MinLength, charset.MaxLength)
+		}
+		seen := make(map[string]bool, len(p.charsets))
+		for i, cs := range p.charsets {
+			spec := charset.Spec{
+				Name: strings.TrimSpace(cs.name), Pattern: strings.TrimSpace(cs.pattern),
+				Length: int(cs.length),
+			}
+			if err := charset.Validate(spec); err != nil {
+				label := spec.Name
+				if label == "" {
+					label = fmt.Sprintf(i18n.L("第 %d 个", "#%d"), i+1)
+				}
+				return fmt.Sprintf(i18n.L("字符集「%s」：%v", "character set “%s”: %v"), label, err)
+			}
+			if seen[spec.Name] {
+				return fmt.Sprintf(i18n.L("字符集名称「%s」重复（区分大小写）",
+					"duplicate character-set name “%s” (case-sensitive)"), spec.Name)
+			}
+			seen[spec.Name] = true
+		}
 	}
 	return ""
 }

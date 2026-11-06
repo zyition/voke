@@ -21,7 +21,10 @@
 // 便于值相等比较与构造，非 Rust 的各态带参枚举。
 package providers
 
-import "voke/internal/match"
+import (
+	"voke/internal/logic/charset"
+	"voke/internal/match"
+)
 
 // Interact 声明「这一行是什么、Enter/点击该干什么」，UI 只按类型分发，无特判。
 // 对照 Rust `Interact`。
@@ -195,11 +198,23 @@ type ProviderConfig struct {
 	Prefix     string
 	Activation string // "Direct" / "Indirect"；对照 Rust Activation 枚举（此处简化为字符串）。
 	Count      int    // 单次查询生成条数（目前仅 random 消费），默认 5。
+	// DefaultLength 是字符串生成的默认长度（目前仅 random 消费）；0 = 插件不使用。
+	// 字符集自己的 Length 为 0 时跟随这个值。
+	DefaultLength int
+	// Charsets 是插件自定义字符集（目前仅 random 消费）。nil 与空列表语义由插件
+	// 自己解释：random 把 nil 当作「沿用默认值」，空列表表示没有可用的字符集。
+	Charsets []charset.Spec
 }
 
 // DefaultProviderConfig 返回 Rust `ProviderConfig::default` 对应的默认值。
 func DefaultProviderConfig() ProviderConfig {
 	return ProviderConfig{Enabled: true, IsGlobal: true, Weight: 1.0, Activation: "Direct", Count: 5}
+}
+
+// SubModeLabeler 是可选接口：插件可把内部子模式标识翻成面包屑展示文案。
+// 未实现时接线层直接显示子模式标识本身。
+type SubModeLabeler interface {
+	SubModeLabel(subMode string) string
 }
 
 // Provider 是插件契约（对照 Rust `Provider` trait）。编译期静态注册，不做动态加载。

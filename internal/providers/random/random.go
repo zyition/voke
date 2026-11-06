@@ -1,9 +1,12 @@
-// Package random 生成随机整数 / 随机字符串——1:1 对照生产 `voke-core/src/random.rs`。
+// Package random 生成随机整数 / 随机字符串。
 //
 // 分层：纯逻辑（参数解析 + 生成 + 出 Match），零 mygo、零 IO，Linux 原生可测。
 // 执行 Copy / Refresh 在 app 层 dispatcher。熵源注入：生产 crypto/rand，测试用固定
-// 种子（math/rand）保证可复现。两级子模式（int/str/sym/hex）复用 base64 的
-// provider 路由范式，一级是纯选择器、二级首条固定「重新生成」。
+// 种子（math/rand）保证可复现。
+//
+// 字符串子模式不再写死字母表：每套字符集由配置里的「名称 + 字符类正则 + 启用开关」
+// 描述（解析见 internal/logic/charset），一级列表按启用的字符集动态生成，二级子模式
+// 标识为 `cs:<名称>`。默认预设在 DefaultCharsets 里，与 Descriptor 共用同一份定义。
 package random
 
 import (
@@ -15,74 +18,70 @@ import (
 	"strings"
 
 	"voke/internal/i18n"
+	"voke/internal/logic/charset"
 	"voke/internal/providers"
 )
 
 const (
 	ID = "random"
 
-	SubModeInt = "int"
-	SubModeStr = "str"
-	SubModeSym = "sym"
-	SubModeHex = "hex"
+	// SubModeInt 是唯一的固定子模式；字符串子模式统一为 charsetSubModePrefix + 名称。
+	SubModeInt           = "int"
+	charsetSubModePrefix = "cs:"
 
 	prefix           = "@r" // 二级前缀（`#` 归 picker），Indirect：`@r ` 触发，对齐 @b/@u/@t。
 	defaultStringLen = 16
-	maxStringLen     = 256
+	maxStringLen     = charset.MaxLength
 	defaultIntMax    = 100
 	maxRangeSpan     = 1_000_000_000
 )
 
-// 三张字符表（决策 5：先只给这三张，够覆盖常见用途）。
-const (
-	charsAlnum = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-	charsSym   = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*-_=+"
-	charsHex   = "0123456789abcdef"
-)
-
-type alphabetKind int
-
-const (
-	alphaAlnum alphabetKind = iota
-	alphaSym
-	alphaHex
-)
-
-func (a alphabetKind) chars() string {
-	switch a {
-	case alphaSym:
-		return charsSym
-	case alphaHex:
-		return charsHex
-	default:
-		return charsAlnum
+// DefaultCharsets 是内置字符集预设。名称随界面语言本地化，用户可在设置页改名称 /
+// 正则 / 默认长度 / 启停，或增删自定义条目。Length=0 表示跟随插件级默认长度；
+// 十六进制保留历史的 32 位默认。正则区分大小写：十六进制只含小写 a-f。
+func DefaultCharsets() []charset.Spec {
+	return []charset.Spec{
+		{Name: i18n.L("字母 + 数字", "Letters + digits"), Pattern: "a-zA-Z0-9", Enabled: true},
+		{Name: i18n.L("含特殊字符", "With symbols"), Pattern: `a-zA-Z0-9!@#$%^&*\-_=+`, Enabled: true},
+		{Name: i18n.L("十六进制", "Hexadecimal"), Pattern: "0-9a-f", Enabled: true, Length: 32},
 	}
 }
 
-func (a alphabetKind) label() string {
-	switch a {
-	case alphaSym:
-		return i18n.L("字母 + 数字 + 特殊字符", "letters + digits + symbols")
-	case alphaHex:
-		return i18n.L("十六进制", "hex")
-	default:
-		return i18n.L("字母 + 数字", "letters + digits")
+// charsetSubMode 把字符集名称编码成 engine 子模式标识。
+func charsetSubMode(name string) string { return charsetSubModePrefix + name }
+
+// charsetNameFromSubMode 解出子模式里的字符集名称；不是字符集子模式时 ok=false。
+func charsetNameFromSubMode(sub string) (string, bool) {
+	if !strings.HasPrefix(sub, charsetSubModePrefix) {
+		return "", false
 	}
+	return strings.TrimPrefix(sub, charsetSubModePrefix), true
+}
+
+// resolvedCharset 是编译后的字符集：正则匹配出的单字符列表 + 展示信息。
+type resolvedCharset struct {
+	name     string
+	pattern  string
+	enabled  bool
+	length   int
+	alphabet []rune
 }
 
 // request 是一次生成的规格：isString=false 走整数 [low, high]，否则定长字符串。
 type request struct {
-	isString bool
-	low      int64
-	high     int64
-	length   int
-	alpha    alphabetKind
+	isString    bool
+	low         int64
+	high        int64
+	length      int
+	alphabet    []rune
+	charsetName string
 }
 
 // Provider 实现 providers.Provider。
 type Provider struct {
-	config providers.ProviderConfig
-	fill   func([]byte)
+	config   providers.ProviderConfig
+	fill     func([]byte)
+	charsets []resolvedCharset
 }
 
 var _ providers.Provider = (*Provider)(nil)
@@ -91,21 +90,27 @@ func defaultConfig() providers.ProviderConfig {
 	return providers.ProviderConfig{
 		Enabled: true, IsGlobal: false, Weight: 1.0,
 		Prefix: prefix, Activation: "Indirect", Count: 5,
+		DefaultLength: defaultStringLen,
+		Charsets:      DefaultCharsets(),
 	}
 }
 
 // New 返回默认配置的 random provider（生产熵源 crypto/rand）。
 func New() *Provider {
-	return &Provider{
+	p := &Provider{
 		config: defaultConfig(),
 		fill:   func(b []byte) { _, _ = crand.Read(b) },
 	}
+	p.rebuildCharsets()
+	return p
 }
 
 // newSeeded 用固定种子构造（测试可复现，对照 Rust `SeededEntropy`）。
 func newSeeded(seed int64) *Provider {
 	r := mrand.New(mrand.NewSource(seed))
-	return &Provider{config: defaultConfig(), fill: func(b []byte) { _, _ = r.Read(b) }}
+	p := &Provider{config: defaultConfig(), fill: func(b []byte) { _, _ = r.Read(b) }}
+	p.rebuildCharsets()
+	return p
 }
 
 func (p *Provider) ID() string { return ID }
@@ -116,91 +121,175 @@ func (p *Provider) Aliases() []string { return []string{"r", "sj", "rand"} }
 func (p *Provider) Description() string {
 	return i18n.L("随机整数 / 随机字符串", "Random integers / strings")
 }
-func (p *Provider) Config() providers.ProviderConfig     { return p.config }
-func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
+func (p *Provider) Config() providers.ProviderConfig { return p.config }
+func (p *Provider) SetConfig(c providers.ProviderConfig) {
+	p.config = c
+	p.rebuildCharsets()
+}
 
-// Placeholder 对照 Rust：一级纯选择提示，二级按类型给范围 / 长度提示。
-func (p *Provider) Placeholder(subMode string) string {
-	switch subMode {
-	case SubModeInt:
-		return i18n.L("输入范围如 5-10（默认 1–100），或选「重新生成」", "Enter a range such as 5-10 (default 1–100), or choose Regenerate")
-	case SubModeStr:
-		return i18n.L("输入长度如 24（默认 16），或选「重新生成」", "Enter a length such as 24 (default 16), or choose Regenerate")
-	case SubModeSym:
-		return i18n.L("输入长度如 24（默认 16），或选「重新生成」", "Enter a length such as 24 (default 16), or choose Regenerate")
-	case SubModeHex:
-		return i18n.L("输入长度如 64（默认 32），或选「重新生成」", "Enter a length such as 64 (default 32), or choose Regenerate")
-	default:
-		return i18n.L("选择随机类型", "Choose a random type")
+// SubModeLabel 把 `cs:<名称>` 还原成字符集名称，供面包屑展示。
+func (p *Provider) SubModeLabel(subMode string) string {
+	if name, ok := charsetNameFromSubMode(subMode); ok {
+		return name
+	}
+	return subMode
+}
+
+// rebuildCharsets 把配置里的字符集预编译成字符列表。无效条目直接跳过；配置归一
+// （config.Normalize）与设置页保存前都会先校验，正常路径不会走到这里报错。
+func (p *Provider) rebuildCharsets() {
+	p.charsets = p.charsets[:0]
+	for _, spec := range p.config.Charsets {
+		name := strings.TrimSpace(spec.Name)
+		if name == "" {
+			continue
+		}
+		alphabet, err := charset.Compile(spec.Pattern)
+		if err != nil {
+			continue
+		}
+		p.charsets = append(p.charsets, resolvedCharset{
+			name: name, pattern: strings.TrimSpace(spec.Pattern),
+			enabled: spec.Enabled, length: spec.Length, alphabet: alphabet,
+		})
 	}
 }
 
-// Query 对照 Rust：sub_mode 决定级别；空 sub_mode 走一级选择器。
+// charsetBySubMode 找当前子模式对应的、已启用的字符集。
+func (p *Provider) charsetBySubMode(sub string) (resolvedCharset, bool) {
+	name, ok := charsetNameFromSubMode(sub)
+	if !ok {
+		return resolvedCharset{}, false
+	}
+	for _, cs := range p.charsets {
+		if cs.name == name && cs.enabled {
+			return cs, true
+		}
+	}
+	return resolvedCharset{}, false
+}
+
+// globalLength 是插件级默认长度；配置缺失 / 越界时回落内置 16。
+func (p *Provider) globalLength() int {
+	n := p.config.DefaultLength
+	if n < charset.MinLength || n > charset.MaxLength {
+		return defaultStringLen
+	}
+	return n
+}
+
+// effectiveLength 是某套字符集的实际默认长度：字符集自己的 Length 优先，
+// 0（或越界）跟随插件级 default_length。
+func (p *Provider) effectiveLength(cs resolvedCharset) int {
+	if cs.length >= charset.MinLength && cs.length <= charset.MaxLength {
+		return cs.length
+	}
+	return p.globalLength()
+}
+
+// Placeholder 对照 Rust：一级纯选择提示，二级按类型给范围 / 长度提示。
+func (p *Provider) Placeholder(subMode string) string {
+	if subMode == SubModeInt {
+		return i18n.L("输入范围如 5-10（默认 1–100），或选「重新生成」", "Enter a range such as 5-10 (default 1–100), or choose Regenerate")
+	}
+	if cs, ok := p.charsetBySubMode(subMode); ok {
+		return fmt.Sprintf(i18n.L("输入长度如 24（默认 %d），或选「重新生成」",
+			"Enter a length such as 24 (default %d), or choose Regenerate"), p.effectiveLength(cs))
+	}
+	if subMode != "" {
+		return i18n.L("字符集不可用，按退格返回", "Character set unavailable; press Backspace to go back")
+	}
+	return i18n.L("选择随机类型", "Choose a random type")
+}
+
 // RegeneratesOnQuery：random 每次查询重掷一批 → true。
 func (p *Provider) RegeneratesOnQuery() bool { return true }
 
 func (p *Provider) Query(ctx providers.QueryCtx) []providers.Match {
 	q := strings.TrimSpace(ctx.Query)
-	switch ctx.SubMode {
-	case SubModeInt, SubModeStr, SubModeSym, SubModeHex:
-		return p.queryLevel2(ctx.SubMode, q)
-	default:
-		return p.queryLevel1(q)
+	if ctx.SubMode == SubModeInt {
+		return p.queryInt(q)
 	}
+	if cs, ok := p.charsetBySubMode(ctx.SubMode); ok {
+		return p.queryCharset(cs, q)
+	}
+	if ctx.SubMode != "" {
+		// 配置被改掉后可能停在已删除 / 停用的字符集上：给一条说明，别假装还在里面。
+		return []providers.Match{hintRow(i18n.L("字符集不可用", "Character set unavailable"),
+			i18n.L("该字符集已停用或删除，按退格返回", "This character set is disabled or removed; press Backspace to go back"), 1.0)}
+	}
+	return p.queryLevel1(q)
 }
 
-// queryLevel1：空输入列四个进入二级的方向；非空只给「先选类型」提示（一级纯选择器）。
+// queryLevel1：空输入列「随机整数」+ 所有启用的字符集；非空只给「先选类型」提示
+// （一级纯选择器）。
 func (p *Provider) queryLevel1(query string) []providers.Match {
-	if query == "" {
-		return []providers.Match{
-			providers.MatchSubquery(ID, i18n.L("随机整数", "Random integer"), i18n.L("默认 1–100，进入后可选范围", "Default 1–100; set a range inside"), SubModeInt, 1.0),
-			providers.MatchSubquery(ID, i18n.L("随机字符串", "Random string"), i18n.L("默认 16 位字母+数字，进入后可选长度", "16 letters/digits by default; set a length inside"), SubModeStr, 0.95),
-			providers.MatchSubquery(ID, i18n.L("含特殊字符", "With symbols"), i18n.L("默认 16 位，字母+数字+特殊字符", "16 chars with letters, digits and symbols by default"), SubModeSym, 0.9),
-			providers.MatchSubquery(ID, i18n.L("十六进制", "Hexadecimal"), i18n.L("默认 32 位，0-9a-f", "32 hex chars (0-9a-f) by default"), SubModeHex, 0.85),
-		}
-	}
-	return []providers.Match{hintRow(i18n.L("请先选择随机类型", "Choose a random type first"),
-		i18n.L("进入上方类型后再设置参数（范围 / 长度）", "Open a type above to set its options (range / length)"), 1.0)}
-}
-
-// queryLevel2：首条固定「重新生成」（Refresh），随后按预置 / 参数生成 count 条。
-func (p *Provider) queryLevel2(subMode, query string) []providers.Match {
-	count := p.config.Count
-	if count < 1 {
-		count = 1
-	}
-	refreshSubtitle := i18n.L("重新生成", "Regenerate")
-	if count > 1 {
-		refreshSubtitle = fmt.Sprintf(i18n.L("再生成 %d 个", "Generate %d more"), count)
+	if query != "" {
+		return []providers.Match{hintRow(i18n.L("请先选择随机类型", "Choose a random type first"),
+			i18n.L("进入上方类型后再设置参数（范围 / 长度）", "Open a type above to set its options (range / length)"), 1.0)}
 	}
 	out := []providers.Match{
-		providers.MatchExecute(ID, i18n.L("重新生成", "Regenerate"), refreshSubtitle,
-			providers.Action{Kind: providers.ActionRefresh}, 1.0),
+		providers.MatchSubquery(ID, i18n.L("随机整数", "Random integer"),
+			i18n.L("默认 1–100，进入后可选范围", "Default 1–100; set a range inside"), SubModeInt, 1.0),
 	}
+	index := 0
+	for _, cs := range p.charsets {
+		if !cs.enabled {
+			continue
+		}
+		out = append(out, providers.MatchSubquery(ID, cs.name,
+			fmt.Sprintf(i18n.L("默认 %d 位；字符集 %s", "%d chars by default; charset %s"), p.effectiveLength(cs), cs.pattern),
+			charsetSubMode(cs.name), 0.95-float64(index)*0.03))
+		index++
+	}
+	return out
+}
 
-	defaultReq, ok := defaultRequest(subMode)
-	if !ok {
-		return out // 未知 sub_mode 兜底：只有重新生成项。
-	}
-	if query == "" {
-		return p.appendMany(out, defaultReq, count)
-	}
-
-	var req request
-	if subMode == SubModeInt {
+// queryInt 二级：首条固定「重新生成」，随后按默认 / 指定范围生成 count 条。
+func (p *Provider) queryInt(query string) []providers.Match {
+	out := p.refreshRows()
+	req := request{low: 1, high: 100}
+	if query != "" {
 		r, ok := parse(query)
-		if !ok || r.isString {
+		if !ok {
 			return append(out, hintRow(i18n.L("无法解析", "Cannot parse"), i18n.L("示例：5-10 或 24", "Example: 5-10 or 24"), 0.98))
 		}
 		req = r
-	} else {
+	}
+	return p.appendMany(out, req, p.count())
+}
+
+// queryCharset 二级：首条固定「重新生成」，随后按默认 / 指定长度生成 count 条。
+func (p *Provider) queryCharset(cs resolvedCharset, query string) []providers.Match {
+	out := p.refreshRows()
+	req := request{isString: true, length: p.effectiveLength(cs), alphabet: cs.alphabet, charsetName: cs.name}
+	if query != "" {
 		n, ok := parseLengthParam(query)
 		if !ok {
 			return append(out, hintRow(i18n.L("无法解析", "Cannot parse"), i18n.L("示例：5-10 或 24", "Example: 5-10 or 24"), 0.98))
 		}
-		req = request{isString: true, length: n, alpha: defaultReq.alpha}
+		req.length = n
 	}
-	return p.appendMany(out, req, count)
+	return p.appendMany(out, req, p.count())
+}
+
+func (p *Provider) count() int {
+	if p.config.Count < 1 {
+		return 1
+	}
+	return p.config.Count
+}
+
+// refreshRows 是二级列表首条：动作 Refresh，副标题按 count 提示再生成数量。
+func (p *Provider) refreshRows() []providers.Match {
+	subtitle := i18n.L("重新生成", "Regenerate")
+	if n := p.count(); n > 1 {
+		subtitle = fmt.Sprintf(i18n.L("再生成 %d 个", "Generate %d more"), n)
+	}
+	return []providers.Match{
+		providers.MatchExecute(ID, i18n.L("重新生成", "Regenerate"), subtitle,
+			providers.Action{Kind: providers.ActionRefresh}, 1.0),
+	}
 }
 
 // appendMany 按 request 生成 count 条（标题即值，动作 Copy），追加到 out。
@@ -214,25 +303,10 @@ func (p *Provider) appendMany(out []providers.Match, req request, count int) []p
 	return out
 }
 
-func defaultRequest(subMode string) (request, bool) {
-	switch subMode {
-	case SubModeInt:
-		return request{low: 1, high: 100}, true
-	case SubModeStr:
-		return request{isString: true, length: defaultStringLen, alpha: alphaAlnum}, true
-	case SubModeSym:
-		return request{isString: true, length: defaultStringLen, alpha: alphaSym}, true
-	case SubModeHex:
-		return request{isString: true, length: 32, alpha: alphaHex}, true
-	default:
-		return request{}, false
-	}
-}
-
 func (p *Provider) generate(req request) (string, string) {
 	if req.isString {
-		return p.randomStringWith(req.length, req.alpha),
-			fmt.Sprintf(i18n.L("随机字符串（%d 位 · %s）", "Random string (%d chars · %s)"), req.length, req.alpha.label())
+		return p.randomStringWith(req.length, req.alphabet),
+			fmt.Sprintf(i18n.L("随机字符串（%d 位 · %s）", "Random string (%d chars · %s)"), req.length, req.charsetName)
 	}
 	return strconv.FormatInt(p.randomInt(req.low, req.high), 10),
 		fmt.Sprintf(i18n.L("随机整数 [%d, %d]", "Random integer [%d, %d]"), req.low, req.high)
@@ -253,17 +327,18 @@ func (p *Provider) randomInt(low, high int64) int64 {
 	return low + int64(p.randomU64()%uint64(span))
 }
 
-func (p *Provider) randomString(n int) string { return p.randomStringWith(n, alphaAlnum) }
-
-// randomStringWith 生成一个定长随机字符串（指定字符表，长度封顶 maxStringLen）。
-func (p *Provider) randomStringWith(n int, a alphabetKind) string {
-	table := []byte(a.chars())
+// randomStringWith 从给定字符表生成定长随机字符串（长度封顶 maxStringLen）。
+// 长度按 rune 计，字符集含非 ASCII 字符时输出字节数会更多。
+func (p *Provider) randomStringWith(n int, alphabet []rune) string {
+	if len(alphabet) == 0 || n <= 0 {
+		return ""
+	}
 	if n > maxStringLen {
 		n = maxStringLen
 	}
-	out := make([]byte, n)
-	for i := 0; i < n; i++ {
-		out[i] = table[p.randomU64()%uint64(len(table))]
+	out := make([]rune, n)
+	for i := range out {
+		out[i] = alphabet[p.randomU64()%uint64(len(alphabet))]
 	}
 	return string(out)
 }
@@ -280,52 +355,17 @@ func hintRow(title, subtitle string, score float64) providers.Match {
 	return m
 }
 
-// parse 把查询解析成 request；不认识返回 ok=false。空查询 = [0, defaultIntMax]。
+// parse 把查询解析成整数范围 request；不认识返回 ok=false。空查询 = [0, defaultIntMax]。
 func parse(query string) (request, bool) {
 	q := strings.TrimSpace(query)
 	if q == "" {
 		return request{low: 0, high: defaultIntMax}, true
-	}
-	lower := strings.ToLower(q)
-	groups := []struct {
-		names []string
-		alpha alphabetKind
-	}{
-		{[]string{"str", "string", "alnum"}, alphaAlnum},
-		{[]string{"sym", "special", "symbols"}, alphaSym},
-		{[]string{"hex"}, alphaHex},
-	}
-	for _, g := range groups {
-		for _, name := range g.names {
-			if lower == name {
-				return request{isString: true, length: defaultStringLen, alpha: g.alpha}, true
-			}
-			if rest, ok := stripNameColon(lower, name); ok {
-				n, ok2 := parseLen(rest)
-				if !ok2 {
-					return request{}, false
-				}
-				return request{isString: true, length: n, alpha: g.alpha}, true
-			}
-		}
 	}
 	low, high, ok := parseRange(q)
 	if !ok {
 		return request{}, false
 	}
 	return request{low: low, high: high}, true
-}
-
-// stripNameColon：lower 形如 `<name>:rest` 时返回 rest（已 trim）。
-func stripNameColon(lower, name string) (string, bool) {
-	if !strings.HasPrefix(lower, name) {
-		return "", false
-	}
-	rest := lower[len(name):]
-	if !strings.HasPrefix(rest, ":") {
-		return "", false
-	}
-	return strings.TrimSpace(rest[1:]), true
 }
 
 // parseRange 解析 `100`（0–100）、`1-100`、`1..100`、`1..=100`、`-50-50`。
@@ -398,7 +438,7 @@ func parseLen(text string) (int, bool) {
 	return n, true
 }
 
-// parseLengthParam 二级 str/sym/hex 的长度参数：容忍 `str:` 前缀，再交给 parseLen。
+// parseLengthParam 二级字符集的长度参数：容忍 `str:` 这类前缀，再交给 parseLen。
 func parseLengthParam(query string) (int, bool) {
 	q := strings.TrimSpace(query)
 	digits := q

@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"voke/internal/logic/charset"
 	"voke/internal/logic/config"
 	"voke/internal/logic/engine"
 	"voke/internal/logic/frequency"
@@ -66,6 +67,22 @@ type providerPatch struct {
 	Activation *string  `json:"activation,omitempty" toml:"activation,omitempty"`
 	Count      *int     `json:"count,omitempty" toml:"count,omitempty"`
 	Hotkey     *string  `json:"hotkey,omitempty" toml:"hotkey,omitempty"`
+	// DefaultLength 对应 default_length：字符串生成的默认长度（目前仅 random）。
+	DefaultLength *int `json:"default_length,omitempty" toml:"default_length,omitempty"`
+	// Charsets 对应 [[providers.<id>.charsets]]：目前仅 random 消费。nil = 没写，
+	// 回落 Descriptor 默认；读取到空数组时按「显式没有字符集」处理（编码侧不写空
+	// 列表——设置页要求至少保留一套字符集）。
+	Charsets []charsetPatch `json:"charsets,omitempty" toml:"charsets,omitempty"`
+}
+
+// charsetPatch 是单套字符集的落盘形状。Enabled 用指针区分「没写」（默认启用）
+// 与显式停用。
+type charsetPatch struct {
+	Name    string `json:"name" toml:"name"`
+	Pattern string `json:"pattern" toml:"pattern"`
+	// Length 为 0 时省略，表示跟随插件的 default_length。
+	Length  int   `json:"length,omitempty" toml:"length,omitempty"`
+	Enabled *bool `json:"enabled,omitempty" toml:"enabled,omitempty"`
 }
 
 // configFile 是顶层 schema（与生产 config.toml 同形：顶层四键 + [providers.<id>] 表）。
@@ -148,6 +165,9 @@ func decodeFile(f configFile) Loaded {
 			Prefix:   p.Prefix,
 			Count:    p.Count,
 			Hotkey:   p.Hotkey,
+			// DefaultLength 同理：nil = 没写。
+			DefaultLength: p.DefaultLength,
+			Charsets:      decodeCharsets(p.Charsets),
 		}
 		if p.Activation != nil {
 			if a, ok := normalizeActivation(*p.Activation); ok {
@@ -156,6 +176,33 @@ func decodeFile(f configFile) Loaded {
 			// 非法 activation → 留 nil（等同没写）。
 		}
 		out.Overrides = append(out.Overrides, ov)
+	}
+	return out
+}
+
+// decodeCharsets 把落盘列表还原成配置值。nil 保持 nil（= 没写，回落默认）；
+// 非 nil 的空列表保留为空（= 显式没有字符集）。缺省 enabled 按 true 处理。
+func decodeCharsets(in []charsetPatch) []charset.Spec {
+	if in == nil {
+		return nil
+	}
+	out := make([]charset.Spec, 0, len(in))
+	for _, c := range in {
+		enabled := true
+		if c.Enabled != nil {
+			enabled = *c.Enabled
+		}
+		out = append(out, charset.Spec{Name: c.Name, Pattern: c.Pattern, Enabled: enabled, Length: c.Length})
+	}
+	return out
+}
+
+// encodeCharsets 把配置值转成落盘形状；enabled 显式写出，避免默认值歧义。
+func encodeCharsets(in []charset.Spec) []charsetPatch {
+	out := make([]charsetPatch, 0, len(in))
+	for _, c := range in {
+		enabled := c.Enabled
+		out = append(out, charsetPatch{Name: c.Name, Pattern: c.Pattern, Length: c.Length, Enabled: &enabled})
 	}
 	return out
 }
@@ -240,6 +287,10 @@ func Encode(top Top, overrides []config.UserOverride) ([]byte, error) {
 		patch := providerPatch{
 			Enabled: ov.Enabled, IsGlobal: ov.IsGlobal, Weight: ov.Weight,
 			Activation: ov.Activation, Count: ov.Count, Hotkey: ov.Hotkey,
+			DefaultLength: ov.DefaultLength,
+		}
+		if len(ov.Charsets) > 0 {
+			patch.Charsets = encodeCharsets(ov.Charsets)
 		}
 		if ov.Prefix != nil && *ov.Prefix != "" {
 			patch.Prefix = ov.Prefix // 空前缀=无，生产 config.toml 也不写该键

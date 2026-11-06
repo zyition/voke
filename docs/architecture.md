@@ -101,7 +101,7 @@ type Provider interface {
 | `base64` | `@b `（Indirect） | 编码 / 解码 |
 | `uuid` | `@u `（Indirect） | UUID v4 |
 | `timestamp` | `@t `（Indirect） | 时间戳 ⇄ 可读时间 |
-| `random` | `@r `（Indirect） | 随机整数 / 字符串 |
+| `random` | `@r `（Indirect） | 随机整数 / 字符串；字符串类型由 `[[providers.random.charsets]]` 驱动，`default_length` 为未单独设置长度的字符集兜底 |
 | `clipboard` | `@c`（Direct，默认快捷键 ``Alt+` ``） | 剪贴板历史：文本 / HTML / RTF / 图片；Enter 粘贴、Ctrl+Enter 纯文本、Ctrl+Shift+T 置顶、Ctrl+Delete 删除 |
 
 Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可编辑**。
