@@ -4,6 +4,16 @@
 > (grouping rules in `cliff.toml`, release process in `AGENTS.md`). Do not edit manually.
 > Entries up to v0.6.0 are kept in Chinese; later entries are English, optionally bilingual.
 
+## [0.7.0] - 2026-11-06
+
+### Features
+
+- 随机值插件支持自定义字符集与默认长度
+- 拆分工作区插件为 Zed 与 VSCode
+
+### Documentation
+
+- Make commit messages and changelog English-first
 ## [0.6.0] - 2026-11-04
 
 ### Features
