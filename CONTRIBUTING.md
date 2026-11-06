@@ -92,9 +92,11 @@ bash packaging/build-installer.sh
 
 ## 六、Commit / PR
 
-- Conventional Commits + 中文描述，例如 `feat: 支持按拼音首字母模糊匹配`。
+- Conventional Commits + **英文描述**，例如 `feat: add pinyin-initial fuzzy matching`。
+  需要双语时用 `feat: add X（新增 X）`，英文在前、中文括号补充。
 - 类型常用 `feat` / `fix` / `perf` / `refactor` / `docs` / `test` / `chore`；
-  CHANGELOG 由 git-cliff 自动生成，**不要手改**。
+  CHANGELOG 由 git-cliff 自动生成，**默认英文，不要手改**。
+  历史条目保留中文；v0.6.0 之后的新版本起新条目英文/双语。
 - 一个 PR 只做一件事；提交前跑第三节的格式/静态检查/测试。
 - 涉及自启、外部程序执行、配置读写等安全面变更，请同步更新 `SECURITY.md` 的威胁面。
 

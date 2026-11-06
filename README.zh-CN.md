@@ -181,9 +181,11 @@ mygo 平台能力与 Win32 调用集中在 `internal/platform`。
 
 ## 参与贡献
 
-- 提交信息采用 **Conventional Commits + 中文描述**（如 `feat: 支持按拼音首字母模糊匹配`），
+- 提交信息采用 **Conventional Commits + 英文描述**（如 `feat: add pinyin-initial fuzzy matching`）；
+  需要双语时用 `feat: add X（新增 X）`，英文在前、中文括号补充。
   类型常用 `feat` / `fix` / `perf` / `refactor` / `docs` / `test` / `chore`。
-- **CHANGELOG 由 [git-cliff](https://github.com/orhun/git-cliff) 自动生成，不要手改 `CHANGELOG.md`**。
+- **CHANGELOG 由 [git-cliff](https://github.com/orhun/git-cliff) 自动生成，默认英文，不要手改 `CHANGELOG.md`**；
+  历史条目保留中文，v0.6.0 之后的新版本起新条目英文/双语。
 - CI 会跑 `gofmt`、`go mod tidy` 自检、`go vet`、`go test -race` 与 Windows 交叉构建；
   提交前请本地跑通。
 - 更多分层铁律、严禁事项见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。

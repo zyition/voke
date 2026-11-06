@@ -10,10 +10,12 @@ Rust/gpui 参考实现已归档到 **`legacy-rust` 分支与 `v0.1.x` tag**，�
 
 ## 仓库纪律
 
-- 注释 / 文档 / commit message 一律**简体中文**。
-- commit message 走 **Conventional Commits**：`feat:` / `fix:` / `perf:` / `refactor:` /
-  `test:` / `docs:` 等英文前缀 + 中文描述。CHANGELOG 由 git-cliff 按前缀生成，
-  `style|build|ci|chore|revert` 不会进 CHANGELOG。
+- 代码注释 / `docs/` 下的文档一律**简体中文**；用户可见文案必须走 i18n。
+- commit message 走 **Conventional Commits**，描述用**英文**：`feat:` / `fix:` / `perf:` /
+  `refactor:` / `test:` / `docs:` 等英文前缀 + 英文描述。需要双语时用
+  `feat: add X（新增 X）` 这种「英文在前、中文括号补充」的写法。
+  CHANGELOG 由 git-cliff 按前缀生成，默认英文；`style|build|ci|chore|revert` 不会进 CHANGELOG。
+- 历史提交里的中文描述不重写；CHANGELOG 从 v0.6.0 之后的新版本起为英文/双语，旧条目保留中文。
 - **格式统一 `gofmt`**：提交前在仓库根目录跑 `gofmt -l .`（应为空）或
   `gofmt -w`；CI 强制检查。不要顺手格式化与本次改动无关的文件。
 - **严禁编造 API**：mygo 签名查模块缓存
@@ -21,7 +23,7 @@ Rust/gpui 参考实现已归档到 **`legacy-rust` 分支与 `v0.1.x` tag**，�
   `go doc`、`golang.org/x/sys/windows` 真实定义。不要凭记忆写。
 - `git add` 只加自己改的文件（**禁 `git add -A`**）；commit 用
   `git -c user.name="zyition" -c user.email="2321694+zyition@users.noreply.github.com" commit`，
-  简体中文 3–5 行；**不 force push**。
+  英文 3–5 行；**不 force push**。
 
 ## 分层铁律（Go）
 
