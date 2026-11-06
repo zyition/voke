@@ -1,7 +1,8 @@
 // pluginicons.go：插件角标图标——逐字取自生产 voke 用的 Lucide 资源
 // （gpui-kit-assets assets/icons/*.svg，Lucide/ISC 许可）。键与图标对齐 Rust
-// `badge::plugin_icon` 的 PLUGIN_ICONS 表，保证「插件用的是之前那套 icon」，
-// 而非「文本首字母 + 哈希色块」。apps/windows 有真 PNG 时结果行走 PNG，picker
+// `badge::plugin_icon` 的 PLUGIN_ICONS 表；工作区拆成 zed / vscode 后分别使用
+// code / square-code。目标是「插件用的是之前那套 icon」，而非「文本首字母 + 哈希
+// 色块」。apps/windows 有真 PNG 时结果行走 PNG，picker
 // 行与其它无 PNG 的插件结果行走这里的矢量图标；未登记 id 落 Blocks 兜底。
 package ui
 
@@ -25,7 +26,8 @@ func pluginIconTable() map[string]*goui.SVG {
 		pluginSVGs = map[string]*goui.SVG{
 			"awake":      goui.MustParseSVG(lucideCoffee),
 			"terminal":   goui.MustParseSVG(lucideSquareTerminal),
-			"workspaces": goui.MustParseSVG(lucideLayoutGrid),
+			"vscode":     goui.MustParseSVG(lucideCode),
+			"zed":        goui.MustParseSVG(lucideSquareCode),
 			"calculator": goui.MustParseSVG(lucideCalculator),
 			"clipboard":  goui.MustParseSVG(lucideClipboardList),
 			"timestamp":  goui.MustParseSVG(lucideClock),
@@ -53,7 +55,9 @@ var (
 
 	lucideSquareTerminal = []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/></svg>`)
 
-	lucideLayoutGrid = []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>`)
+	lucideCode = []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>`)
+
+	lucideSquareCode = []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m10 9-3 3 3 3"/><path d="m14 15 3-3-3-3"/><rect x="3" y="3" width="18" height="18" rx="2"/></svg>`)
 
 	lucideCalculator = []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="20" x="4" y="2" rx="2"/><line x1="8" x2="16" y1="6" y2="6"/><line x1="16" x2="16" y1="14" y2="18"/><path d="M16 10h.01"/><path d="M12 10h.01"/><path d="M8 10h.01"/><path d="M12 14h.01"/><path d="M8 14h.01"/><path d="M12 18h.01"/><path d="M8 18h.01"/></svg>`)
 

@@ -39,7 +39,7 @@ main.go
 |---|---|---|
 | `internal/logic/**` | 查询引擎、配置归一、面板状态、搜索/频率、图标缓存、日志滚动、几何 | **纯 Go**，零 mygo、零 syscall；Linux 原生可测 |
 | `internal/match` | 拼音键、模糊匹配（nucleo 0.3.1 评分移植） | 纯 Go，可 Linux 测 |
-| `internal/providers/**` | Provider 契约 + 11 个内置插件实现 | 纯查询，无 IO / 无 mygo；副作用以 `Action` 值返回 |
+| `internal/providers/**` | Provider 契约 + 12 个内置插件实现（含 apps 折叠） | 纯查询，无 IO / 无 mygo；副作用以 `Action` 值返回 |
 | `internal/platform/**` | **唯一**封装 mygo 平台模块（Shell / Screen / Tray / Clipboard / GlobalShortcut / 单实例）与 Win32/COM 的层 | 每项标注主线程约束；Windows 专属文件配 `_stub.go` |
 | `internal/ui/**` | mygo `ui` 组件、主题、面板/插件/设置视图 | 只做视图；不持有业务状态、不直接调平台模块 |
 | `internal/app/**` | 进程装配、生命周期、主线程状态与意图执行 | 可用 mygo App/Window 生命周期 API；平台能力经 `platform` |
@@ -97,7 +97,8 @@ type Provider interface {
 | `calculator` | `=`（Direct，同时全局） | 算术表达式 |
 | `awake` | `@a`（Direct） | 保持唤醒 / 取消，支持连屏幕 |
 | `terminal` | `_`（Direct） | Windows Terminal profile；行内「以管理员身份打开」走 runas |
-| `workspaces` | `{`（Direct） | Zed / VS Code 最近工作区 |
+| `vscode` | `{`（Direct） | VS Code 最近工作区；与 `zed` 共用 `internal/providers/workspaces` 的解析与查询 |
+| `zed` | `}`（Direct） | Zed 最近工作区；数据源为各通道 `db.sqlite` |
 | `base64` | `@b `（Indirect） | 编码 / 解码 |
 | `uuid` | `@u `（Indirect） | UUID v4 |
 | `timestamp` | `@t `（Indirect） | 时间戳 ⇄ 可读时间 |
@@ -152,7 +153,7 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
 | 托盘 | mygo `Tray`；左键双击显示面板，右键出菜单（`tray.go`） |
 | 开机自启 | Win32 注册表 `HKCU\...\Run\voke`（`autostart_windows.go`） |
 | 窗口枚举 / 激活 | user32 EnumWindows + SetForegroundWindow（`windows_enum_windows.go`） |
-| 终端配置 / 工作区 | 读取 Windows Terminal settings.json；只读 SQLite（Zed / VS Code） |
+| 终端配置 / 编辑器工作区 | 读取 Windows Terminal settings.json；只读 SQLite（Zed / VS Code） |
 | 剪贴板 | mygo `Clipboard` + 序列号轮询 / `SendInput` / 提权粘贴辅助（`clipboard*.go`） |
 | 提权 | Token 完整性判定 + `ShellExecuteEx(runas)` 一次性辅助进程（`elevate*.go`） |
 | 结束进程 | `OpenProcess` + `TerminateProcess`，拒绝自身与核心系统进程（`endtask*.go`） |

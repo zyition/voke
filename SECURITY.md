@@ -57,8 +57,8 @@
   （`voke.exe --elevated-paste`）代发粘贴键。辅助进程会复核目标确为管理员进程、完成
   即退出，不常驻、不接受其它命令。取消 UAC 则不做任何注入，内容只留在剪贴板。
 - **只读本地数据**：应用/窗口枚举走 Shell 的 Applications 文件夹与 Win32 枚举；
-  终端配置读取 Windows Terminal 的 `settings.json`；工作区插件只读打开 Zed /
-  VS Code 的历史 SQLite 数据库。不会修改这些来源。
+  终端配置读取 Windows Terminal 的 `settings.json`；Zed / VSCode 工作区插件分别
+  只读打开各自的历史 SQLite 数据库。不会修改这些来源。
 - **单实例**：使用 mygo 的 per-user socket 锁（临时目录下的本地 socket），第二实例
   把命令行转交给首实例后退出；不使用命名互斥体，也不开放网络端口。
 

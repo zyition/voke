@@ -28,7 +28,7 @@ func TestFoldAppMatch(t *testing.T) {
 
 // TestCollectGlobalBatches：apps 批在最前；其后只 enabled&&is_global 且在 pluginReg 的插件。
 // 当前默认全局插件是 calculator（前缀 "=" 但 is_global=true）与 windows（Linux 空数据源）。
-// base64（is_global 假）不进、picker（不在 reg）不进；awake/terminal/workspaces 已退出全局，
+// base64（is_global 假）不进、picker（不在 reg）不进；awake/terminal/vscode/zed 已退出全局，
 // 不再出现在裸查询批次里。
 func TestCollectGlobalBatches(t *testing.T) {
 	st := newGlobalState(t)
@@ -50,8 +50,8 @@ func TestCollectGlobalBatches(t *testing.T) {
 	if !containsID(ids, "calculator") {
 		t.Errorf("calculator（is_global、1+1 有结果）应在批次里：%v", ids)
 	}
-	if containsID(ids, "awake") || containsID(ids, "terminal") || containsID(ids, "workspaces") {
-		t.Errorf("awake/terminal/workspaces 已退出全局，不该进批次：%v", ids)
+	if containsID(ids, "awake") || containsID(ids, "terminal") || containsID(ids, "vscode") || containsID(ids, "zed") {
+		t.Errorf("awake/terminal/vscode/zed 已退出全局，不该进批次：%v", ids)
 	}
 }
 

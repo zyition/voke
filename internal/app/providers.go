@@ -4,7 +4,7 @@
 // apps 无前缀、picker 前缀 "#"、各插件默认前缀/激活方式/权重/条数全都写在
 // 本文件的 Descriptor 中，engine / ui / platform 一处都不再抄第二份。
 //
-// 当前注册 11 个内置插件 + picker；用户覆盖由 appcfg 从 config.toml 解码后
+// 当前注册 12 个内置插件 + picker；用户覆盖由 appcfg 从 config.toml 解码后
 // 交给 config.Normalize 合并，再经 BuildTable 产出前缀表。前缀冲突（C2）、
 // 旧版 #b/#u/#t/#r 的自动修复都在这一层接线（见 loadConfigs / repairPrefixConflicts）。
 package app
@@ -156,11 +156,19 @@ func builtinDescriptors() []config.Descriptor {
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 		{
-			// workspaces：`{` 直接进入（同样退出裸查询）。
-			ID: workspaces.ID, Name: i18n.L("工作区", "Workspaces"), Description: i18n.L("Zed / VSCode 最近打开的工作区，用记录它的编辑器打开", "Recent Zed / VS Code workspaces, opened with the editor that recorded them"),
-			Aliases:        []string{"ws", "gzq"},
+			// vscode / zed：两个插件共用 workspaces 包的解析与查询实现，只是数据源、
+			// 编辑器命令与默认前缀不同。二者都退出裸查询。
+			ID: workspaces.VsCodeID, Name: "VSCode", Description: i18n.L("VS Code 最近打开的工作区", "Recent VS Code workspaces"),
+			Aliases:        []string{"ws", "gzq", "code", "vsc"},
 			DefaultEnabled: true, DefaultIsGlobal: false,
 			DefaultPrefix: "{", DefaultActivation: engine.Direct,
+			DefaultWeight: 1.0, DefaultCount: 5,
+		},
+		{
+			ID: workspaces.ZedID, Name: "Zed", Description: i18n.L("Zed 最近打开的工作区", "Recent Zed workspaces"),
+			Aliases:        []string{"ws", "gzq", "zed", "zd"},
+			DefaultEnabled: true, DefaultIsGlobal: false,
+			DefaultPrefix: "}", DefaultActivation: engine.Direct,
 			DefaultWeight: 1.0, DefaultCount: 5,
 		},
 	}
@@ -178,7 +186,8 @@ func builtinProviders() *providers.Registry {
 // 快照（每次查询现取）。fetch=nil 时与 builtinProviders 等价（测试 / 非 Windows）。
 func builtinProvidersWithClipboard(fetch clipboardprovider.Fetcher) *providers.Registry {
 	return providers.NewRegistry(base64.New(), uuid.New(), timestamp.New(), random.New(), calculator.New(),
-		clipboardprovider.New(fetch, nil), awakeProvider(), windowsProvider(), terminalProvider(), workspacesProvider())
+		clipboardprovider.New(fetch, nil), awakeProvider(), windowsProvider(), terminalProvider(),
+		vscodeProvider(), zedProvider())
 }
 
 // clipboardFetch 返回剪贴板历史的只读快照闭包。st.hist 为 nil（未初始化 / 测试）
@@ -222,21 +231,21 @@ func terminalProvider() *terminal.Provider {
 	}, platform.WTExe())
 }
 
-// workspacesProvider 把 workspaces provider 接到真实数据源：只读 Zed 各通道 db.sqlite 的
-// workspaces 行 + VS Code state.vscdb 的 recentlyOpenedPathsList（platform.Read*，纯 Go
-// SQLite 驱动、跨平台，非 Windows 无 %LOCALAPPDATA%/%USERPROFILE% → 返回 nil），交已移植的
-// 纯逻辑 workspaces.Workspaces 解析/排序/去重。zed/code 经 platform.ZedCommand/VSCodeCommand
-// 发现（装则用编辑器 CLI 打开，VS Code 走 cmd.exe /c code.cmd；未装 / 非 Windows 返回 nil →
-// open 退化为直接开路径）。非 Windows（含测试）源为空 = NewEmpty 零回归。
-func workspacesProvider() *workspaces.Provider {
-	return workspaces.New(func() []workspaces.Entry {
-		zedRows := platform.ReadZedWorkspaces()
-		vsRows := platform.ReadVsCodeRecents()
-		if len(zedRows) == 0 && len(vsRows) == 0 {
+// zedProvider / vscodeProvider 把两个工作区插件接到各自的数据源：只读 Zed 各通道
+// db.sqlite 的 workspaces 行 / VS Code state.vscdb 的 recentlyOpenedPathsList
+// （platform.Read*，纯 Go SQLite 驱动、跨平台，非 Windows 无 %LOCALAPPDATA%/
+// %USERPROFILE% → 返回 nil），交 workspaces 包的纯逻辑解析/排序/去重。编辑器命令经
+// platform.ZedCommand/VSCodeCommand 发现（装则用编辑器 CLI 打开，VS Code 走
+// cmd.exe /c code.cmd；未装 / 非 Windows 返回 nil → open 退化为直接开路径）。
+// 非 Windows（含测试）源为空 = 恒空 provider。
+func zedProvider() *workspaces.Provider {
+	return workspaces.NewZed(func() []workspaces.Entry {
+		rows := platform.ReadZedWorkspaces()
+		if len(rows) == 0 {
 			return nil
 		}
-		zs := make([]workspaces.ZedWorkspaceRow, len(zedRows))
-		for i, r := range zedRows {
+		in := make([]workspaces.ZedWorkspaceRow, len(rows))
+		for i, r := range rows {
 			zr := workspaces.ZedWorkspaceRow{Paths: r.Paths, Timestamp: r.Timestamp}
 			if r.Remote != nil {
 				zr.Remote = &workspaces.ZedRemoteRow{
@@ -244,14 +253,24 @@ func workspacesProvider() *workspaces.Provider {
 					User: r.Remote.User, Distro: r.Remote.Distro, ContainerID: r.Remote.ContainerID,
 				}
 			}
-			zs[i] = zr
+			in[i] = zr
 		}
-		vs := make([]workspaces.VsCodeRecentPayload, len(vsRows))
-		for i, p := range vsRows {
-			vs[i] = workspaces.VsCodeRecentPayload{JSON: p.JSON, FileTimestamp: p.FileTimestamp}
+		return workspaces.ZedEntries(in)
+	}, platformEditorCmd(platform.ZedCommand()))
+}
+
+func vscodeProvider() *workspaces.Provider {
+	return workspaces.NewVsCode(func() []workspaces.Entry {
+		rows := platform.ReadVsCodeRecents()
+		if len(rows) == 0 {
+			return nil
 		}
-		return workspaces.Workspaces(zs, vs)
-	}, platformEditorCmd(platform.ZedCommand()), platformEditorCmd(platform.VSCodeCommand()))
+		in := make([]workspaces.VsCodeRecentPayload, len(rows))
+		for i, p := range rows {
+			in[i] = workspaces.VsCodeRecentPayload{JSON: p.JSON, FileTimestamp: p.FileTimestamp}
+		}
+		return workspaces.VsCodeEntries(in)
+	}, platformEditorCmd(platform.VSCodeCommand()))
 }
 
 // platformEditorCmd 把 platform 的 neutral 编辑器命令映射成 workspaces.EditorCommand
@@ -407,6 +426,19 @@ func loadConfigs() (appcfg.Loaded, config.Configs, engine.Table, error) {
 	}
 	loaded, cfg, table, err := appcfg.Merge(builtinDescriptors(), data)
 	if err != nil {
+		// 旧版把 Zed / VSCode 合成一个 workspaces 插件；拆分后该 id 已不存在。
+		// 把它迁移成 vscode / zed 两条覆盖，避免整份插件设置被当成未知 id 丢弃。
+		if errors.Is(err, config.ErrUnknownProviderID) {
+			if migrated, ok := migrateLegacyWorkspaceOverrides(loaded.Overrides); ok {
+				migratedCfg, merr := config.Normalize(builtinDescriptors(), migrated)
+				if merr == nil {
+					log.Printf("voke 配置(%s)使用旧版 workspaces 插件，已迁移为 vscode / zed", path)
+					loaded.Overrides = migrated
+					return loaded, migratedCfg, migratedCfg.BuildTable(), nil
+				}
+				log.Printf("voke 配置(%s)的 workspaces 覆盖迁移失败：%v", path, merr)
+			}
+		}
 		// 旧配置迁移：v0.2.3 之前预设是 #b/#u/#t/#r，与 picker 的 "#" 构成
 		// 「短触发串遮蔽长触发串」。此时只丢掉冲突插件的 Prefix 覆盖再归一，
 		// 让新默认（@b/@u/@t/@r）生效，其余设置（热键/主题/自定义前缀）保持不动。
@@ -473,6 +505,45 @@ func repairPrefixConflicts(overrides []config.UserOverride) (config.Configs, eng
 		return config.Configs{}, nil, nil, fmt.Errorf("没有可丢弃的前缀覆盖")
 	}
 	return cfg, cfg.BuildTable(), dropped, nil
+}
+
+// migrateLegacyWorkspaceOverrides 把旧版合并插件 workspaces 的覆盖拆成 vscode / zed：
+// 启用态、全局态、权重、条数、激活方式对两者都生效；前缀与插件热键只能保留一份，
+// 交给沿用旧主入口的 vscode，zed 回落到默认值（否则两个插件会争同一个前缀 / 热键）。
+// 没有 workspaces 覆盖时返回 ok=false。
+func migrateLegacyWorkspaceOverrides(overrides []config.UserOverride) ([]config.UserOverride, bool) {
+	out := make([]config.UserOverride, 0, len(overrides)+1)
+	migrated := false
+	for _, ov := range overrides {
+		if ov.ID != "workspaces" {
+			out = append(out, ov)
+			continue
+		}
+		migrated = true
+		out = append(out,
+			config.UserOverride{
+				ID:      workspaces.ZedID,
+				Enabled: clonePtr(ov.Enabled), IsGlobal: clonePtr(ov.IsGlobal),
+				Weight: clonePtr(ov.Weight), Activation: clonePtr(ov.Activation),
+				Count: clonePtr(ov.Count),
+			},
+			config.UserOverride{
+				ID:      workspaces.VsCodeID,
+				Enabled: clonePtr(ov.Enabled), IsGlobal: clonePtr(ov.IsGlobal),
+				Weight: clonePtr(ov.Weight), Activation: clonePtr(ov.Activation),
+				Count: clonePtr(ov.Count), Prefix: clonePtr(ov.Prefix), Hotkey: clonePtr(ov.Hotkey),
+			},
+		)
+	}
+	return out, migrated
+}
+
+func clonePtr[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 // loadFrequency 启动时读频率表（数据目录下的 frequency.toml，env 可覆盖）。文件不存在

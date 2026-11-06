@@ -3,7 +3,7 @@
 // `+ aggregate`（按注册顺序分组、组内按 final_score 降序）。
 //
 // 为什么单列本文件：PoC 此前全局搜索只出 apps（`renderResults` 的 default 分支），而生产
-// 全局会把 awake / windows / terminal / workspaces 这些 is_global 插件的结果也聚进来。这是
+// 全局会把 awake / windows / terminal / vscode / zed 这些 is_global 插件的结果也聚进来。这是
 // 一处**真实功能差异**，不是纯重构。本层先把「算出该显示哪些分组」这条纯路径做出来并 headless
 // 测；渲染整合（合并成单条可导航列表 + 组间分隔 + 逐行 open/click 路由）是紧接的下一步切片，
 // 因其是 mygo 交互、无法在此真机验证，故先立稳数据地基。

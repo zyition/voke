@@ -315,9 +315,9 @@ func TestBuildPrefixTableShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildPrefixTable 失败：%v", err)
 	}
-	// apps 无前缀 → BuildTable 不为它生成条目；其余 11 条（picker/base64/uuid/timestamp/random/
-	// clipboard/calculator/awake/windows/terminal/workspaces）都带前缀，表序即优先级。
-	if len(table) != 11 ||
+	// apps 无前缀 → BuildTable 不为它生成条目；其余 12 条（picker/base64/uuid/timestamp/random/
+	// clipboard/calculator/awake/windows/terminal/vscode/zed）都带前缀，表序即优先级。
+	if len(table) != 12 ||
 		table[0] != (engine.PrefixEntry{Prefix: "#", PluginID: engine.PickerPluginID, Activation: engine.Direct}) ||
 		table[1] != (engine.PrefixEntry{Prefix: "@b", PluginID: "base64", Activation: engine.Indirect}) ||
 		table[2] != (engine.PrefixEntry{Prefix: "@u", PluginID: "uuid", Activation: engine.Indirect}) ||
@@ -328,11 +328,12 @@ func TestBuildPrefixTableShape(t *testing.T) {
 		table[7] != (engine.PrefixEntry{Prefix: "@a", PluginID: "awake", Activation: engine.Direct}) ||
 		table[8] != (engine.PrefixEntry{Prefix: "<", PluginID: "windows", Activation: engine.Direct}) ||
 		table[9] != (engine.PrefixEntry{Prefix: "_", PluginID: "terminal", Activation: engine.Direct}) ||
-		table[10] != (engine.PrefixEntry{Prefix: "{", PluginID: "workspaces", Activation: engine.Direct}) {
-		t.Errorf("前缀表 = %+v，想要十一条 [{# __picker Direct}, {@b base64 Indirect}, {@u uuid Indirect}, {@t timestamp Indirect}, {@r random Indirect}, {@c clipboard Direct}, {= calculator Direct}, {@a awake Direct}, {< windows Direct}, {_ terminal Direct}, {{ workspaces Direct}]", table)
+		table[10] != (engine.PrefixEntry{Prefix: "{", PluginID: "vscode", Activation: engine.Direct}) ||
+		table[11] != (engine.PrefixEntry{Prefix: "}", PluginID: "zed", Activation: engine.Direct}) {
+		t.Errorf("前缀表 = %+v，想要十二条 [{# __picker Direct}, {@b base64 Indirect}, {@u uuid Indirect}, {@t timestamp Indirect}, {@r random Indirect}, {@c clipboard Direct}, {= calculator Direct}, {@a awake Direct}, {< windows Direct}, {_ terminal Direct}, {{ vscode Direct}, {} zed Direct}]", table)
 	}
-	if got := strings.Join(cfg.IDs(), ","); got != "apps,__picker,base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces" {
-		t.Errorf("注册 id 序列（注册顺序）= %q，想要 \"apps,__picker,base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces\"", got)
+	if got := strings.Join(cfg.IDs(), ","); got != "apps,__picker,base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,vscode,zed" {
+		t.Errorf("注册 id 序列（注册顺序）= %q，想要 \"apps,__picker,base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,vscode,zed\"", got)
 	}
 	apps, ok := cfg.Lookup(wantAppsID)
 	if !ok {
@@ -423,11 +424,11 @@ func TestTypingPickerPrefixEntersPluginPicker(t *testing.T) {
 
 	wantState(t, st, "打 #", engine.PluginPicker, "", "", "")
 	wantToken(t, st, "打 #", wantPickerPrefix)
-	if got := rowIDs(st.pickerRows); got != wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces" {
-		t.Errorf("picker 列表 = %q，想要 %q（已启用插件 apps+base64+uuid+timestamp，picker 哨兵自己不算候选）", got, wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces")
+	if got := rowIDs(st.pickerRows); got != wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,vscode,zed" {
+		t.Errorf("picker 列表 = %q，想要 %q（已启用插件 apps+base64+uuid+timestamp，picker 哨兵自己不算候选）", got, wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,vscode,zed")
 	}
-	if len(st.pickerRows) != 11 {
-		t.Fatalf("picker 列表行数 = %d，想要 11（下面的行内容断言按首行=apps 写死）", len(st.pickerRows))
+	if len(st.pickerRows) != 12 {
+		t.Fatalf("picker 列表行数 = %d，想要 12（下面的行内容断言按首行=apps 写死）", len(st.pickerRows))
 	}
 	if r := st.pickerRows[0]; r.Name != wantAppsName || r.Description != wantAppsDesc {
 		t.Errorf("picker 首行 = %+v，想要 {%s %s}", r, wantAppsName, wantAppsDesc)
@@ -456,7 +457,7 @@ func TestRankPluginsUsesBothScoringChannels(t *testing.T) {
 		want  string
 		why   string
 	}{
-		{"", wantAppsID + ",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces", "空过滤词不过滤任何行（十一个已启用插件都列出）"},
+		{"", wantAppsID + ",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,vscode,zed", "空过滤词不过滤任何行（十二个已启用插件都列出）"},
 		{"yy", wantAppsID, "别名 yy 全等 → TierExact"},
 		{"app", wantAppsID + ",awake", "apps 别名 app 全等在前；awake 经别名 a 前缀 bonus 托底在后"},
 		{"yingyong", wantAppsID, "名称全拼走 fuzzy 通道命中"},
@@ -518,8 +519,8 @@ func TestPickerEnterThenAppsSearchEqualsGlobal(t *testing.T) {
 	st.onEmptyBackspace() // 空 + Backspace → PluginPicker
 	wantState(t, st, "空退 picker", engine.PluginPicker, "", "", "")
 	wantToken(t, st, "空退 picker", wantPickerPrefix)
-	if got := rowIDs(st.pickerRows); got != wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces" {
-		t.Errorf("回 picker 后列表 = %q，想要 %q", got, wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces")
+	if got := rowIDs(st.pickerRows); got != wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,vscode,zed" {
+		t.Errorf("回 picker 后列表 = %q，想要 %q", got, wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,vscode,zed")
 	}
 	typeInto(st, "z")     // picker 打过滤词
 	typeInto(st, "")      // 删空：停在 PluginPicker 空
@@ -620,8 +621,8 @@ func TestBackspaceEmptiesThenStepsDown(t *testing.T) {
 	st.onEmptyBackspace()
 	wantState(t, st, "空退 picker", engine.PluginPicker, "", "", "")
 	wantToken(t, st, "空退 picker", wantPickerPrefix)
-	if got := rowIDs(st.pickerRows); got != wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces" {
-		t.Errorf("插件态空退后 picker 列表 = %q，想要 %q", got, wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces")
+	if got := rowIDs(st.pickerRows); got != wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,vscode,zed" {
+		t.Errorf("插件态空退后 picker 列表 = %q，想要 %q", got, wantAppsID+",base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,vscode,zed")
 	}
 
 	// 子模式（fake）：删空停在子模式，再空 Backspace 退插件第一级（清 SubMode、留 PluginID）。
@@ -659,7 +660,7 @@ func TestBackspaceAfterPickerEntryStartsEmpty(t *testing.T) {
 	// 输入框空时的 Backspace 由 ui 层 OnTextKey 调到 onEmptyBackspace。
 	st.onEmptyBackspace()
 	wantState(t, st, "空退 picker", engine.PluginPicker, "", "", "")
-	if got, want := rowIDs(st.pickerRows), "apps,base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,workspaces"; got != want {
+	if got, want := rowIDs(st.pickerRows), "apps,base64,uuid,timestamp,random,clipboard,calculator,awake,windows,terminal,vscode,zed"; got != want {
 		t.Errorf("回 picker 后列表 = %q，想要全量 %q", got, want)
 	}
 }
@@ -923,6 +924,49 @@ func TestLoadConfigsWithOverride(t *testing.T) {
 	// 其余插件不受影响（uuid 仍默认启用、@u 仍在表）。
 	if u, ok := cfg.Lookup("uuid"); !ok || !u.Enabled {
 		t.Errorf("uuid 不该被波及：%+v", u)
+	}
+}
+
+// TestLoadConfigsMigratesLegacyWorkspaces：旧版合并插件 workspaces 的覆盖要迁移到
+// vscode / zed，而不是因未知 id 让整份插件配置退回默认。前缀与插件热键只保留给
+// vscode，避免两个插件争同一触发串。
+func TestLoadConfigsMigratesLegacyWorkspaces(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	data := `hotkey = "ctrl+alt+k"
+
+[providers.workspaces]
+enabled = false
+weight = 2.0
+prefix = "!"
+hotkey = "ctrl+alt+w"
+`
+	if err := os.WriteFile(p, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(configPathEnv, p)
+
+	loaded, cfg, table, err := loadConfigs()
+	if err != nil {
+		t.Fatalf("旧 workspaces 配置应自动迁移，实得 err = %v", err)
+	}
+	if loaded.Hotkey != "ctrl+alt+k" {
+		t.Errorf("迁移不应丢掉顶层热键：%+v", loaded)
+	}
+	if _, ok := cfg.Lookup("workspaces"); ok {
+		t.Error("迁移后不该再有 workspaces 插件")
+	}
+	vs, ok := cfg.Lookup("vscode")
+	if !ok || vs.Enabled || vs.Weight != 2.0 || vs.Prefix != "!" || vs.Hotkey != "ctrl+alt+w" {
+		t.Errorf("vscode 应继承旧 workspaces 的启用/权重/前缀/热键：%+v ok=%v", vs, ok)
+	}
+	z, ok := cfg.Lookup("zed")
+	if !ok || z.Enabled || z.Weight != 2.0 || z.Prefix != "}" || z.Hotkey != "" {
+		t.Errorf("zed 应继承启用/权重并回落默认前缀/无热键：%+v ok=%v", z, ok)
+	}
+	for _, e := range table {
+		if e.PluginID == "vscode" || e.PluginID == "zed" {
+			t.Errorf("迁移后两个插件都处于禁用态，不该进前缀表：%+v", table)
+		}
 	}
 }
 

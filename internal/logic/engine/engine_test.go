@@ -13,7 +13,7 @@ import (
 func testTable() Table {
 	return Table{
 		{Prefix: "=", PluginID: "calculator", Activation: Direct},
-		{Prefix: "{", PluginID: "workspaces", Activation: Direct},
+		{Prefix: "{", PluginID: "vscode", Activation: Direct},
 		{Prefix: "#", PluginID: PickerPluginID, Activation: Direct},
 		{Prefix: "ba", PluginID: "base64", Activation: Indirect},
 		{Prefix: "ts", PluginID: "timestamp", Activation: Indirect},
@@ -87,7 +87,7 @@ func TestScanFromGlobal(t *testing.T) {
 		want  State
 	}{
 		{"Direct 全等命中 calculator", State{}, "=", mk(Plugin, "calculator", "", "")},
-		{"Direct 命中前有前导空白：裁前导后仍命中", State{}.withQuery("x"), "  {", mk(Plugin, "workspaces", "", "")},
+		{"Direct 命中前有前导空白：裁前导后仍命中", State{}.withQuery("x"), "  {", mk(Plugin, "vscode", "", "")},
 		{"Indirect 前缀+空格命中 base64", State{}, "ba ", mk(Plugin, "base64", "", "")},
 		{"Indirect 裸前缀不切", State{}, "ba", mk(Global, "", "", "ba")},
 		{"Direct 多打一字符不切（全等，不是 StartsWith）", State{}, "=1+1", mk(Global, "", "", "=1+1")},
@@ -401,7 +401,7 @@ func stripComment(line string) string {
 
 func TestTableLookupByID(t *testing.T) {
 	table := Table{
-		{Prefix: "{", PluginID: "workspaces", Activation: Direct},
+		{Prefix: "{", PluginID: "vscode", Activation: Direct},
 		{Prefix: "=", PluginID: "calculator", Activation: Direct},
 		{Prefix: "=", PluginID: "calculator", Activation: Indirect},
 	}

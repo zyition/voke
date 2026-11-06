@@ -206,7 +206,7 @@ internal/app               Record / loadFrequency / saveFrequency 不变
    还要额外维护 keyKind 封顶逻辑。改成 `match/quality.go` 的 `acronymMatch`
    （查询片段依次取词首前缀）后：键表回到三路、少一套索引，且 `vsc` / `vscode` /
    `vs code` / `code` 全部命中 `Visual Studio Code`。
-2. **插件 picker 不接使用习惯**。白名单只收查找类 provider（apps / workspaces /
+2. **插件 picker 不接使用习惯**。白名单只收查找类 provider（apps / zed / vscode /
    terminal），插件（base64 / uuid / random / awake…）不再记分，所以 picker 侧
    没有可加的使用加成；其排序仍由 alias bonus 决定（`config.Rank` 不动）。
 3. **窗口不记使用习惯**。窗口键是标题（含页码、分支名），每次都在变；与用户确认

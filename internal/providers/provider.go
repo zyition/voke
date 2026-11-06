@@ -5,8 +5,8 @@
 // 分层（§7.2.1）：纯数据 + 纯查询接口，零 mygo、零 IO，Linux 原生可测。副作用
 // （执行 Action：启动/复制/设唤醒…）在 app 层 dispatcher 消费，不在本包。
 //
-// 与现有 apps 路径的关系：本包现承载**全部 10 个 provider**（base64/calculator/
-// uuid/random/timestamp/awake/windows/terminal/workspaces + apps 折叠），经
+// 与现有 apps 路径的关系：本包现承载**全部 11 个 provider**（base64/calculator/
+// uuid/random/timestamp/clipboard/awake/windows/terminal/zed/vscode + apps 折叠），经
 // `builtinProviders()` 注册进 pluginReg；`view.pluginPending()` 的「未接入」分支只在
 // 配置里出现无实现的 id 时兜底触发（正常安装不出现）。apps 的**展示**已折进本 Match
 // 模型（global.go `foldAppMatch`/`buildGlobalRows`，供全局聚合排序），但其**启动**仍走

@@ -111,6 +111,11 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 
   （`max(1, N/10)`，默认 N=9999）。构建期注入：
   `-ldflags -X voke/internal/platform.logMaxLinesRaw=20000`；
   本地安装器脚本会把 `VOKE_LOG_MAX_LINES` 映射到该参数。逻辑在 `internal/logic/logcap`。
+- 编辑器工作区：`vscode` / `zed` 两个插件共用 `internal/providers/workspaces` 的解析与
+  查询实现，默认前缀分别为 `{` / `}`；分别只读 VS Code `state.vscdb` 与 Zed 各通道
+  `db.sqlite`，打开时用对应编辑器 CLI。旧配置的 `[providers.workspaces]` 在加载时迁移成
+  两条覆盖（前缀 / 插件热键只留给 vscode，避免两个插件争同一触发串）——
+  `internal/app/providers.go`、`internal/platform/workspaces.go`。
 - 剪贴板历史（`@c`）：内存态、不持久化；后台每 500ms 轮询 `GetClipboardSequenceNumber`，
   变化后回主线程经 mygo `Clipboard.Read` 采文本/HTML/RTF/PNG，跳过敏感标记与文件列表。
   粘贴写回后先恢复唤起前的窗口，再发 `Ctrl+V`（终端用 `Shift+Insert`）；失败时保留面板并
@@ -134,7 +139,7 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 
   `language = "system" | "zh" | "en"`（默认 system，Windows 取系统 UI 语言）。
   用户可见文案必须走 i18n，日志保持中文。设置页左侧导航用 mygo `Sidebar`。
 - 前缀冲突（C2）：触发串（Direct=前缀，Indirect=前缀+空格）双向互为前缀即冲突；
-  默认前缀 `#`（picker）、`@a/@b/@c/@t/@r/@u`、`=`、`<`、`_`、`{`，其中
+  默认前缀 `#`（picker）、`@a/@b/@c/@t/@r/@u`、`=`、`<`、`_`、`{`、`}`，其中
   `@b/@t/@r/@u` 为 Indirect。旧配置加载时只丢弃冲突项的 Prefix
   覆盖，设置页保存前同一套校验——`internal/logic/config/prefix.go`、
   `internal/app/providers.go`、`internal/app/settings.go`。

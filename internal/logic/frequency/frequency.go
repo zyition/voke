@@ -55,7 +55,7 @@ func (s Store) UsageOf(key string) float64 { return UsageBonus(s[key]) }
 
 // recordableProviders 是**允许**累计使用习惯的 provider 白名单（默认拒绝）。
 //
-// 只收「查找类、且结果身份稳定」的 provider：apps（应用名）、workspaces（工作区名）、
+// 只收「查找类、且结果身份稳定」的 provider：apps（应用名）、zed / vscode（工作区名）、
 // terminal（终端 profile 名）。刻意不收的：
 //   - awake / uuid / random / calculator / base64 / timestamp：结果是**生成值**或一次性
 //     命令，没有「同一个条目」可言，记了只会把表撑脏（真实样本里出现过
@@ -66,9 +66,10 @@ func (s Store) UsageOf(key string) float64 { return UsageBonus(s[key]) }
 //
 // 未知 id（未来插件）默认拒绝——这张表影响排序，默认安全优先。
 var recordableProviders = map[string]bool{
-	"apps":       true,
-	"workspaces": true,
-	"terminal":   true,
+	"apps":     true,
+	"zed":      true,
+	"vscode":   true,
+	"terminal": true,
 }
 
 // Recordable 报告某 provider 的结果是否应记入使用习惯表。

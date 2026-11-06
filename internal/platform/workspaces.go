@@ -1,6 +1,6 @@
-// workspaces.go：workspaces provider 的 sys 半边——**只读**打开编辑器历史 SQLite 库并取原始行
-// （对照 voke-sys/src/workspace.rs）。解析 / 脏数据过滤 / 排序 / 去重不在本层，那是
-// internal/providers/workspaces 的纯逻辑（Workspaces / ZedEntries / VsCodeEntries，已测）；
+// workspaces.go：zed / vscode 两个工作区插件共用的 sys 半边——**只读**打开编辑器历史
+// SQLite 库并取原始行（对照 voke-sys/src/workspace.rs）。解析 / 脏数据过滤 / 排序 / 去重
+// 不在本层，那是 internal/providers/workspaces 的纯逻辑（ZedEntries / VsCodeEntries，已测）；
 // 本层只「把库里的字节变成结构化行」。
 //
 // 与 terminal/windows 的 sys 件不同：这里**不挂 build 标签**——驱动是纯 Go 的

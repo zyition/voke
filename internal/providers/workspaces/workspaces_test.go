@@ -1,8 +1,8 @@
-// workspaces provider 测试：以 `voke-core/workspace.rs` 为 oracle——percent_decode、
+// workspaces 共享实现测试：以 `voke-core/workspace.rs` 为 oracle——percent_decode、
 // display_name、脏数据过滤、VSCode URI/entries（本地/WSL/SSH/容器/未知/非 URI）、
 // Zed 行（位置分类、多根、ssh url、字面量 null host 退其它、容器无 open_args）、
-// 排序时间戳降序空排后、去重 (编辑器,路径)、provider 动作（用记录它的编辑器打开 /
-// 退回路径）、副标题标记、TTL 缓存。
+// 排序时间戳降序空排后、去重 (编辑器,路径)、复用同一 Provider 的 zed / vscode 元信息
+// 与动作（各自编辑器命令 / 退回路径）、副标题标记、TTL 缓存。
 package workspaces
 
 import (
@@ -269,13 +269,20 @@ func TestDedupeSameEditorPath(t *testing.T) {
 }
 
 func TestProviderMetadata(t *testing.T) {
-	p := providerWith(nil)
-	if p.ID() != "workspaces" || p.Name() != "工作区" || strings.Join(p.Aliases(), ",") != "ws,gzq" {
-		t.Errorf("元数据不符：%s/%s/%v", p.ID(), p.Name(), p.Aliases())
+	z := zedProviderWith(nil)
+	if z.ID() != ZedID || z.Name() != "Zed" || strings.Join(z.Aliases(), ",") != "ws,gzq,zed,zd" {
+		t.Errorf("Zed 元数据不符：%s/%s/%v", z.ID(), z.Name(), z.Aliases())
 	}
-	c := p.Config()
-	if !c.Enabled || c.IsGlobal || c.Weight != 1.0 || c.Prefix != "{" {
-		t.Errorf("配置不符（enabled/非全局/1.0/{）：%+v", c)
+	if c := z.Config(); !c.Enabled || c.IsGlobal || c.Weight != 1.0 || c.Prefix != "}" {
+		t.Errorf("Zed 配置不符（enabled/非全局/1.0/}）：%+v", c)
+	}
+
+	v := vscodeProviderWith(nil)
+	if v.ID() != VsCodeID || v.Name() != "VSCode" || strings.Join(v.Aliases(), ",") != "ws,gzq,code,vsc" {
+		t.Errorf("VSCode 元数据不符：%s/%s/%v", v.ID(), v.Name(), v.Aliases())
+	}
+	if c := v.Config(); !c.Enabled || c.IsGlobal || c.Weight != 1.0 || c.Prefix != "{" {
+		t.Errorf("VSCode 配置不符（enabled/非全局/1.0/{）：%+v", c)
 	}
 }
 
@@ -305,18 +312,20 @@ func TestSubtitleMarkers(t *testing.T) {
 	}
 }
 
-func TestActionUsesRecordingEditor(t *testing.T) {
-	p := providerWith([]Entry{
+func TestActionUsesMatchingEditor(t *testing.T) {
+	vs := vscodeProviderWith([]Entry{
 		{Name: "beta", Path: `C:\Users\testuser\code\beta`, Editor: EditorVsCode, Location: localLoc(), OpenArgs: []string{"--folder-uri", "file:///C:/Users/testuser/code/beta"}},
-		{Name: "remote", Path: "/home/me/remote", Editor: EditorZed, Location: sshLoc("me", "box", nil), Timestamp: "2026-10-08 00:00:00", OpenArgs: []string{"ssh://me@box/home/me/remote"}},
 	})
-	hits := query(p, "")
-	code := find(hits, "beta").Action
+	code := query(vs, "")[0].Action
 	if code.Kind != providers.ActionLaunch || code.Path != "cmd.exe" || code.NoConsole != true ||
 		strings.Join(code.Args, " ") != `/c C:\vscode\bin\code.cmd --folder-uri file:///C:/Users/testuser/code/beta` {
 		t.Errorf("VSCode 经 cmd.exe /c：%+v", code)
 	}
-	zed := find(hits, "remote").Action
+
+	z := zedProviderWith([]Entry{
+		{Name: "remote", Path: "/home/me/remote", Editor: EditorZed, Location: sshLoc("me", "box", nil), Timestamp: "2026-10-08 00:00:00", OpenArgs: []string{"ssh://me@box/home/me/remote"}},
+	})
+	zed := query(z, "")[0].Action
 	if zed.Kind != providers.ActionLaunch || zed.Path != "zed" || zed.NoConsole != true ||
 		strings.Join(zed.Args, " ") != "ssh://me@box/home/me/remote" {
 		t.Errorf("Zed 打开：%+v", zed)
@@ -324,7 +333,7 @@ func TestActionUsesRecordingEditor(t *testing.T) {
 }
 
 func TestWithoutEditorFallsBackToPath(t *testing.T) {
-	p := WithTTL(func() []Entry { return []Entry{entry("alpha", "")} }, nil, nil, 0)
+	p := newProvider(zedInfo(), func() []Entry { return []Entry{entry("alpha", "")} }, nil, 0)
 	a := query(p, "alpha")[0].Action
 	if a.Kind != providers.ActionLaunch || a.Path != "/home/testuser/alpha" || len(a.Args) != 0 || a.NoConsole {
 		t.Errorf("无编辑器 → Launch 路径本身：%+v", a)
@@ -371,7 +380,7 @@ func TestSortedDescAndCapped(t *testing.T) {
 func TestTTLCacheBehavior(t *testing.T) {
 	calls := 0
 	fetch := func() []Entry { calls++; return []Entry{entry("alpha", "")} }
-	p := WithTTL(fetch, nil, nil, time.Hour)
+	p := newProvider(zedInfo(), fetch, nil, time.Hour)
 	query(p, "a")
 	query(p, "b")
 	if calls != 1 {
@@ -380,7 +389,7 @@ func TestTTLCacheBehavior(t *testing.T) {
 
 	calls2 := 0
 	fetch2 := func() []Entry { calls2++; return nil }
-	p2 := WithTTL(fetch2, nil, nil, 0)
+	p2 := newProvider(zedInfo(), fetch2, nil, 0)
 	query(p2, "a")
 	query(p2, "b")
 	if calls2 != 2 {
@@ -398,7 +407,7 @@ func TestExpiredCacheReturnsFresh(t *testing.T) {
 		}
 		return []Entry{entry(name, "")}
 	}
-	p := WithTTL(fetch, nil, nil, 0)
+	p := newProvider(vscodeInfo(), fetch, nil, 0)
 	if query(p, "")[0].Title != "first" {
 		t.Error("首次 first")
 	}
@@ -413,13 +422,19 @@ func entry(name, timestamp string) Entry {
 	return Entry{Name: name, Path: "/home/testuser/" + name, Editor: EditorZed, Location: localLoc(), Timestamp: timestamp}
 }
 
-func providerWith(entries []Entry) *Provider {
+func zedProviderWith(entries []Entry) *Provider {
 	cp := append([]Entry{}, entries...)
-	return WithTTL(func() []Entry { return cp },
-		&EditorCommand{Exe: "zed"},
-		&EditorCommand{Exe: "cmd.exe", PreArgs: []string{"/c", `C:\vscode\bin\code.cmd`}},
-		0)
+	return newProvider(zedInfo(), func() []Entry { return cp },
+		&EditorCommand{Exe: "zed"}, 0)
 }
+
+func vscodeProviderWith(entries []Entry) *Provider {
+	cp := append([]Entry{}, entries...)
+	return newProvider(vscodeInfo(), func() []Entry { return cp },
+		&EditorCommand{Exe: "cmd.exe", PreArgs: []string{"/c", `C:\vscode\bin\code.cmd`}}, 0)
+}
+
+func providerWith(entries []Entry) *Provider { return zedProviderWith(entries) }
 
 func query(p *Provider, q string) []providers.Match {
 	return p.Query(providers.QueryCtx{Raw: q, Query: q})

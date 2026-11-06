@@ -65,13 +65,13 @@ func TestKeyFormat(t *testing.T) {
 }
 
 func TestRecordable(t *testing.T) {
-	for _, id := range []string{"apps", "workspaces", "terminal"} {
+	for _, id := range []string{"apps", "zed", "vscode", "terminal"} {
 		if !Recordable(id) {
 			t.Errorf("%q 应可记录", id)
 		}
 	}
 	// 生成值 / 一次性命令 / 易变标题：都不该记（真实样本里都出现过脏键）。
-	for _, id := range []string{"awake", "uuid", "random", "calculator", "base64", "timestamp", "windows", "clipboard", "unknown-plugin"} {
+	for _, id := range []string{"awake", "uuid", "random", "calculator", "base64", "timestamp", "windows", "clipboard", "workspaces", "unknown-plugin"} {
 		if Recordable(id) {
 			t.Errorf("%q 不应可记录", id)
 		}

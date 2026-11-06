@@ -21,7 +21,7 @@ Win32 / COM，界面走 mygo 的 D3D11 后端；启动后 PrivateCommit 约 55MB
 - 每个插件可绑定独立的全局快捷键（剪贴板默认 `Alt+`，其余默认不绑定，设置页可录制），按下直达该插件。
 - 管理员窗口粘贴、终端 profile 提权打开按需弹一次 UAC：由临时辅助进程完成，不常驻
   高权限进程。
-- 11 个内置插件：应用、窗口、保持唤醒、终端配置、工作区、计算器、时间戳、Base64、UUID、随机值、剪贴板历史。
+- 12 个内置插件：应用、窗口、保持唤醒、终端配置、VS Code 工作区、Zed 工作区、计算器、时间戳、Base64、UUID、随机值、剪贴板历史。
 - `#` 拉出插件列表，拼音 / 英文别名过滤；插件支持二级交互（如 Base64 编 / 解、随机值重新生成）。
 - 托盘常驻：右键打开菜单（首项为 awake 状态快照），左键双击唤起面板。
 - 开机自启（写 `HKCU\...\Run`）、深色模式跟随系统、单实例（二次启动唤起已有实例）。
@@ -116,7 +116,7 @@ Win32 / COM，界面走 mygo 的 D3D11 后端；启动后 PrivateCommit 约 55MB
 
 ## 插件
 
-内置 11 个插件。**三条**参与全局搜索：`apps`（无前缀）、`calculator`（`=`）、`windows`（`<`）；
+内置 12 个插件。**三条**参与全局搜索：`apps`（无前缀）、`calculator`（`=`）、`windows`（`<`）；
 其余通过各自前缀进入。Indirect 前缀需要「前缀 + 一个空格」才路由。
 
 | id | 作用 | 默认触发 |
@@ -126,11 +126,12 @@ Win32 / COM，界面走 mygo 的 D3D11 后端；启动后 PrivateCommit 约 55MB
 | `calculator` | 计算器 | `=`（Direct，同时参与全局搜索） |
 | `awake` | 保持唤醒（系统 / 连屏幕，到期自动失效） | `@a`（Direct） |
 | `terminal` | Windows Terminal 配置（按 profile 启动；Ctrl+Enter 管理员打开） | `_`（Direct） |
-| `workspaces` | 工作区（读 Zed / VS Code 最近工作区历史） | `{`（Direct） |
+| `vscode` | VS Code 工作区（读 VS Code 最近工作区历史） | `{`（Direct） |
+| `zed` | Zed 工作区（读 Zed 最近工作区历史） | `}`（Direct） |
 | `timestamp` | 时间戳转换 | `@t` + 空格（Indirect） |
 | `base64` | Base64 编 / 解 | `@b` + 空格（Indirect） |
 | `uuid` | 生成 UUID | `@u` + 空格（Indirect） |
-| `random` | 生成随机值（整数 / 字符串；字符串字符集可在设置页增删改，支持重新生成） | `@r` + 空格（Indirect） |
+| `random` | 生成随机值（整数 / 字符串；字符集与默认长度可在设置页增删改，支持重新生成） | `@r` + 空格（Indirect） |
 | `clipboard` | 剪贴板历史（文本 / HTML / RTF / 图片；粘贴、纯文本粘贴、置顶、删除） | `@c`（Direct），默认快捷键 ``Alt+` `` |
 
 > `#` 是插件列表专用入口；插件前缀统一使用 `@` 命名空间，避免与 `#` 构成「短前缀

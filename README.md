@@ -16,7 +16,7 @@ Why it exists: most launchers in this space use Electron or WebView, which cost 
 - Global hotkey to show/hide the panel (default `Alt+Space`, record a new one in Settings).
 - Each plugin can have its own global shortcut (clipboard ships with ``Alt+` ``; all others are unbound by default and can be recorded in Settings). The shortcut jumps straight to that plugin.
 - Pasting into elevated windows and opening terminal profiles as administrator trigger UAC only when needed: a temporary helper process does the work, so no high-privilege process stays resident.
-- 11 built-in plugins: Apps, Windows, Keep Awake, Terminal, Workspaces, Calculator, Timestamp, Base64, UUID, Random, and Clipboard History.
+- 12 built-in plugins: Apps, Windows, Keep Awake, Terminal, VS Code Workspaces, Zed Workspaces, Calculator, Timestamp, Base64, UUID, Random, and Clipboard History.
 - Type `#` for the plugin list, filtered by name, pinyin, or English alias. Plugins can have second-level interactions (Base64 encode/decode, regenerate random values, and so on).
 - Tray resident: right-click opens the menu (the first item is a live Keep Awake status), double-click shows the panel.
 - Launch at login (writes `HKCU\...\Run`), dark mode that follows the system, single instance (launching again reveals the existing instance).
@@ -96,7 +96,7 @@ Inside Terminal Profiles (`terminal`):
 
 ## Plugins
 
-There are 11 built-in plugins. Three participate in global search: `apps` (no prefix),
+There are 12 built-in plugins. Three participate in global search: `apps` (no prefix),
 `calculator` (`=`), and `windows` (`<`); the rest are reached through their prefix. Indirect
 prefixes require the prefix plus one space.
 
@@ -107,11 +107,12 @@ prefixes require the prefix plus one space.
 | `calculator` | Evaluate arithmetic expressions | `=` (Direct, also global) |
 | `awake` | Keep the system awake, optionally with the screen | `@a` (Direct) |
 | `terminal` | Open a Windows Terminal profile; `Ctrl+Enter` opens as administrator | `_` (Direct) |
-| `workspaces` | Recent Zed / VS Code workspaces, opened with the editor that recorded them | `{` (Direct) |
+| `vscode` | Recent VS Code workspaces, opened in VS Code | `{` (Direct) |
+| `zed` | Recent Zed workspaces, opened in Zed | `}` (Direct) |
 | `timestamp` | Convert between timestamps and readable time | `@t` + space (Indirect) |
 | `base64` | Base64 encode / decode | `@b` + space (Indirect) |
 | `uuid` | Generate UUID v4 values | `@u` + space (Indirect) |
-| `random` | Random integers / strings with configurable character sets, with regenerate | `@r` + space (Indirect) |
+| `random` | Random integers / strings with configurable character sets and default length, with regenerate | `@r` + space (Indirect) |
 | `clipboard` | Clipboard history (text / HTML / RTF / images; paste, plain-text paste, pin, delete) | `@c` (Direct), default shortcut ``Alt+` `` |
 
 > `#` is reserved for the plugin picker. Plugin prefixes live under the `@` namespace to avoid a

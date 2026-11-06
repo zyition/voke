@@ -1,11 +1,12 @@
-// Package workspaces 提供编辑器（Zed / VSCode）最近工作区历史的搜索与打开——
-// 1:1 对照生产 `voke-core/src/workspace.rs`。
+// Package workspaces 是 Zed / VSCode 两个「最近工作区」插件的共享实现——
+// 解析语义 1:1 对照生产 `voke-core/src/workspace.rs`，两个插件只负责各自的数据源
+// 与默认元信息（见 NewZed / NewVsCode）。
 //
 // 分层：纯逻辑（URI 解码 + 位置分类 + 脏数据过滤 + 显示名 + 排序去重 + provider
-// 打分），零 mygo、零 SQLite、零文件系统。只读打开编辑器 SQLite 在 voke-sys，解析
+// 打分），零 mygo、零 SQLite、零文件系统。只读打开编辑器 SQLite 在 platform，解析
 // 语义全在这里可测（Linux 原生单测）。数据源是注入的枚举闭包（带 TTL 缓存，避免每
-// 次按键打库），打分复用 internal/match。执行 Launch（用记录它的编辑器打开 / 退回
-// 资源管理器）在 app 层 dispatcher。第五条 is_global、无前缀。
+// 次按键打库），打分复用 internal/match。执行 Launch（用对应编辑器打开 / 退回资源
+// 管理器）在 app 层 dispatcher。两个插件都不参与裸查询。
 package workspaces
 
 import (
@@ -23,7 +24,9 @@ import (
 )
 
 const (
-	ID = "workspaces"
+	// ZedID / VsCodeID 是两个插件的稳定 id。
+	ZedID    = "zed"
+	VsCodeID = "vscode"
 
 	maxResults = 50
 	// defaultTTL 缓存有效期（比目录扫描那版短：只读几个小库，代价低）。
@@ -623,22 +626,6 @@ func ZedEntries(rows []ZedWorkspaceRow) []Entry {
 	return finalize(out)
 }
 
-// Workspaces：两个来源合并的统一出口（解析 → 脏数据过滤 → 排序 → 去重）。
-func Workspaces(zed []ZedWorkspaceRow, vscode []VsCodeRecentPayload) []Entry {
-	var out []Entry
-	for _, row := range zed {
-		out = append(out, zedRowEntries(row)...)
-	}
-	for _, payload := range vscode {
-		for _, e := range parseRecentEntries(payload.JSON) {
-			if entry, ok := vscodeEntry(e, payload.FileTimestamp); ok {
-				out = append(out, entry)
-			}
-		}
-	}
-	return finalize(out)
-}
-
 func finalize(entries []Entry) []Entry {
 	var kept []Entry
 	for _, e := range entries {
@@ -694,13 +681,53 @@ type indexedWorkspace struct {
 	pathKeys *match.SearchKeys
 }
 
-// Provider 实现 providers.Provider。
+// providerInfo 是两个插件共享实现里的差异部分（id / 展示名 / 默认前缀）。
+type providerInfo struct {
+	ID          string
+	Name        func() string
+	Aliases     []string
+	Description func() string
+	Placeholder func() string
+	Prefix      string
+}
+
+func zedInfo() providerInfo {
+	return providerInfo{
+		ID:      ZedID,
+		Name:    func() string { return "Zed" },
+		Aliases: []string{"ws", "gzq", "zed", "zd"},
+		Description: func() string {
+			return i18n.L("Zed 最近打开的工作区", "Recent Zed workspaces")
+		},
+		Placeholder: func() string {
+			return i18n.L("输入工作区名过滤，Enter 用 Zed 打开", "Filter workspaces; Enter opens in Zed")
+		},
+		Prefix: "}",
+	}
+}
+
+func vscodeInfo() providerInfo {
+	return providerInfo{
+		ID:      VsCodeID,
+		Name:    func() string { return "VSCode" },
+		Aliases: []string{"ws", "gzq", "code", "vsc"},
+		Description: func() string {
+			return i18n.L("VS Code 最近打开的工作区", "Recent VS Code workspaces")
+		},
+		Placeholder: func() string {
+			return i18n.L("输入工作区名过滤，Enter 用 VSCode 打开", "Filter workspaces; Enter opens in VSCode")
+		},
+		Prefix: "{",
+	}
+}
+
+// Provider 实现 providers.Provider，同时服务 Zed / VSCode 两个插件实例。
 type Provider struct {
-	config providers.ProviderConfig
-	fetch  Fetcher
-	zed    *EditorCommand
-	code   *EditorCommand
-	ttl    time.Duration
+	info    providerInfo
+	config  providers.ProviderConfig
+	fetch   Fetcher
+	command *EditorCommand
+	ttl     time.Duration
 
 	mu         sync.Mutex
 	cacheValid bool
@@ -712,44 +739,40 @@ type Provider struct {
 
 var _ providers.Provider = (*Provider)(nil)
 
-// New 用数据源 + 两个编辑器命令构造（默认 TTL）。
-func New(fetch Fetcher, zed, code *EditorCommand) *Provider {
-	return WithTTL(fetch, zed, code, defaultTTL)
+// NewZed 用 Zed 历史数据源 + Zed CLI 构造（默认 TTL）。
+func NewZed(fetch Fetcher, command *EditorCommand) *Provider {
+	return newProvider(zedInfo(), fetch, command, defaultTTL)
 }
 
-// WithTTL 显式指定 TTL（测试用 0 = 每次重读）。
-func WithTTL(fetch Fetcher, zed, code *EditorCommand, ttl time.Duration) *Provider {
+// NewVsCode 用 VSCode 历史数据源 + VSCode CLI 构造（默认 TTL）。
+func NewVsCode(fetch Fetcher, command *EditorCommand) *Provider {
+	return newProvider(vscodeInfo(), fetch, command, defaultTTL)
+}
+
+// newProvider 显式指定 TTL（测试用 0 = 每次重读）。
+func newProvider(info providerInfo, fetch Fetcher, command *EditorCommand, ttl time.Duration) *Provider {
 	if fetch == nil {
 		fetch = func() []Entry { return nil }
 	}
 	return &Provider{
+		info: info,
 		config: providers.ProviderConfig{
 			Enabled: true, IsGlobal: false, Weight: 1.0,
-			Prefix: "{", Activation: "Direct", Count: 5,
+			Prefix: info.Prefix, Activation: "Direct", Count: 5,
 		},
-		fetch: fetch, zed: zed, code: code, ttl: ttl,
+		fetch: fetch, command: command, ttl: ttl,
 		keys: match.NewSearchKeysCache(),
 	}
 }
 
-// NewEmpty 返回空数据源实例（非 Windows 平台 / 未读到编辑器历史占位）。
-func NewEmpty() *Provider { return WithTTL(func() []Entry { return nil }, nil, nil, defaultTTL) }
-
-func (p *Provider) ID() string { return ID }
-func (p *Provider) Name() string {
-	return i18n.L("工作区", "Workspaces")
-}
-func (p *Provider) Aliases() []string { return []string{"ws", "gzq"} }
-func (p *Provider) Description() string {
-	return i18n.L("Zed / VSCode 最近打开的工作区，用记录它的编辑器打开",
-		"Recent Zed / VS Code workspaces, opened with the editor that recorded them")
-}
+func (p *Provider) ID() string                           { return p.info.ID }
+func (p *Provider) Name() string                         { return p.info.Name() }
+func (p *Provider) Aliases() []string                    { return append([]string(nil), p.info.Aliases...) }
+func (p *Provider) Description() string                  { return p.info.Description() }
 func (p *Provider) Config() providers.ProviderConfig     { return p.config }
 func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 
-func (p *Provider) Placeholder(string) string {
-	return i18n.L("输入工作区名过滤，Enter 用对应编辑器打开", "Filter workspaces; Enter opens with the matching editor")
-}
+func (p *Provider) Placeholder(string) string { return p.info.Placeholder() }
 
 // entries：TTL 内用缓存，过期重读并更新缓存。
 func (p *Provider) entries() []Entry {
@@ -827,18 +850,12 @@ func (p *Provider) score(m *match.Matcher, qy *match.Query, w indexedWorkspace) 
 	}
 }
 
-// openAction：用记录它的编辑器打开（Launch{exe, pre_args + open_args}）；编辑器不可用
-// 或位置不支持（open_args 空）→ Launch{path}，dispatcher 转交资源管理器。
+// openAction：用当前插件对应的编辑器打开（Launch{exe, pre_args + open_args}）；
+// 编辑器不可用或位置不支持（open_args 空）→ Launch{path}，dispatcher 转交资源管理器。
 func (p *Provider) openAction(entry Entry) providers.Action {
-	var cmd *EditorCommand
-	if entry.Editor == EditorZed {
-		cmd = p.zed
-	} else {
-		cmd = p.code
-	}
-	if cmd != nil && len(entry.OpenArgs) > 0 {
-		args := append(append([]string{}, cmd.PreArgs...), entry.OpenArgs...)
-		return providers.Action{Kind: providers.ActionLaunch, Path: cmd.Exe, Args: args, NoConsole: true}
+	if p.command != nil && len(entry.OpenArgs) > 0 {
+		args := append(append([]string{}, p.command.PreArgs...), entry.OpenArgs...)
+		return providers.Action{Kind: providers.ActionLaunch, Path: p.command.Exe, Args: args, NoConsole: true}
 	}
 	return providers.Action{Kind: providers.ActionLaunch, Path: entry.Path, NoConsole: false}
 }
@@ -846,7 +863,7 @@ func (p *Provider) openAction(entry Entry) providers.Action {
 func (p *Provider) toMatch(w indexedWorkspace, ms match.MatchScore) providers.Match {
 	subtitle := fmt.Sprintf("%s · %s · %s", editorLabel(w.entry.Editor), w.entry.Location.label(), w.entry.Path)
 	return providers.Match{
-		ProviderID: ID,
+		ProviderID: p.info.ID,
 		Title:      w.entry.Name,
 		Subtitle:   subtitle,
 		Action:     p.openAction(w.entry),
