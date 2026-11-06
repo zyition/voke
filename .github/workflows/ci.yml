@@ -3,7 +3,11 @@
 name: ci
 
 on:
+  # release.yml 通过 workflow_call 复用同一套门禁。
+  workflow_call:
   push:
+    # 只匹配分支；tag 由 release.yml 复用本 workflow，不再单独触发一份 CI。
+    branches: ['**']
     paths:
       - '**/*.go'
       - 'go.mod'
@@ -27,9 +31,15 @@ on:
 permissions:
   contents: read
 
+# 同一 ref 的新 run 取消旧 run；分支推送/PR 更新时不重复排队。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 

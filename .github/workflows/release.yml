@@ -4,7 +4,7 @@
 #   - 推 `vX.Y.Z` tag：windows runner 用 Go 构建 voke.exe（GUI + syso 图标），
 #     复用生产 packaging/voke.iss 产出安装包 + portable zip；ubuntu runner 用
 #     git-cliff 生成 CHANGELOG.md 并建 GitHub Release（行为与原 Rust 发版一致）。
-#   - 手动 workflow_dispatch（填版本号）：只出构建产物，不建 Release，用于验证打包链路。
+#   - 手动 workflow_dispatch（填版本号）：跑检查 + 构建产物，不建 Release，用于验证打包链路。
 #
 # 版本号以 tag 为唯一事实来源：exe 的版本资源尚未注入（已知差距），安装器
 # AppVersion 与产物文件名由 -dVokeVersion 覆盖，不改 voke.iss。
@@ -26,11 +26,40 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------
+  # 发版前检查：tag 必须指向 main 上的 commit，防止从 feature 分支误发版。
+  # workflow_dispatch 只验证打包，不做该检查。
+  # ---------------------------------------------------------------------
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Ensure tag commit is on the default branch
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$DEFAULT_BRANCH"
+          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH"
+
+  # ---------------------------------------------------------------------
+  # 复用 ci.yml 的完整门禁；CI 不过就不 build、不发版。
+  # ---------------------------------------------------------------------
+  ci:
+    needs: [preflight]
+    uses: ./.github/workflows/ci.yml
+
+  # ---------------------------------------------------------------------
   # windows：出安装包 + portable zip。ISCC.exe 是 Windows 原生程序，必须跑
   # windows runner（Go 本体仍可在 WSL 交叉构建，见 ci.yml）。
   # ---------------------------------------------------------------------
   build:
+    needs: [preflight, ci]
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -100,15 +129,22 @@ jobs:
 
   # ---------------------------------------------------------------------
   # ubuntu：生成 changelog + 建 GitHub Release，并把 CHANGELOG.md 回推默认分支。
-  # 手动触发只跑 build，不建 Release。
+  # 手动触发不进入 release job。
   # ---------------------------------------------------------------------
   release:
     needs: [build]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # 串行化 changelog 回推，避免两个 tag 同时改 main 时互相打架。
+    concurrency:
+      group: release-changelog
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
         with:
+          # 直接在默认分支上生成/提交 changelog，避免 detached HEAD 改文件后再 checkout 的冲突。
+          ref: ${{ github.event.repository.default_branch }}
           # git-cliff 要完整历史 + 全部 tag 才能生成 changelog。
           fetch-depth: 0
 
@@ -134,7 +170,12 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          git-cliff --latest --tag "$TAG_NAME" --prepend CHANGELOG.md
+          # 重跑 release 时 CHANGELOG 可能已有本版本，避免重复前置。
+          if grep -Fq "## [${TAG_NAME#v}]" CHANGELOG.md; then
+            echo "CHANGELOG already contains $TAG_NAME, skip prepend"
+          else
+            git-cliff --latest --tag "$TAG_NAME" --prepend CHANGELOG.md
+          fi
           git-cliff --latest --tag "$TAG_NAME" -o release-body.md
           printf '\n---\n' >> release-body.md
           echo "Full changelog: https://github.com/$REPO/blob/$DEFAULT_BRANCH/CHANGELOG.md" >> release-body.md
@@ -143,26 +184,33 @@ jobs:
 
       - name: Commit regenerated CHANGELOG.md to the default branch
         shell: bash
-        # tag push 跑在 detached HEAD 上，所以先切回默认分支再提交。
-        # CHANGELOG.md 没变化时不产生空提交。
+        # checkout 已在默认分支上；CHANGELOG.md 没变化时不产生空提交。
         env:
           TAG_NAME: ${{ github.ref_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           branch="$DEFAULT_BRANCH"
-          git fetch origin "$branch"
-          git checkout "$branch"
           if git diff --quiet -- CHANGELOG.md; then
             echo "CHANGELOG.md 无变化，跳过提交"
-          else
-            git add CHANGELOG.md
-            git -c user.name="github-actions[bot]" \
-                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-                commit -m "docs: changelog for $TAG_NAME"
-            git push origin "$branch"
-            echo "CHANGELOG.md 已提交到 $branch"
+            exit 0
           fi
+          git add CHANGELOG.md
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "docs: changelog for $TAG_NAME"
+          # main 在 build 期间可能前进；push 失败时 rebase 重试。
+          for i in 1 2 3; do
+            if git push origin "$branch"; then
+              echo "CHANGELOG.md 已提交到 $branch"
+              exit 0
+            fi
+            echo "push 失败，第 $i 次重试前先 rebase"
+            git pull --rebase origin "$branch"
+            sleep 2
+          done
+          echo "CHANGELOG.md 推送失败（已重试 3 次）" >&2
+          exit 1
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
