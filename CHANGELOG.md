@@ -4,6 +4,21 @@
 > (grouping rules in `cliff.toml`, release process in `AGENTS.md`). Do not edit manually.
 > Entries up to v0.6.0 are kept in Chinese; later entries are English, optionally bilingual.
 
+## [0.7.1] - 2026-11-09
+
+### Bug Fixes
+
+- Harden filter state, config writes and failure feedback
+
+### Refactoring
+
+- Move provider queries off the UI thread
+
+### Documentation
+
+- Add Awesome MyGo listing badge
+- Put Awesome MyGo badge on its own line
+- Center README header and badges
 ## [0.7.0] - 2026-11-06
 
 ### Features
