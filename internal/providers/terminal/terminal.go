@@ -3,8 +3,8 @@
 //
 // 分层：纯逻辑（JSONC 预处理 + 解析 + 合并去重 + provider 打分），零 mygo、零 IO、
 // 不碰文件系统。读盘（LOCALAPPDATA / Packages）在 voke-sys，合并语义全在这里可测。
-// 数据源是注入的枚举闭包（默认 5s TTL 复用：settings.json 只在用户改配置时变，而 Global
-// 态每次按键都会跑全局 provider，逐键读盘是白烧；过期后重读，用户增删改 profile 仍会跟上）；
+// 数据源是注入的枚举闭包；**新鲜度（TTL / 唤起失效）由装配层的闭包负责**
+// （见 app 层 ttlFetch），provider 直通 fetch、不持缓存，可在任意线程串行调用。
 // 打分复用 internal/match。执行 LaunchTerminalProfile（App Activation + --profile "<guid>"）
 // 在 app 层 dispatcher。第三条… is_global、无前缀（直接打 profile 名命中，对齐 PTR Terminal）。
 package terminal
@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"voke/internal/i18n"
 	"voke/internal/match"
@@ -63,33 +62,12 @@ type Provider struct {
 	fetch  Fetcher
 	wtPath string // wt.exe 别名路径（App Activation 失败兜底直启用）
 	keys   *match.SearchKeysCache
-
-	// 快照缓存：见 defaultTTL。
-	cacheValid bool
-	cacheAt    time.Time
-	cacheData  []Profile
-	ttl        time.Duration
 }
-
-// defaultTTL 是 profile 快照的有效期。
-//
-// 为什么需要：Global 态**每次按键**都会跑一遍全局 provider，而本 provider 的数据源
-// 要读 %LOCALAPPDATA% 下两个包的 settings.json 并解析 JSON——settings.json 只在用户
-// 改配置时变，逐键读盘纯属浪费。
-const defaultTTL = 5 * time.Second
 
 var _ providers.Provider = (*Provider)(nil)
 
-// New 用数据源 + wt.exe 路径构造。
+// New 用数据源 + wt.exe 路径构造（fetch 直通，新鲜度由装配层闭包负责）。
 func New(fetch Fetcher, wtPath string) *Provider {
-	if fetch == nil {
-		fetch = func() []Profile { return nil }
-	}
-	return WithTTL(fetch, wtPath, defaultTTL)
-}
-
-// WithTTL 用数据源 + 快照有效期构造（测试用 0 表示每次重取）。
-func WithTTL(fetch Fetcher, wtPath string, ttl time.Duration) *Provider {
 	if fetch == nil {
 		fetch = func() []Profile { return nil }
 	}
@@ -101,19 +79,7 @@ func WithTTL(fetch Fetcher, wtPath string, ttl time.Duration) *Provider {
 		fetch:  fetch,
 		wtPath: wtPath,
 		keys:   match.NewSearchKeysCache(),
-		ttl:    ttl,
 	}
-}
-
-// entries 取 profile 快照：TTL 内复用，过期重读。
-func (p *Provider) entries() []Profile {
-	if p.cacheValid && p.ttl > 0 && time.Since(p.cacheAt) < p.ttl {
-		return p.cacheData
-	}
-	p.cacheData = p.fetch()
-	p.cacheAt = time.Now()
-	p.cacheValid = true
-	return p.cacheData
 }
 
 // NewEmpty 返回空数据源实例（非 Windows 平台 / 未读配置占位）。
@@ -134,7 +100,7 @@ func (p *Provider) Placeholder(string) string {
 	return i18n.L("输入配置名过滤，Enter 用 wt 启动", "Filter profiles; Enter opens with Windows Terminal")
 }
 
-// Query 按 TTL 取 profile 快照（defaultTTL）；空查询全返回 score=1.0（保 default 置顶 + stable 优先），
+// Query 现取 profile 快照（新鲜度由装配层数据源负责）；空查询全返回 score=1.0（保 default 置顶 + stable 优先），
 // 非空按 name/commandline 取最高分排序、截断 maxResults。
 // RegeneratesOnQuery：profile 每次现读配置，结果跟随数据而非重跑即变 → false。
 func (p *Provider) RegeneratesOnQuery() bool { return false }
@@ -170,7 +136,7 @@ func (p *Provider) Query(ctx providers.QueryCtx) []providers.Match {
 }
 
 func (p *Provider) indexAll() []indexedProfile {
-	entries := p.entries()
+	entries := p.fetch()
 	out := make([]indexedProfile, 0, len(entries))
 	for _, e := range entries {
 		out = append(out, indexedProfile{

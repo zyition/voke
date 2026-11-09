@@ -2,14 +2,13 @@
 // display_name、脏数据过滤、VSCode URI/entries（本地/WSL/SSH/容器/未知/非 URI）、
 // Zed 行（位置分类、多根、ssh url、字面量 null host 退其它、容器无 open_args）、
 // 排序时间戳降序空排后、去重 (编辑器,路径)、复用同一 Provider 的 zed / vscode 元信息
-// 与动作（各自编辑器命令 / 退回路径）、副标题标记、TTL 缓存。
+// 与动作（各自编辑器命令 / 退回路径）、副标题标记。
 package workspaces
 
 import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"voke/internal/providers"
 )
@@ -333,7 +332,7 @@ func TestActionUsesMatchingEditor(t *testing.T) {
 }
 
 func TestWithoutEditorFallsBackToPath(t *testing.T) {
-	p := newProvider(zedInfo(), func() []Entry { return []Entry{entry("alpha", "")} }, nil, 0)
+	p := newProvider(zedInfo(), func() []Entry { return []Entry{entry("alpha", "")} }, nil)
 	a := query(p, "alpha")[0].Action
 	if a.Kind != providers.ActionLaunch || a.Path != "/home/testuser/alpha" || len(a.Args) != 0 || a.NoConsole {
 		t.Errorf("无编辑器 → Launch 路径本身：%+v", a)
@@ -377,44 +376,8 @@ func TestSortedDescAndCapped(t *testing.T) {
 	}
 }
 
-func TestTTLCacheBehavior(t *testing.T) {
-	calls := 0
-	fetch := func() []Entry { calls++; return []Entry{entry("alpha", "")} }
-	p := newProvider(zedInfo(), fetch, nil, time.Hour)
-	query(p, "a")
-	query(p, "b")
-	if calls != 1 {
-		t.Errorf("TTL 内不重读：calls=%d", calls)
-	}
-
-	calls2 := 0
-	fetch2 := func() []Entry { calls2++; return nil }
-	p2 := newProvider(zedInfo(), fetch2, nil, 0)
-	query(p2, "a")
-	query(p2, "b")
-	if calls2 != 2 {
-		t.Errorf("TTL=0 每次重读：calls=%d", calls2)
-	}
-}
-
-func TestExpiredCacheReturnsFresh(t *testing.T) {
-	calls := 0
-	fetch := func() []Entry {
-		calls++
-		name := "first"
-		if calls > 1 {
-			name = "second"
-		}
-		return []Entry{entry(name, "")}
-	}
-	p := newProvider(vscodeInfo(), fetch, nil, 0)
-	if query(p, "")[0].Title != "first" {
-		t.Error("首次 first")
-	}
-	if query(p, "")[0].Title != "second" {
-		t.Error("过期后必须拿新数据")
-	}
-}
+// （provider 内部 TTL 缓存的测试已随缓存字段一起移除；TTL / invalidate 语义
+// 由装配层 ttlFetch 承载，对应测试见 internal/app/query_async_test.go。）
 
 // ── 测试小工具 ──
 
@@ -425,13 +388,13 @@ func entry(name, timestamp string) Entry {
 func zedProviderWith(entries []Entry) *Provider {
 	cp := append([]Entry{}, entries...)
 	return newProvider(zedInfo(), func() []Entry { return cp },
-		&EditorCommand{Exe: "zed"}, 0)
+		&EditorCommand{Exe: "zed"})
 }
 
 func vscodeProviderWith(entries []Entry) *Provider {
 	cp := append([]Entry{}, entries...)
 	return newProvider(vscodeInfo(), func() []Entry { return cp },
-		&EditorCommand{Exe: "cmd.exe", PreArgs: []string{"/c", `C:\vscode\bin\code.cmd`}}, 0)
+		&EditorCommand{Exe: "cmd.exe", PreArgs: []string{"/c", `C:\vscode\bin\code.cmd`}})
 }
 
 func providerWith(entries []Entry) *Provider { return zedProviderWith(entries) }

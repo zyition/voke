@@ -332,27 +332,8 @@ func TestUnrelatedNothingAndEmptyUsable(t *testing.T) {
 	}
 }
 
-// 快照语义：默认 TTL 内连续查询复用（Global 态每次按键都会跑全局 provider，
-// 逐键读 settings.json 是白烧）；ttl=0 表示每次重取。
-func TestFetcherCachedWithinTTL(t *testing.T) {
-	calls := 0
-	p := New(func() []Profile { calls++; return nil }, "wt.exe")
-	query(p, "a")
-	query(p, "b")
-	if calls != 1 {
-		t.Errorf("TTL 内只应读一次数据源：calls=%d", calls)
-	}
-}
-
-func TestFetcherCalledEveryQueryWhenTTLZero(t *testing.T) {
-	calls := 0
-	p := WithTTL(func() []Profile { calls++; return nil }, "wt.exe", 0)
-	query(p, "a")
-	query(p, "b")
-	if calls != 2 {
-		t.Errorf("ttl=0 应每次重读：calls=%d", calls)
-	}
-}
+// （快照 TTL 语义已随缓存字段一起从 provider 挪到装配层 ttlFetch，
+// 对应测试见 internal/app/query_async_test.go 的 TestTtlFetchCachesWithinTTL。）
 
 func TestSortedDescendingAndCapped(t *testing.T) {
 	entries := make([]Profile, 80)

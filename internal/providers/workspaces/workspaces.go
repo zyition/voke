@@ -4,9 +4,10 @@
 //
 // 分层：纯逻辑（URI 解码 + 位置分类 + 脏数据过滤 + 显示名 + 排序去重 + provider
 // 打分），零 mygo、零 SQLite、零文件系统。只读打开编辑器 SQLite 在 platform，解析
-// 语义全在这里可测（Linux 原生单测）。数据源是注入的枚举闭包（带 TTL 缓存，避免每
-// 次按键打库），打分复用 internal/match。执行 Launch（用对应编辑器打开 / 退回资源
-// 管理器）在 app 层 dispatcher。两个插件都不参与裸查询。
+// 语义全在这里可测（Linux 原生单测）。数据源是注入的枚举闭包；**新鲜度（TTL / 唤起
+// 失效）由装配层的闭包负责**（见 app 层 ttlFetch），provider 直通 fetch、不持缓存，
+// 可在任意线程串行调用。打分复用 internal/match。执行 Launch（用对应编辑器打开 /
+// 退回资源管理器）在 app 层 dispatcher。两个插件都不参与裸查询。
 package workspaces
 
 import (
@@ -15,8 +16,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
 	"voke/internal/i18n"
 	"voke/internal/match"
@@ -29,8 +28,6 @@ const (
 	VsCodeID = "vscode"
 
 	maxResults = 50
-	// defaultTTL 缓存有效期（比目录扫描那版短：只读几个小库，代价低）。
-	defaultTTL = 5 * time.Second
 )
 
 // EditorKind 是记录这条工作区历史的编辑器。
@@ -727,30 +724,23 @@ type Provider struct {
 	config  providers.ProviderConfig
 	fetch   Fetcher
 	command *EditorCommand
-	ttl     time.Duration
-
-	mu         sync.Mutex
-	cacheValid bool
-	cacheAt    time.Time
-	cacheData  []Entry
 
 	keys *match.SearchKeysCache
 }
 
 var _ providers.Provider = (*Provider)(nil)
 
-// NewZed 用 Zed 历史数据源 + Zed CLI 构造（默认 TTL）。
+// NewZed 用 Zed 历史数据源 + Zed CLI 构造（fetch 直通，新鲜度由装配层闭包负责）。
 func NewZed(fetch Fetcher, command *EditorCommand) *Provider {
-	return newProvider(zedInfo(), fetch, command, defaultTTL)
+	return newProvider(zedInfo(), fetch, command)
 }
 
-// NewVsCode 用 VSCode 历史数据源 + VSCode CLI 构造（默认 TTL）。
+// NewVsCode 用 VSCode 历史数据源 + VSCode CLI 构造（fetch 直通）。
 func NewVsCode(fetch Fetcher, command *EditorCommand) *Provider {
-	return newProvider(vscodeInfo(), fetch, command, defaultTTL)
+	return newProvider(vscodeInfo(), fetch, command)
 }
 
-// newProvider 显式指定 TTL（测试用 0 = 每次重读）。
-func newProvider(info providerInfo, fetch Fetcher, command *EditorCommand, ttl time.Duration) *Provider {
+func newProvider(info providerInfo, fetch Fetcher, command *EditorCommand) *Provider {
 	if fetch == nil {
 		fetch = func() []Entry { return nil }
 	}
@@ -760,7 +750,7 @@ func newProvider(info providerInfo, fetch Fetcher, command *EditorCommand, ttl t
 			Enabled: true, IsGlobal: false, Weight: 1.0,
 			Prefix: info.Prefix, Activation: "Direct", Count: 5,
 		},
-		fetch: fetch, command: command, ttl: ttl,
+		fetch: fetch, command: command,
 		keys: match.NewSearchKeysCache(),
 	}
 }
@@ -774,22 +764,8 @@ func (p *Provider) SetConfig(c providers.ProviderConfig) { p.config = c }
 
 func (p *Provider) Placeholder(string) string { return p.info.Placeholder() }
 
-// entries：TTL 内用缓存，过期重读并更新缓存。
-func (p *Provider) entries() []Entry {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.cacheValid && time.Since(p.cacheAt) < p.ttl {
-		return append([]Entry{}, p.cacheData...)
-	}
-	entries := p.fetch()
-	p.cacheData = append([]Entry{}, entries...)
-	p.cacheAt = time.Now()
-	p.cacheValid = true
-	return entries
-}
-
 // Query：空查询全返回 score=1.0（保留排序），非空按 name/path 取最高分排序、截断。
-// RegeneratesOnQuery：工作区历史带 TTL 缓存现读，结果跟随数据而非重跑即变 → false。
+// RegeneratesOnQuery：工作区历史由数据源闭包保证新鲜，结果跟随数据而非重跑即变 → false。
 func (p *Provider) RegeneratesOnQuery() bool { return false }
 
 func (p *Provider) Query(ctx providers.QueryCtx) []providers.Match {
@@ -823,7 +799,7 @@ func (p *Provider) Query(ctx providers.QueryCtx) []providers.Match {
 }
 
 func (p *Provider) indexAll() []indexedWorkspace {
-	entries := p.entries()
+	entries := p.fetch()
 	out := make([]indexedWorkspace, 0, len(entries))
 	for _, e := range entries {
 		out = append(out, indexedWorkspace{

@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"voke/internal/i18n"
@@ -51,6 +52,73 @@ const providerClipboardID = clipboardprovider.ID
 
 // providerWindowsID 是窗口插件 id 的 app 侧别名（快捷键 / 行内动作按它定位）。
 const providerWindowsID = windows.ID
+
+// ── 数据型 provider 的新鲜度（装配层职责，provider 无感）──────────────────
+//
+// 数据型 provider（terminal / vscode / zed）的 Query 现在跑在查询线程。它们注入的
+// fetch 闭包必须线程安全且不把慢 IO 带回主线程：TTL 内复用缓存，过期在**读线程**
+// （= 查询线程）同步重取，IO 几十毫秒落在后台，输入回显不等它。
+//
+// 强制刷新由 invalidate 承担：appState.refreshOnShow（面板唤起）对全部快照标记
+// 失效，随后投递的重查会在查询线程重取。锁只保护「缓存 + 版本号」这几个字段，
+// load 在锁外跑，因此主线程 invalidate 不会被慢 IO 拖住。
+const dataTTL = 5 * time.Second
+
+// ttlSnapSet 收集装配期注册的全部失效函数。零值可用（测试装配不注册也安全）。
+type ttlSnapSet struct {
+	invals []func()
+}
+
+func (s *ttlSnapSet) add(f func()) { s.invals = append(s.invals, f) }
+
+// invalidateAll 让所有 TTL 快照下一次读取必重取。只在主线程调用（面板唤起）。
+func (s *ttlSnapSet) invalidateAll() {
+	for _, f := range s.invals {
+		f()
+	}
+}
+
+// ttlFetch 把裸数据源 load 包成「TTL 缓存 + 可失效」的线程安全闭包，并把失效
+// 函数登记进 snaps。返回的 fetch 供 provider 注入，可在查询线程调用。
+//
+// gen 用于处理「load 在锁外跑时恰好被 invalidate」的交错：invalidate 递增
+// gen，load 回来发现版本变了就不把这份结果写进缓存（本次查询仍返回它）。
+func ttlFetch[T any](load func() T, snaps *ttlSnapSet) func() T {
+	var (
+		mu   sync.Mutex
+		data T
+		at   time.Time
+		gen  uint64
+	)
+	fetch := func() T {
+		mu.Lock()
+		if !at.IsZero() && time.Since(at) < dataTTL {
+			cached := data
+			mu.Unlock()
+			return cached
+		}
+		g := gen
+		mu.Unlock()
+
+		fresh := load() // 锁外：慢 IO 落在读线程，主线程 invalidate 不被拖住
+
+		mu.Lock()
+		if g == gen {
+			data, at = fresh, time.Now()
+		}
+		mu.Unlock()
+		return fresh
+	}
+	if snaps != nil {
+		snaps.add(func() {
+			mu.Lock()
+			gen++
+			at = time.Time{} // 下一次读取必重取
+			mu.Unlock()
+		})
+	}
+	return fetch
+}
 
 // builtinDescriptors 是内置注册表。**注册顺序 = 前缀表优先级顺序 = picker 列表顺序**
 // （engine.Scan 按表序做首个全等命中，config.BuildTable 不排序）。
@@ -178,16 +246,23 @@ func builtinDescriptors() []config.Descriptor {
 // builtinDescriptors（前缀路由/picker 数据源，含 apps/picker 这些**不**走
 // providers.Provider 契约的条目）分开：apps 走 panelstate 老路径、picker 是哨兵，
 // 都不进这张表。表里有的插件命中前缀后能真出结果；没有又非 apps = 未接入占位。
+// 测试 / 非生产装配：不登记唤起失效（snaps=nil），TTL 缓存仍照常工作。
 func builtinProviders() *providers.Registry {
-	return builtinProvidersWithClipboard(nil)
+	return builtinProvidersWith(nil, nil)
 }
 
-// builtinProvidersWithClipboard 是生产装配用的版本：剪贴板 provider 接真实历史
-// 快照（每次查询现取）。fetch=nil 时与 builtinProviders 等价（测试 / 非 Windows）。
+// builtinProvidersWithClipboard 供测试装配：剪贴板 provider 接真实历史快照闭包。
 func builtinProvidersWithClipboard(fetch clipboardprovider.Fetcher) *providers.Registry {
+	return builtinProvidersWith(fetch, nil)
+}
+
+// builtinProvidersWith 是核心装配。生产（ready）传入 fetch + &st.snaps，把数据型
+// provider 的失效函数登记进 snaps 供面板唤起时统一失效；snaps=nil 时 TTL 缓存
+// 仍生效，只是不参与唤起失效（测试路径）。
+func builtinProvidersWith(fetch clipboardprovider.Fetcher, snaps *ttlSnapSet) *providers.Registry {
 	return providers.NewRegistry(base64.New(), uuid.New(), timestamp.New(), random.New(), calculator.New(),
-		clipboardprovider.New(fetch, nil), awakeProvider(), windowsProvider(), terminalProvider(),
-		vscodeProvider(), zedProvider())
+		clipboardprovider.New(fetch, nil), awakeProvider(), windowsProvider(), terminalProvider(snaps),
+		vscodeProvider(snaps), zedProvider(snaps))
 }
 
 // clipboardFetch 返回剪贴板历史的只读快照闭包。st.hist 为 nil（未初始化 / 测试）
@@ -213,12 +288,13 @@ func awakeProvider() *awake.Provider {
 	}, func() int64 { return time.Now().Unix() })
 }
 
-// terminalProvider 把 terminal provider 接到真实数据源：每次查询现读 %LOCALAPPDATA% 下
-// 两包 settings.json（platform.ReadTerminalSettings，Windows 真读、非 Windows 返回 nil），
-// 交纯逻辑 ProfilesFromSettings 合并去重盖章。wt.exe 兜底路径来自 platform.WTExe()。
+// terminalProvider 把 terminal provider 接到真实数据源：读 %LOCALAPPDATA% 下两包
+// settings.json（platform.ReadTerminalSettings，Windows 真读、非 Windows 返回 nil），
+// 交纯逻辑 ProfilesFromSettings 合并去重盖章。TTL 缓存 + 唤起失效由装配层 ttlFetch
+// 承担（读盘落在查询线程，provider 无缓存）。wt.exe 兜底路径来自 platform.WTExe()。
 // 非 Windows（含测试）→ 源为空 → provider 恒空，与接线前 NewEmpty 逐字一致（零回归）。
-func terminalProvider() *terminal.Provider {
-	return terminal.New(func() []terminal.Profile {
+func terminalProvider(snaps *ttlSnapSet) *terminal.Provider {
+	load := func() []terminal.Profile {
 		srcs := platform.ReadTerminalSettings()
 		if len(srcs) == 0 {
 			return nil
@@ -228,7 +304,8 @@ func terminalProvider() *terminal.Provider {
 			in[i] = terminal.SettingsSource{Contents: s.Contents, AUMID: s.AUMID}
 		}
 		return terminal.ProfilesFromSettings(in)
-	}, platform.WTExe())
+	}
+	return terminal.New(ttlFetch(load, snaps), platform.WTExe())
 }
 
 // zedProvider / vscodeProvider 把两个工作区插件接到各自的数据源：只读 Zed 各通道
@@ -238,8 +315,8 @@ func terminalProvider() *terminal.Provider {
 // platform.ZedCommand/VSCodeCommand 发现（装则用编辑器 CLI 打开，VS Code 走
 // cmd.exe /c code.cmd；未装 / 非 Windows 返回 nil → open 退化为直接开路径）。
 // 非 Windows（含测试）源为空 = 恒空 provider。
-func zedProvider() *workspaces.Provider {
-	return workspaces.NewZed(func() []workspaces.Entry {
+func zedProvider(snaps *ttlSnapSet) *workspaces.Provider {
+	load := func() []workspaces.Entry {
 		rows := platform.ReadZedWorkspaces()
 		if len(rows) == 0 {
 			return nil
@@ -256,11 +333,12 @@ func zedProvider() *workspaces.Provider {
 			in[i] = zr
 		}
 		return workspaces.ZedEntries(in)
-	}, platformEditorCmd(platform.ZedCommand()))
+	}
+	return workspaces.NewZed(ttlFetch(load, snaps), platformEditorCmd(platform.ZedCommand()))
 }
 
-func vscodeProvider() *workspaces.Provider {
-	return workspaces.NewVsCode(func() []workspaces.Entry {
+func vscodeProvider(snaps *ttlSnapSet) *workspaces.Provider {
+	load := func() []workspaces.Entry {
 		rows := platform.ReadVsCodeRecents()
 		if len(rows) == 0 {
 			return nil
@@ -270,7 +348,8 @@ func vscodeProvider() *workspaces.Provider {
 			in[i] = workspaces.VsCodeRecentPayload{JSON: p.JSON, FileTimestamp: p.FileTimestamp}
 		}
 		return workspaces.VsCodeEntries(in)
-	}, platformEditorCmd(platform.VSCodeCommand()))
+	}
+	return workspaces.NewVsCode(ttlFetch(load, snaps), platformEditorCmd(platform.VSCodeCommand()))
 }
 
 // platformEditorCmd 把 platform 的 neutral 编辑器命令映射成 workspaces.EditorCommand
@@ -288,10 +367,11 @@ var winSnap = newWindowSnapshot()
 
 // windowsProvider 把 windows provider 接到快照数据源。**不能在输入路径上枚举**：
 // platform.EnumerateWindows 窗口多时阻塞几十到几百毫秒，原先它跑在每次按键的帧内，
-// 输入回显要等枚举完成。现在主线程只读快照，过期时由后台刷新。
-// provider 自身的 TTL 置 0：缓存在快照层，避免双层缓存把新窗口多挡 250ms。
+// 输入回显要等枚举完成。现在查询线程只读快照（winSnap.get 带锁、copy-on-write
+// 不可变），刷新由「面板唤起」与「可见期定时器」在后台单飞完成（见 winsnapshot.go），
+// 与 TTL 类数据源分开管理，故不登记进 ttlSnapSet。
 func windowsProvider() *windows.Provider {
-	return windows.WithTTL(winSnap.get, 0)
+	return windows.New(winSnap.get)
 }
 
 // applyProviderConfigs 把归一后的配置（weight / count / enabled / is_global / prefix /
@@ -704,7 +784,16 @@ func (st *appState) reloadConfigs() {
 		log.Printf("voke 重载配置退回纯全局模式：%v", err)
 	}
 	old := st.providers
-	applyProviderConfigs(cfg, st.pluginReg) // 下发到当前 live 注册表（appState 持有）
+	// 配置写进 live provider 实例：SetConfig 必须与查询线程的 Query/Config 串行
+	// （否则并发读写 config 字段），经 runner.sync 排进查询线程执行。再推进世代
+	// 作废基于旧配置算出的在途结果；下一次输入 / 唤起会用新配置重算。
+	setConfig := func() { applyProviderConfigs(cfg, st.pluginReg) }
+	if st.runner != nil {
+		st.queryGen++
+		st.runner.sync(setConfig)
+	} else {
+		setConfig() // 测试 / 装配早期：无查询线程，就地同步
+	}
 	st.cfg, st.providers, st.table = loaded, cfg, table
 	st.invalidateChangedProviderResults(changedProviderIDs(old, st.providers))
 	st.syncClipboardWatch() // 剪贴板插件被停用后，后台轮询随即空转

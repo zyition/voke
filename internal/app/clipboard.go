@@ -156,10 +156,10 @@ func (st *appState) isClipboardPlugin() bool {
 }
 
 // refreshClipboardRows 重跑剪贴板查询，并尽量保持当前选中行。
+// keep 随查询任务进 job，落地时由 applyQueryResult 钳位后恢复（异步化后不能再
+// 在投递后立刻 chooseProvider——那时结果还没回来）。
 func (st *appState) refreshClipboardRows() {
-	keep := st.provChosen
-	st.refreshProviderResults()
-	st.chooseProvider(keep)
+	st.submitProviderQuery(st.provChosen)
 }
 
 // setNotice 在主线程设置一次性提示并请求重绘。

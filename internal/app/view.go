@@ -41,7 +41,6 @@ import (
 	"voke/internal/logic/engine"
 	"voke/internal/logic/frequency"
 	"voke/internal/logic/panelstate"
-	"voke/internal/logic/search"
 	"voke/internal/platform"
 	"voke/internal/providers"
 	"voke/internal/providers/terminal"
@@ -212,46 +211,98 @@ func (st *appState) pickerHint() string {
 	return i18n.L("没有匹配的插件", "No matching plugins")
 }
 
-// filter 委托 panelstate.Model.Filter，把返回的意图就地执行。
-// 只在主线程调用（view 内或 Window.Update 回调内）。
-func (st *appState) filter() {
-	st.execute(st.model.Filter())
-}
-
-// beginFilter 提交一次过滤。main 只做「更新查询 + 懒加载闸门」（微秒级），
-// 过滤交给 runner（生产 = 单 worker；nil = 就地同步，测试用），本帧立即回显输入。
-func (st *appState) beginFilter() {
-	st.execute(st.model.BeginQueryChange(time.Now()))
-	st.filterGen++
-	job := filterJob{
-		gen:   st.filterGen,
-		query: st.model.Query,
-		apps:  st.model.Apps,
-		freq:  st.freqSnapshot(),
+// submitProviderQuery 投递一次插件态查询（providerActive 分支专用）。
+// keepChosen >= 0 时落地保持该选中行（剪贴板历史「采集 / 操作后刷新」用）；
+// -1 = 结果到达后复位到第 0 行。主线程只组装不可变快照，本帧立即回显输入。
+func (st *appState) submitProviderQuery(keepChosen int) {
+	st.queryGen++
+	job := queryJob{
+		gen:           st.queryGen,
+		state:         st.engineState,
+		providerQuery: true,
+		freq:          st.freqSnapshot(),
+		keepChosen:    keepChosen,
 	}
 	if st.runner == nil {
-		st.applyFilterResult(job, search.FilterApps(job.query, job.apps, job.freq))
+		st.applyQueryResult(job, processQuery(st.pluginReg, job))
 		return
 	}
 	st.runner.submit(job)
 }
 
-// applyFilterResult 是过滤结果回主线程的落点：世代号或查询对不上（期间又敲了字 /
-// 切了模式）直接丢弃。只在主线程执行（Window.Update 回调 / 同步路径）。
-func (st *appState) applyFilterResult(job filterJob, results []appsmodel.AppEntry) {
-	if job.gen != st.filterGen || job.query != st.model.Query {
+// submitGlobalQuery 投递一次全局查询（apps 过滤 + 非空查询的全局 provider 聚合）。
+// 懒加载闸门（BeginQueryChange）仍在按键路径上就地跑，微秒级：首次非空查询触发
+// apps 枚举，结果回来走 applyAppsSnapshot 再重算。
+func (st *appState) submitGlobalQuery() {
+	st.queryGen++
+	job := queryJob{gen: st.queryGen, state: st.engineState, freq: st.freqSnapshot()}
+	st.execute(st.model.BeginQueryChange(time.Now()))
+	job.apps = st.model.Apps
+	// 只有 Global 态且查询非空才聚合全局 provider（对照原 refreshGlobalAgg 的守卫）：
+	// apps 插件态也走本函数，但它用 AppsResults 渲染、不需要全局组；空查询同样
+	// 走 apps-only。
+	if st.engineState.Mode() == engine.Global && st.engineState.Query() != "" {
+		job.globals = st.globalProviderIDs()
+	}
+	if st.runner == nil {
+		st.applyQueryResult(job, processQuery(st.pluginReg, job))
 		return
 	}
-	// 只有「apps 结果区」真的在用才落结果：期间切到 picker / 已落地 provider /
-	// 未落地插件，apps 列表都不展示（与 applyEngineState 的分支条件同一套判定）。
-	if st.engineState.Mode() == engine.PluginPicker || st.providerActive() || st.pluginPending() {
-		return
-	}
-	st.execute(st.model.SetResults(results))
-	st.refreshGlobalAgg()
+	st.runner.submit(job)
 }
 
-// freqSnapshot 返回给后台过滤用的频率表只读快照：频率表只在主线程改，
+// submitQuery 重跑当前查询（窗口快照刷新后的重算等统一入口）：按结果区归属
+// 分派，providerActive 走单个 provider，其余（含 apps 插件态）走 apps 路径。
+func (st *appState) submitQuery() {
+	if st.providerActive() {
+		st.submitProviderQuery(-1)
+		return
+	}
+	st.submitGlobalQuery()
+}
+
+// applyQueryResult 是查询线程结果回主线程的落点：世代号或模式状态对不上
+// （期间又敲了字 / 切了模式 / 换了配置）直接丢弃。只在主线程执行
+// （Window.Update 回调 / 同步路径）。
+func (st *appState) applyQueryResult(job queryJob, res queryResult) {
+	if job.gen != st.queryGen || !job.state.Equal(st.engineState) {
+		return
+	}
+	if job.providerQuery {
+		st.provRows = res.ranked
+		st.provLastKey = providerQueryKey(job.state) // 落地才记「真跑过的输入」
+		if job.keepChosen >= 0 {
+			st.chooseProvider(job.keepChosen)
+		} else {
+			st.provChosen = 0
+			if len(res.ranked) > 0 {
+				st.provList.ScrollIntoView(0)
+			}
+		}
+		st.provHint = ""
+		if len(res.ranked) == 0 {
+			if len(res.hints) > 0 {
+				st.provHint = res.hints[0].Title // 例如 base64 解码失败的「解码失败」
+			} else if st.pluginReg != nil {
+				if p, ok := st.pluginReg.Get(job.state.PluginID()); ok {
+					st.provHint = p.Placeholder(job.state.SubMode()) // 空输入的用法提示
+				}
+			}
+		}
+		return
+	}
+	// Global：apps 结果与全局合并行一次落地（原「SetResults → refreshGlobalAgg」
+	// 两步合并，避免中间帧）。空查询时 job.globals 恒空 → agg 为空 → 合并行里
+	// 没有 provider 行 → globalActive() 为 false，走原 apps-only 路径。
+	st.execute(st.model.SetResults(res.apps))
+	st.globalRows, st.globalProvRows = buildGlobalRows(res.apps, res.agg)
+	st.globalChosen = 0
+	if len(st.globalRows) > 0 {
+		st.resetListScroll()
+	}
+}
+
+// freqSnapshot 返回给后台查询用的频率表只读快照：频率表只在主线程改，
 // 版本没变就复用上一份（克隆一次约几十微秒，但按键频率高，能省则省）。
 func (st *appState) freqSnapshot() frequency.Store {
 	if st.freq == nil {
@@ -334,6 +385,21 @@ func (st *appState) applyEngineState(next engine.State) {
 	if !st.engineState.Equal(next) {
 		defer st.resetListScroll()
 	}
+	// 插件身份（pluginID / subMode）变了：清掉上一个插件的结果行，避免异步
+	// 落地前的空窗期把旧插件行串到新插件页（同步版由 refreshProviderResults
+	// 立即覆盖，异步版必须显式清）。同时把 provHint 先置成当前插件的
+	// Placeholder——首查（SQLite / 读盘）落地前的几十 ms 有引导文案而非死白。
+	identityChanged := st.engineState.PluginID() != next.PluginID() ||
+		st.engineState.SubMode() != next.SubMode()
+	if identityChanged && (next.Mode() == engine.Plugin || next.Mode() == engine.SubMode) {
+		st.provRows, st.provChosen = nil, 0
+		st.provHint = ""
+		if st.pluginReg != nil {
+			if p, ok := st.pluginReg.Get(next.PluginID()); ok {
+				st.provHint = p.Placeholder(next.SubMode())
+			}
+		}
+	}
 	st.engineState = next
 	if st.model.Query != next.Query() {
 		st.model.Query = next.Query()
@@ -350,22 +416,22 @@ func (st *appState) applyEngineState(next engine.State) {
 	if st.pluginPending() {
 		return // 结果区出占位文案，这里不动 apps
 	}
-	st.beginFilter() // 异步：本帧立即回显，结果回主线程后再重算合并行
+	st.submitGlobalQuery() // 异步：本帧立即回显，结果回主线程后一次落地
 }
 
 // onWindowSnapshot 是窗口快照刷新后的主线程回调（经 Window.Update 投递）。
-// 只有「当前结果真的会用到窗口数据」时才重算，面板隐藏 / 非窗口相关查询直接跳过，
-// 避免后台枚举顺带把主线程的工作也拉起来。
+// 只有「当前结果真的会用到窗口数据」时才重算（投递一次新查询），面板隐藏 /
+// 非窗口相关查询直接跳过，避免后台枚举顺带把主线程的工作也拉起来。
 func (st *appState) onWindowSnapshot() {
 	if st.panel == nil || !st.panel.IsVisible() {
 		return
 	}
 	if st.engineState.Mode() == engine.Global && st.engineState.Query() != "" {
-		st.refreshGlobalAgg()
+		st.submitQuery()
 		return
 	}
 	if st.providerActive() && st.engineState.PluginID() == windows.ID {
-		st.refreshProviderResults()
+		st.submitQuery()
 	}
 }
 
@@ -383,6 +449,9 @@ func (st *appState) onWindowSnapshot() {
 // applyEngineState 派发，不另抄判定；末尾把列表钉回顶部、选中复位到第 0 行，
 // 对照 Rust set_outcome（search.rs:739-751）。
 func (st *appState) refreshOnShow() {
+	// 唤起 = 用户刚在别处干过事（改了 WT 配置、开了新工作区…）：TTL 类数据源
+	// 一律标记失效，随后投递的重查会在查询线程重取（IO 不落主线程）。
+	st.snaps.invalidateAll()
 	if st.providerActive() {
 		p, _ := st.pluginReg.Get(st.engineState.PluginID())
 		if p.RegeneratesOnQuery() && providerQueryKey(st.engineState) == st.provLastKey && len(st.provRows) > 0 {
@@ -393,9 +462,11 @@ func (st *appState) refreshOnShow() {
 	st.resetListScroll()
 }
 
-// refreshProviderResults 用当前 engineState（pluginID + subMode + query）跑一遍
-// providers.RunOne（weight×score×frequency 排序），写 provRows / provHint，选中复位到
-// 第 0 行（与 apps/picker 过滤词一变即回首行同姿势）。
+// refreshProviderResults 用当前 engineState 投递一次插件查询（RunOne 的
+// weight×score×frequency 排序在查询线程算，结果回主线程落地）。
+// RegeneratesOnQuery 的「同输入跳过」护栏留在这里（主线程投递侧）：会重掷的
+// provider（random/timestamp/uuid）输入没变时不能重查，否则用户正要复制的值
+// 会被换掉——对照 Rust `regenerates_on_query` 的调用侧护栏。
 func (st *appState) refreshProviderResults() {
 	p, ok := st.pluginReg.Get(st.engineState.PluginID())
 	if !ok {
@@ -403,27 +474,10 @@ func (st *appState) refreshProviderResults() {
 		st.provLastKey = ""
 		return
 	}
-	key := providerQueryKey(st.engineState)
-	// 会重掷结果的 provider（random/timestamp/uuid）：输入没变（面板重新显示 / 热更新
-	// 等「没改却重跑」的路径）必须跳过重查，否则用户正要复制的值会被换成新的——
-	// 对照 Rust `regenerates_on_query` 的调用侧护栏。确定性 provider 重跑结果一致，不必跳。
-	if p.RegeneratesOnQuery() && key == st.provLastKey && len(st.provRows) > 0 {
+	if p.RegeneratesOnQuery() && providerQueryKey(st.engineState) == st.provLastKey && len(st.provRows) > 0 {
 		return
 	}
-	ctx := providers.QueryCtx{Raw: st.engineState.Query(), Query: st.engineState.Query(), SubMode: st.engineState.SubMode()}
-	ranked, hints := providers.RunOne(p, ctx, st.freq)
-	st.provLastKey = key
-	st.provRows, st.provChosen, st.provHint = ranked, 0, ""
-	if len(ranked) == 0 {
-		if len(hints) > 0 {
-			st.provHint = hints[0].Title // 例如 base64 解码失败的「解码失败」
-		} else {
-			st.provHint = p.Placeholder(st.engineState.SubMode()) // 空输入的用法提示
-		}
-	}
-	if len(ranked) > 0 {
-		st.provList.ScrollIntoView(st.provChosen)
-	}
+	st.submitProviderQuery(-1)
 }
 
 // breadcrumbs 把作用域栈映射成输入行的面包屑（栈底→栈顶，跳过 Global）。每段带显示名 +

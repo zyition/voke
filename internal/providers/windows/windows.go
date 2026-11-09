@@ -2,16 +2,16 @@
 // （§5 Window Walker，对齐 PowerToys Run 的 Window Walker）。
 //
 // 分层：纯逻辑（枚举结果打分 + 出 Match），零 mygo、零 IO。窗口枚举是 OS 调用 +
-// 副作用，由 app 层注入闭包（每次查询现调、不缓存：窗口状态每秒都在变），执行
-// ActivateWindow 在 app 层 dispatcher。打分复用 internal/match（nucleo 1:1 移植 +
-// 拼音键），与 apps 同一套匹配引擎；条目每次重建，搜索键走 SearchKeysCache 记忆化。
+// 副作用，由 app 层注入闭包（数据源由装配层保证线程安全与新鲜度——生产接 winSnap
+// 后台快照，见 internal/app/winsnapshot.go），执行 ActivateWindow 在 app 层
+// dispatcher。打分复用 internal/match（nucleo 1:1 移植 + 拼音键），与 apps 同一套
+// 匹配引擎；条目每次重建，搜索键走 SearchKeysCache 记忆化。
 // 权重 1.0 < apps 1.2：同名时优先启动应用而不是切窗口。
 package windows
 
 import (
 	"sort"
 	"strings"
-	"time"
 
 	"voke/internal/i18n"
 	"voke/internal/match"
@@ -56,34 +56,13 @@ type Provider struct {
 	config providers.ProviderConfig
 	fetch  Fetcher
 	keys   *match.SearchKeysCache
-
-	// 快照缓存：见 defaultTTL。
-	cacheValid bool
-	cacheAt    time.Time
-	cacheData  []Entry
-	ttl        time.Duration
 }
-
-// defaultTTL 是窗口快照的有效期。
-//
-// 为什么需要：Global 态**每次按键**都会跑一遍全局 provider（collectGlobalBatches），
-// 而窗口 provider 的数据源是 EnumWindows + 每个窗口取标题 / 进程名 / exe 路径
-// （3–4 次系统调用/窗口）。连续打字时这份枚举是白白重复的，也是输入延迟的主要来源。
-// 250ms 足够覆盖一段连续输入，又远短于「用户敲完到抬眼」的感知差。
-const defaultTTL = 250 * time.Millisecond
 
 var _ providers.Provider = (*Provider)(nil)
 
-// New 用数据源构造（生产注入真实枚举闭包；测试注入假闭包返回造好的数据）。
+// New 用数据源构造（fetch 直通，新鲜度由装配层闭包负责；生产接 winSnap 快照，
+// 测试注入假闭包返回造好的数据）。
 func New(fetch Fetcher) *Provider {
-	if fetch == nil {
-		fetch = func() []Entry { return nil }
-	}
-	return WithTTL(fetch, defaultTTL)
-}
-
-// WithTTL 用数据源 + 快照有效期构造（测试用 0 表示每次重取）。
-func WithTTL(fetch Fetcher, ttl time.Duration) *Provider {
 	if fetch == nil {
 		fetch = func() []Entry { return nil }
 	}
@@ -94,19 +73,7 @@ func WithTTL(fetch Fetcher, ttl time.Duration) *Provider {
 		},
 		fetch: fetch,
 		keys:  match.NewSearchKeysCache(),
-		ttl:   ttl,
 	}
-}
-
-// entries 取窗口快照：TTL 内复用，过期重枚举。
-func (p *Provider) entries() []Entry {
-	if p.cacheValid && p.ttl > 0 && time.Since(p.cacheAt) < p.ttl {
-		return p.cacheData
-	}
-	p.cacheData = p.fetch()
-	p.cacheAt = time.Now()
-	p.cacheValid = true
-	return p.cacheData
 }
 
 // NewEmpty 返回空数据源实例（非 Windows 平台 / 未枚举占位）。
@@ -127,10 +94,9 @@ func (p *Provider) Placeholder(string) string {
 	return i18n.L("输入窗口标题或进程名", "Type a window title or process name")
 }
 
-// Query 按 TTL 取窗口快照（defaultTTL）；空查询全返回（score=1.0，交给引擎按频率
+// Query 现取窗口快照（新鲜度由装配层数据源负责）；空查询全返回（score=1.0，交给引擎按频率
 // 重排、不截断），非空按 title/process_name 取最高分排序、截断 maxResults。
-// RegeneratesOnQuery：窗口每次查询现枚举（调用方在后台线程重取），结果跟随实际
-// 窗口状态而非「重跑即变」的随机 → false（Rust 未 override）。
+// RegeneratesOnQuery：结果跟随实际窗口状态而非「重跑即变」的随机 → false（Rust 未 override）。
 func (p *Provider) RegeneratesOnQuery() bool { return false }
 
 func (p *Provider) Query(ctx providers.QueryCtx) []providers.Match {
@@ -165,7 +131,7 @@ func (p *Provider) Query(ctx providers.QueryCtx) []providers.Match {
 
 // indexAll：枚举 + 入口拦掉空标题 / 空句柄 + 建（缓存的）搜索键。
 func (p *Provider) indexAll() []indexedWindow {
-	entries := p.entries()
+	entries := p.fetch()
 	out := make([]indexedWindow, 0, len(entries))
 	for _, e := range entries {
 		if strings.TrimSpace(e.Title) == "" || e.Hwnd == 0 {

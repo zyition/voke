@@ -24,7 +24,8 @@ const (
 	maxTitleRunes = 120
 )
 
-// Fetcher 返回当前历史快照（置顶在前、普通在后）。app 层保证主线程调用。
+// Fetcher 返回当前历史快照（置顶在前、普通在后）。由查询线程调用：
+// cliphist.Store 自带锁，可在读线程安全取副本。
 type Fetcher func() []cliphist.Item
 
 // Provider 实现 providers.Provider。

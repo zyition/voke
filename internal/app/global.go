@@ -2,15 +2,11 @@
 // `QueryEngine::prepare_in_mode`（未激活插件 = 所有 is_global 且 enabled 的 provider）
 // `+ aggregate`（按注册顺序分组、组内按 final_score 降序）。
 //
-// 为什么单列本文件：PoC 此前全局搜索只出 apps（`renderResults` 的 default 分支），而生产
-// 全局会把 awake / windows / terminal / vscode / zed 这些 is_global 插件的结果也聚进来。这是
-// 一处**真实功能差异**，不是纯重构。本层先把「算出该显示哪些分组」这条纯路径做出来并 headless
-// 测；渲染整合（合并成单条可导航列表 + 组间分隔 + 逐行 open/click 路由）是紧接的下一步切片，
-// 因其是 mygo 交互、无法在此真机验证，故先立稳数据地基。
-//
-// 分层：apps 不在 pluginReg（apps/picker 走各自老路径），故聚合时 apps 由调用方折成 Match 传入，
-// 其余全局 provider 从 pluginReg 现取现跑。apps→Match 是**展示折入**（Launch 动作、图标来源=路径），
-// 不改 apps 自身搜索/选中/启动那条已被真机验证的链路。
+// 分层：apps 不在 pluginReg（apps/picker 走各自老路径），故 apps 结果与全局 provider
+// 结果分开算：apps 走 search.FilterApps，其余全局 provider 的 Query + Aggregate 由
+// 查询线程（processQuery）现取现跑，本层只保留两件主线程职责——投递前按 enabled &&
+// is_global 组装 id 列表（globalProviderIDs），以及把算好的产物摊平成可导航行
+// （buildGlobalRows / globalView）。聚合本身不再进渲染帧。
 package app
 
 import (
@@ -39,33 +35,23 @@ func foldAppMatch(a appsmodel.AppEntry) providers.Match {
 	}
 }
 
-// collectGlobalBatches 按注册顺序收集本次全局查询的各 provider 批次：apps 批（传入的已过滤
-// 应用折成 Match）在最前，其后是 pluginReg 里 **enabled && is_global** 的插件逐个跑 QueryCtx。
-// apps/picker 不在 pluginReg（Get 落 false）天然跳过；非全局（base64 等带前缀）不进全局。
-func (st *appState) collectGlobalBatches(apps []providers.Match, ctx providers.QueryCtx) []providers.Batch {
-	batches := make([]providers.Batch, 0, len(st.providers.Providers))
-	if len(apps) > 0 {
-		batches = append(batches, providers.Batch{ProviderID: appsProviderID, Matches: apps})
+// globalProviderIDs 返回本次全局查询要跑的 provider id（注册序）：enabled &&
+// is_global 且已落地注册。主线程在投递前算好，查询线程只按这份 id 列表现查现聚合
+// （worker 不读配置表，见 query_async.go 的 processQuery）。
+func (st *appState) globalProviderIDs() []string {
+	if st.pluginReg == nil {
+		return nil
 	}
+	var ids []string
 	for _, pc := range st.providers.Providers {
 		if !pc.Enabled || !pc.IsGlobal {
 			continue
 		}
-		p, ok := st.pluginReg.Get(pc.ID)
-		if !ok {
-			continue
-		}
-		if ms := p.Query(ctx); len(ms) > 0 {
-			batches = append(batches, providers.Batch{ProviderID: pc.ID, Matches: ms})
+		if _, ok := st.pluginReg.Get(pc.ID); ok {
+			ids = append(ids, pc.ID)
 		}
 	}
-	return batches
-}
-
-// globalAggregate = collectGlobalBatches → Registry.Aggregate（组内 weight×score×freq 排序、
-// 组间保注册顺序、提示行单列）。appsMatches 由调用方从 panelstate 过滤结果折入。
-func (st *appState) globalAggregate(appsMatches []providers.Match, ctx providers.QueryCtx) providers.Aggregated {
-	return st.pluginReg.Aggregate(st.collectGlobalBatches(appsMatches, ctx), st.freq)
+	return ids
 }
 
 // ── 渲染就绪的扁平行模型（保住 apps 启动语义）──────────────────────────────
@@ -106,31 +92,6 @@ func buildGlobalRows(apps []appsmodel.AppEntry, agg providers.Aggregated) (rows 
 		}
 	}
 	return rows, provRows
-}
-
-// refreshGlobalAgg 在 Global 模式、查询非空时重算合并行（apps 结果 + 非 apps 全局插件组）。
-// 只在**查询变化 / apps 加载完成**时调用，不进渲染帧——避免每帧跑 provider（windows 枚举会
-// 阻塞主线程）。apps 批不在这里喂（apps 行由 st.model.Results 现取，保 LaunchApp 语义）。
-// 非全局 / 空查询 → 清空合并态（renderResults 落回既有 AppsResults 路径，零回归）。
-func (st *appState) refreshGlobalAgg() {
-	st.globalRows, st.globalProvRows, st.globalChosen = nil, nil, 0
-	if st.engineState.Mode() != engine.Global || st.engineState.Query() == "" {
-		return
-	}
-	// 注册表 / 插件配置未就绪（装配前、或只测 apps 链路的用例如未设 pluginReg）→ 不聚合，
-	// 保持 apps-only 路径。真实运行在 ready() 里两者都已就绪。
-	if st.pluginReg == nil || len(st.providers.Providers) == 0 {
-		return
-	}
-	q := st.engineState.Query()
-	batches := st.collectGlobalBatches(nil, providers.QueryCtx{Raw: q, Query: q})
-	agg := st.pluginReg.Aggregate(batches, st.freq)
-	st.globalRows, st.globalProvRows = buildGlobalRows(st.model.Results, agg)
-	if len(st.globalRows) > 0 {
-		// 首次枚举完成 / 查询变化后合并行是全新内容，必须从顶部开始；
-		// 仅复位 globalChosen 不够，ListState 的滚动位置是跨帧状态。
-		st.resetListScroll()
-	}
 }
 
 // globalActive 报告本次全局查询是否命中了 apps 以外的全局插件组——只有此时才走合并渲染；

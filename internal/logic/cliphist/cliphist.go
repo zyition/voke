@@ -2,7 +2,9 @@
 //
 // 只做纯数据与预算：文本 / HTML / RTF / PNG、去重、置顶、FIFO 淘汰。
 // 采集（平台格式、敏感标记）与粘贴（前台窗口、SendInput）都不在这里。
-// 所有方法只在主线程调用；不持久化，退出即清。
+// 写方法（Add/Pin/…）只在主线程调用；读取（Items/Find）另可从查询线程调用
+// （provider 的数据源闭包在后台跑，见 internal/app/query_async.go）——内部用
+// RWMutex 保护，写写互斥、读读并行。不持久化，退出即清。
 package cliphist
 
 import (
@@ -13,6 +15,7 @@ import (
 	"errors"
 	"image"
 	"image/png"
+	"sync"
 	"time"
 
 	xdraw "golang.org/x/image/draw"
@@ -80,9 +83,11 @@ func (it Item) HasImage() bool { return len(it.PNG) > 0 }
 // 且同时有文本表示时才有意义；纯文本条目再给一个纯文本按钮是噪音。
 func (it Item) HasPlainAction() bool { return it.HasText() && (it.HasRich() || it.HasImage()) }
 
-// Store 是主线程专用的内存历史。pinned 与 unpinned 都按最近使用从新到旧；
+// Store 是内存历史。pinned 与 unpinned 都按最近使用从新到旧；
 // pinned 不计入 maxEntries，但与普通项共享字节预算。
 type Store struct {
+	// mu 保护下方全部字段：写在主线程、读（Items/Find）可来自查询线程。
+	mu         sync.RWMutex
 	maxEntries int
 	pinned     []*Item
 	unpinned   []*Item
@@ -111,28 +116,53 @@ func clampEntries(n int) int {
 }
 
 // MaxEntries 返回当前普通历史条数上限。
-func (s *Store) MaxEntries() int { return s.maxEntries }
+func (s *Store) MaxEntries() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.maxEntries
+}
 
 // SetMaxEntries 更新上限并立刻淘汰最旧普通项；返回淘汰数量。
 func (s *Store) SetMaxEntries(n int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.maxEntries = clampEntries(n)
 	return s.trimCount()
 }
 
-// Len 返回含置顶的全部条数。
-func (s *Store) Len() int { return len(s.pinned) + len(s.unpinned) }
+func (s *Store) Len() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.pinned) + len(s.unpinned)
+}
 
 // UnpinnedLen 返回计入 maxEntries 的普通条数。
-func (s *Store) UnpinnedLen() int { return len(s.unpinned) }
+func (s *Store) UnpinnedLen() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.unpinned)
+}
 
 // PinnedLen 返回置顶条数。
-func (s *Store) PinnedLen() int { return len(s.pinned) }
+func (s *Store) PinnedLen() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.pinned)
+}
 
 // Bytes 返回当前内容字节总量（含置顶）。
-func (s *Store) Bytes() int { return s.bytes }
+func (s *Store) Bytes() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.bytes
+}
 
 // CanPin 报告是否还能新增置顶。
-func (s *Store) CanPin() bool { return len(s.pinned) < MaxPinned }
+func (s *Store) CanPin() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.pinned) < MaxPinned
+}
 
 // Add 归一化后写入历史：同内容只更新时间/位置，不新增条目。
 func (s *Store) Add(p Payload, now time.Time) (Item, error) {
@@ -140,6 +170,8 @@ func (s *Store) Add(p Payload, now time.Time) (Item, error) {
 	if err != nil {
 		return Item{}, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	hash := hashPayload(p)
 	if it := s.byHash[hash]; it != nil {
 		it.LastUsedAt = now
@@ -183,6 +215,8 @@ func (s *Store) Add(p Payload, now time.Time) (Item, error) {
 
 // Find 按 id 取条目副本。
 func (s *Store) Find(id string) (Item, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if it := s.byID[id]; it != nil {
 		return *it, true
 	}
@@ -191,6 +225,8 @@ func (s *Store) Find(id string) (Item, bool) {
 
 // Pin 置顶；已置顶返回 true，达到 10 条上限返回 false。
 func (s *Store) Pin(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	it := s.byID[id]
 	if it == nil {
 		return false
@@ -209,6 +245,8 @@ func (s *Store) Pin(id string) bool {
 
 // Unpin 取消置顶并放回普通历史最前；随后按条数/字节重新淘汰。
 func (s *Store) Unpin(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	it := s.byID[id]
 	if it == nil || !it.Pinned {
 		return false
@@ -222,6 +260,8 @@ func (s *Store) Unpin(id string) bool {
 
 // Delete 删除一条；返回是否存在。
 func (s *Store) Delete(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	it := s.byID[id]
 	if it == nil {
 		return false
@@ -236,7 +276,10 @@ func (s *Store) Delete(id string) bool {
 }
 
 // Items 返回置顶在前、普通在后的副本（切片与字符串仍只读共享）。
+// 可从查询线程调用（写方法在主线程持写锁）。
 func (s *Store) Items() []Item {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	out := make([]Item, 0, len(s.pinned)+len(s.unpinned))
 	for _, it := range s.pinned {
 		out = append(out, *it)

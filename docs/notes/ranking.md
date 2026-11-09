@@ -249,12 +249,14 @@ internal/app               Record / loadFrequency / saveFrequency 不变
 ### 输入路径：从「帧内同步」改成「投递 + 回主线程」
 
 Global 态原来每一次按键都在**渲染帧内**同步跑完「Scan → FilterApps → 全部 is_global
-插件」，输入回显要等这些算完。两处必须改：
+插件」，输入回显要等这些算完。现在所有查询（apps 过滤、全局 provider 聚合、插件态
+provider.Query + 排序）都被收拢到唯一的**查询线程**，主线程只做 Scan + 投递。
+两处必须改：
 
 | 问题 | 原行为 | 现行为 |
 | --- | --- | --- |
-| 窗口枚举 | 每键 `EnumWindows` + 逐窗取标题 / 进程名 / exe 路径，**窗口多时阻塞几十到几百毫秒**（`platform/windows_enum_windows.go` 自己的注释） | 后台快照（`internal/app/winsnapshot.go`），主线程只读 `[]Entry`；**查询不触发枚举** |
-| 过滤 | 帧内同步 `FilterApps` | 投递到单 worker（`internal/app/filter_async.go`），结果经 `Window.Update` 回主线程；世代号丢弃过期结果 |
+| 窗口枚举 | 每键 `EnumWindows` + 逐窗取标题 / 进程名 / exe 路径，**窗口多时阻塞几十到几百毫秒**（`platform/windows_enum_windows.go` 自己的注释） | 后台快照（`internal/app/winsnapshot.go`），查询线程只读 `[]Entry`；**查询不触发枚举** |
+| 查询 | 帧内同步 `FilterApps` + 全局插件聚合 | 投递到单 worker（`internal/app/query_async.go` 的 `processQuery`），结果经 `Window.Update` 回主线程；世代号 + `engine.State` 快照双重校验丢弃过期结果 |
 
 窗口快照的刷新只有两个触发点（都单飞，跑完即退）：
 
@@ -265,13 +267,16 @@ Global 态原来每一次按键都在**渲染帧内**同步跑完「Scan → Fil
 配套细节：
 
 - 队列容量 1，满了丢旧留新（latest-wins）——连续打字时中间的查询根本不需要算完；
-  全进程只有一个过滤 goroutine，跑完阻塞在 channel 上，进程退出即回收。
-- 后台只读不可变快照：apps 列表按 slice 头传入（主线程只整体替换、不改数组），
-  频率表按版本惰性克隆（`freqVersion` 变了才复制）。
-- 空查询仍就地同步算（复制 + 按使用次数排，约 1ms）：否则首帧会闪一下「没有匹配」。
+  全进程只有一个查询 goroutine，跑完阻塞在 channel 上，进程退出即回收。
+- 查询线程只读不可变快照：apps 列表按 slice 头传入（主线程只整体替换、不改数组），
+  频率表按版本惰性克隆（`freqVersion` 变了才复制），`engine.State` 按值快照。
+- 数据型 provider（terminal/工作区）的 TTL 缓存与线程安全由装配层 `ttlFetch` 承担，
+  面板唤起时统一 `invalidateAll()`，慢 IO（读盘 / SQLite）落在查询线程，不进渲染帧；
+  provider 层不持缓存、不感知线程（见 `internal/providers/provider.go` 的线程契约）。
 - 测试/装配早期 `runner == nil` 时走同步路径，断言语义与改造前一致。
-- 落地页 `applyFilterResult` 与 `applyEngineState` 共用同一套「哪条结果区在用」的
-  判定（picker / 已落地 provider / 未落地插件都不落 apps 结果）。
+- 落地页 `applyQueryResult` 与 `applyEngineState` 共用同一套「哪条结果区在用」的
+  判定（`gen` 不匹配或 `engine.State` 快照不等直接丢弃；查询种类由 `job.providerQuery`
+  显式标记，不靠 mode 猜）。
 
 ### 常驻开销清单（笔记本口径，2026-10-23 审计）
 

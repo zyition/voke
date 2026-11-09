@@ -2,9 +2,10 @@
 //
 // 为什么必须挪：platform.EnumerateWindows 是 EnumWindows + 逐窗取标题 / 进程名 /
 // exe 路径，窗口多时阻塞几十到几百毫秒。它原先跑在 Global 态每次按键的帧内
-// （onQueryChanged → refreshGlobalAgg → windows.Query），等于让输入回显去等枚举。
+// （onQueryChanged → 全局聚合 → windows.Query），等于让输入回显去等枚举。
 //
-// 现在主线程只读一份快照（读一下 slice 头，微秒级）。刷新只有两个触发点，
+// 现在查询线程只读一份快照（get 加锁读不可变 slice 头，微秒级），provider.Query
+// 本就跑在查询线程，枚举 IO 完全不进渲染帧。刷新只有两个触发点，
 // **查询不再触发枚举**：
 //   - 面板唤起时（showPanelEntry）；
 //   - 面板可见期间的定时刷新（app 层的 windowTimer，隐藏即停）。
@@ -22,11 +23,11 @@ import (
 	"voke/internal/providers/windows"
 )
 
-// windowSnapshot 是主线程读、后台写的窗口列表。
+// windowSnapshot 是查询线程读、后台刷新写的窗口列表。
 //
 // 线程约定：
-//   - get 只在主线程调用（provider Query 的调用点）；
-//   - 后台只写 entries/at/busy/gen，全部在 mu 内；
+//   - get 在查询线程调用（provider.Query 的数据源；带锁读不可变 slice 头）；
+//   - 后台只写 entries/at/busy，全部在 mu 内；
 //   - 回主线程只经 Window.Update（与 apps.go 的 bindApps 同款纪律）。
 type windowSnapshot struct {
 	mu      sync.Mutex
@@ -51,7 +52,8 @@ func (s *windowSnapshot) bind(win *mygo.Window, apply func()) {
 }
 
 // get 返回当前快照。**纯读**：不触发枚举（枚举只在唤起与定时刷新时发生），
-// 数据源查询因此不会被枚举拖住。
+// 查询因此不会被枚举拖住。entries 由后台刷新整体替换（copy-on-write），已返回
+// 的 slice 不再被改动，故查询线程持有期间是安全的不可变快照。
 func (s *windowSnapshot) get() []windows.Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()

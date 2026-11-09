@@ -105,10 +105,14 @@ type appState struct {
 	// 覆盖路径，未设则 no-op）。nil 安全：RunOne / search.FilterApps 都退回 boost=1。
 	// 装配时注入给 st.model.Freq，让 apps-only 全局查询也吃到 rank 的频率加成。
 	freq frequency.Store
-	// runner 是异步过滤的投递口（见 filter_async.go）。nil = 就地同步过滤，
-	// 测试与装配早期走这条；生产在 ready() 里换成单 worker，按键不再等过滤。
-	runner    filterRunner
-	filterGen uint64
+	// runner 是异步查询的投递口（见 query_async.go）：provider 的 Query / Rank /
+	// Aggregate 与 apps 过滤都在唯一的查询线程跑。nil = 就地同步算，
+	// 测试与装配早期走这条；生产在 ready() 里换成单 worker。
+	runner   queryRunner
+	queryGen uint64
+	// snaps 是数据型 provider（terminal/vscode/zed）TTL 快照的失效句柄集合，
+	// 供 refreshOnShow 在面板唤起时统一标记失效（见 providers.go 的 ttlFetch）。
+	snaps ttlSnapSet
 	// freqVersion 在每次 Record 后 +1；freqSnap / freqSnapVer 是给后台过滤用的
 	// 只读快照（按版本惰性克隆，避免每次按键都复制整张表）。
 	freqVersion uint64
@@ -238,8 +242,9 @@ func (st *appState) ready() {
 	// 剪贴板内存历史：条数上限来自顶层 `[clipboard] max_entries`，未写则默认 100。
 	st.hist = cliphist.New(clipboardMaxEntries(loaded))
 	// 已落地 provider 注册表 + 进程内频率表（装配一次）。剪贴板 provider 接
-	// 真实历史快照闭包；局部变量 `providers` 遮蔽了包名，故经助手函数拿注册表。
-	st.pluginReg = builtinProvidersWithClipboard(st.clipboardFetch)
+	// 真实历史快照闭包（cliphist.Store 自带锁，可从查询线程读）；数据型 provider
+	// 的 TTL 失效句柄登记进 st.snaps 供面板唤起时统一失效。
+	st.pluginReg = builtinProvidersWith(st.clipboardFetch, &st.snaps)
 	applyProviderConfigs(providers, st.pluginReg) // 归一后的 weight/count/enabled 下发到实例
 	st.freq = loadFrequency()
 	st.model.Freq = st.freq // apps-only 全局排序吃频率加成（同一张 map，Record 就地自增）
@@ -346,9 +351,14 @@ func (st *appState) ready() {
 	// 「引擎索引完成」的内存快照由 loadAppsAsync 自己打（apps.go），
 	// 这里不重复。
 	bindApps(st.panel, st.applyAppsSnapshot)
-	// 异步过滤接缝：按键只投递任务，结果经 Window.Update 回主线程（见 filter_async.go）。
-	st.runner = newAsyncFilter()
-	st.runner.bind(st.panel, st.applyFilterResult)
+	// 异步查询接缝：按键只投递任务，provider Query / 聚合在查询线程跑，结果经
+	// Window.Update 回主线程（见 query_async.go）。process 闭包只捕获注册表引用，
+	// 不碰 appState；apply 回到主线程执行。
+	reg := st.pluginReg
+	st.runner = newAsyncQuery()
+	st.runner.bind(st.panel,
+		func(job queryJob) queryResult { return processQuery(reg, job) },
+		st.applyQueryResult)
 	// 窗口快照接缝：枚举在后台跑（见 winsnapshot.go），刷新完成后回主线程按需重算。
 	winSnap.bind(st.panel, st.onWindowSnapshot)
 	// 剪贴板监控：后台只轮询序列号，变化后回主线程读内容并写入内存历史。
@@ -365,15 +375,17 @@ func (st *appState) ready() {
 
 // applyAppsSnapshot 在主线程应用一次应用枚举结果（首载与每次重扫都走这里）。
 //
-// 除灌数据 + 同步过滤外，还必须推进 filterGen：重扫完成时可能还有基于旧 apps
-// 快照的过滤任务在飞，它们回来时 query 与 gen 都没变（applyFilterResult 的校验
-// 因此会放行），把刚装上的新列表覆盖回旧快照。推进世代让这些旧任务一律作废；
-// 本轮用新快照同步重算的结果就是唯一有效结果。
+// 除灌数据外还必须推进 queryGen：重扫完成时可能还有基于旧 apps 快照的查询任务
+// 在飞，它们回来时 State 都没变（落地校验会放行），把刚装上的新列表覆盖回旧
+// 快照。推进世代让这些旧任务一律作废；本轮用新快照重投一次的结果就是唯一有效
+// 结果。只在当前结果真的用得到 apps（Global 态）时重投。
 func (st *appState) applyAppsSnapshot(apps []appsmodel.AppEntry) {
 	st.model.Apps, st.model.Loading, st.model.Loaded = apps, false, true
-	st.filterGen++
-	st.filter()
-	st.refreshGlobalAgg() // 用最新 Results 重算全局合并行
+	if st.engineState.Mode() == engine.Global {
+		st.submitGlobalQuery() // 用最新 apps 快照重算 apps 结果 + 全局合并行
+	} else {
+		st.queryGen++ // 插件态不显示 apps，只作废基于旧快照的在途结果
+	}
 }
 
 // showPanel 唤出面板：**按主显示器** WorkArea 水平居中、垂直居中略偏上
@@ -570,16 +582,16 @@ func (st *appState) resetSession() {
 // Copy / Refresh / 进插件等动作**不调用**本函数：输入与结果原样保留，用户
 // 回来还能看到并再次复制（对照 core Action::should_reset_input 的分类）。
 //
-// 末尾的 filter 用空查询重算一次，把顶层结果预置好（对照 Rust reset 后
+// 末尾用空查询重投一次全局查询，把顶层结果预置好（对照 Rust reset 后
 // spawn_query("") 的预热）：下次唤起首帧就是干净的全局列表，不会闪一下旧插件
-// 结果。最后再钉一次列表顶部——filter 的 ScrollIntoView(0) 只保证首行可见。
+// 结果。最后再钉一次列表顶部——结果落地的 ScrollIntoView(0) 只保证首行可见。
 //
 // 若属主是主会话，复位后立即覆盖主快照：离开动作意味着“下次主入口从干净 Global
 // 开始”，不能被隐藏前保存的旧插件页带回来。插件会话复位不影响主快照。
 func (st *appState) resetAfterAction() {
 	st.resetSession()
 	st.model.Query = ""
-	st.filter()
+	st.submitGlobalQuery() // 空查询预热顶层 apps 列表（结果回主线程落地）
 	st.resetListScroll()
 	if st.ownerIsMain() {
 		st.saveMainSession()
@@ -588,10 +600,9 @@ func (st *appState) resetAfterAction() {
 
 // resetListScroll 把四个结果列表的滚动位置请求钉到顶部。
 //
-// ui.ListState 的 anchor/inset 是跨帧状态：只清数据/选中（resetSession、Filter、
-// refreshGlobalAgg）不会把它复位，下一次出现结果时会保留上一次的滚动位置，
-// 表现为「输入框已重置、列表还停在旧位置」。输入/作用域变化、唤起/隐藏、
-// 首轮数据到达时都显式回顶，确保新的一次查询从第一行开始。
+// ui.ListState 的 anchor/inset 是跨帧状态：只清数据/选中（resetSession、结果落地）
+// 不会把它复位，下一次出现结果时会保留上一次的滚动位置，表现为「输入框已重置、
+// 列表还停在旧位置」。输入/作用域变化、唤起/隐藏、首轮数据到达时都显式回顶。
 func (st *appState) resetListScroll() {
 	st.list.ScrollTo(0, ui.Start)
 	st.pickerList.ScrollTo(0, ui.Start)

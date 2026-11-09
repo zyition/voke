@@ -5,6 +5,18 @@
 // 分层（§7.2.1）：纯数据 + 纯查询接口，零 mygo、零 IO，Linux 原生可测。副作用
 // （执行 Action：启动/复制/设唤醒…）在 app 层 dispatcher 消费，不在本包。
 //
+// 线程契约（重要）：**provider 实现不需要任何同步原语，也不感知线程**。
+//   - Query / Config / SetConfig 由 app 层的唯一「查询线程」串行调用（见
+//     internal/app/query_async.go）：生产在后台 worker 跑，测试同步跑，二者都
+//     是单线程；主线程渲染帧不调 Query。
+//   - 数据源（Fetcher 注入闭包）的线程安全与新鲜度由**装配层**负责：窗口接后台
+//     快照（winsnapshot.go）、terminal/工作区接 TTL 快照（ttlFetch）、剪贴板历史
+//     自带锁、awake 状态自带锁。provider 只直通 fetch、不持缓存。
+//   - ID / Name / Aliases / Description / Placeholder / RegeneratesOnQuery 是不碰
+//     可变字段的纯读，主线程渲染帧可随时调。
+//
+// 因此新写 provider 直接写纯逻辑即可，不要在本包加锁或起 goroutine。
+//
 // 与现有 apps 路径的关系：本包现承载**全部 11 个 provider**（base64/calculator/
 // uuid/random/timestamp/clipboard/awake/windows/terminal/zed/vscode + apps 折叠），经
 // `builtinProviders()` 注册进 pluginReg；`view.pluginPending()` 的「未接入」分支只在
@@ -14,9 +26,9 @@
 // 强行并轨会打断 UWP 启动），故执行侧保留独立路径。
 //
 // Go 形态取舍（对照 Rust）：① `Provider::query` 在 Rust 为 object-safe 用
-// BoxFuture；纯 provider 同步且廉价，故这里接口取同步 `Query(QueryCtx) []Match`，
-// 数据型 provider 的后台加载沿用现有 appsmodel singleflight + Window.Update 接缝，
-// 不进本接口。② Rust 的 `Option<T>` 用「零值 = 无」表达（Icon/SubMode 空串、
+// BoxFuture；这里接口取同步 `Query(QueryCtx) []Match`——查询整体被 app 层收拢到
+// 唯一查询线程执行，同步签名反而更好测、也无需在接口层引入取消/未来值。
+// ② Rust 的 `Option<T>` 用「零值 = 无」表达（Icon/SubMode 空串、
 // Minutes 用 *int），减少指针噪声。③ Action 用「Kind + 扁平字段」的和类型，
 // 便于值相等比较与构造，非 Rust 的各态带参枚举。
 package providers
@@ -239,6 +251,8 @@ type Provider interface {
 	// 重查，否则用户正要复制的值会被换成新的。false 的确定性 provider 重跑结果一致，
 	// 无需跳过。
 	RegeneratesOnQuery() bool
-	// Query 按输入产出候选结果（同步；数据型 provider 的后台加载不进本接口）。
+	// Query 按输入产出候选结果（同步纯逻辑）。由 app 层的唯一查询线程串行调用，
+	// 不在渲染帧（主线程）执行；注入的 Fetcher 由装配层保证线程安全与新鲜度。
+	// 实现不需要任何同步原语——详见本文件包注释的「线程契约」。
 	Query(ctx QueryCtx) []Match
 }
