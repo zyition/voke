@@ -1,1 +1,61 @@
-<?xml version="1.0" encoding="utf-8" ?><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024"><rect fill="#1B1D24" width="1024" height="1024" rx="225" ry="225"/><path fill="#36B5A2" transform="matrix(1 0 0 1 169 62)" d="M161.2969 721L61.0312 179.7109L178.7344 179.7109L222.6914 443.0898Q229.957 492.1328 237.2227 549.8945Q244.8516 607.293 253.5703 675.2266L221.2383 675.2266Q252.1172 607.293 277.9102 549.8945Q303.7031 492.1328 326.5898 443.0898L455.1914 179.7109L579.4336 179.7109L303.7031 721L161.2969 721Z"/><path fill="#DBA85C" transform="matrix(1 0 0 1 574 388)" d="M59.6582 334.7393L70.2686 258.4648Q82.4805 246.0527 94.6924 233.8408Q106.9043 221.6289 119.1162 209.417Q131.3281 197.2051 143.7402 184.793L231.626 98.709L307.7002 98.709L157.7539 244.0508L152.749 244.0508L59.6582 334.7393M4.8047 397L54.2529 98.709L115.9131 98.709L102.2998 181.1895L89.6875 256.6631L84.8828 285.8916L66.4648 397L4.8047 397M193.9893 397L127.3242 261.8682L168.1641 215.0225L261.2549 397L193.9893 397Z"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- Windows 11 深板岩微渐变底板 -->
+    <linearGradient id="voke-bg" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#1B1E27" />
+      <stop offset="100%" stop-color="#101115" />
+    </linearGradient>
+
+    <!-- 探照镜身电光青渐变 (Electric Mint) -->
+    <linearGradient id="voke-cyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#46F5D0" />
+      <stop offset="50%" stop-color="#22D4B0" />
+      <stop offset="100%" stop-color="#0CA88D" />
+    </linearGradient>
+
+    <!-- 终端提示符太阳金渐变 (Solar Amber) -->
+    <linearGradient id="voke-amber" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFD15C" />
+      <stop offset="100%" stop-color="#FF8A00" />
+    </linearGradient>
+
+    <!-- 内部深色透镜玻璃微渐变 -->
+    <radialGradient id="lens-glass" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#161E28" />
+      <stop offset="100%" stop-color="#0F1218" />
+    </radialGradient>
+
+    <!-- 环境柔和辉光 -->
+    <filter id="voke-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="32" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- 1. 圆角底板与边缘微光轮廓 -->
+  <rect x="32" y="32" width="960" height="960" rx="216" ry="216" fill="url(#voke-bg)" stroke="rgba(255, 255, 255, 0.08)" stroke-width="2.5" />
+
+  <!-- 2. 环境氛围背光层 -->
+  <g opacity="0.35" filter="url(#voke-glow)">
+    <circle cx="462" cy="452" r="220" fill="none" stroke="#2DE2B6" stroke-width="52" />
+    <line x1="582" y1="572" x2="747" y2="737" stroke="#2DE2B6" stroke-width="62" stroke-linecap="round" />
+  </g>
+
+  <!-- 3. 加粗短小精悍的手柄（45° 人体工学射线） -->
+  <line x1="582" y1="572" x2="747" y2="737" stroke="url(#voke-cyan)" stroke-width="62" stroke-linecap="round" />
+
+  <!-- 4. 透镜内部暗色蓝宝石镀膜玻璃 -->
+  <circle cx="462" cy="452" r="168" fill="url(#lens-glass)" />
+
+  <!-- 5. 放大的探照镜外环（电光青） -->
+  <circle cx="462" cy="452" r="194" fill="none" stroke="url(#voke-cyan)" stroke-width="52" />
+
+  <!-- 6. 左上角弧形玻璃高光反射条 -->
+  <path d="M 324 314 A 194 194 0 0 1 462 258" fill="none" stroke="rgba(255, 255, 255, 0.6)" stroke-width="6" stroke-linecap="round" />
+
+  <!-- 7. 终端命令行提示符 `>`（太阳金，粗度强化） -->
+  <polyline points="382,387 447,452 382,517" fill="none" stroke="url(#voke-amber)" stroke-width="32" stroke-linecap="round" stroke-linejoin="round" />
+
+  <!-- 8. 终端正在闪烁的光标 `_`（太阳金） -->
+  <line x1="482" y1="514" x2="554" y2="514" stroke="url(#voke-amber)" stroke-width="30" stroke-linecap="round" />
+</svg>
