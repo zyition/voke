@@ -6,6 +6,7 @@
 [![CI](https://github.com/zyition/voke/actions/workflows/ci.yml/badge.svg)](https://github.com/zyition/voke/actions/workflows/ci.yml)
 [![language](https://img.shields.io/badge/language-Go-00ADD8)](https://go.dev)
 [![platform](https://img.shields.io/badge/platform-Windows-0078D6)](https://www.microsoft.com/windows)
+[![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/voke)
 
 **Voke**（读作 /voʊk/，invoke 之魂）是一个 Windows 原生、键盘优先的启动器，类 PowerToys Run。
 Go + [mygo](https://github.com/egoist/mygo) 实现，单 exe、不依赖 .NET / WebView / 外部运行时，托盘常驻。
