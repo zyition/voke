@@ -1465,9 +1465,13 @@ func TestPickerRowSingleClickEntersPlugin(t *testing.T) {
 	tt.Type(wantPickerPrefix)
 	tt.Frame()
 	tt.Frame()
-	if err := tt.Click(wantAppsName); err != nil {
-		t.Fatalf("点击 picker 行 %q 失败：%v", wantAppsName, err)
+	// mygo v0.8 起 Tester.Click 要求文字自身就是输入目标；行文字被 ButtonBase
+	// 覆盖，按坐标点（仍走真实命中链，落到的就是 ButtonBase）。
+	rect, ok := tt.Find(wantAppsName)
+	if !ok {
+		t.Fatalf("picker 行 %q 不可见，无法模拟点击", wantAppsName)
 	}
+	tt.ClickAt(rect.X+rect.W/2, rect.Y+rect.H/2)
 	tt.Frame()
 	tt.Frame()
 

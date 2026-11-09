@@ -20,7 +20,7 @@ require (
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/egoist/mygo v0.7.4
+	github.com/egoist/mygo v0.8.3
 	github.com/glebarez/go-sqlite v1.23.0
 	github.com/mozillazg/go-pinyin v0.21.0
 	golang.org/x/image v0.47.0

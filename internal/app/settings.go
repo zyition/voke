@@ -421,8 +421,16 @@ func (st *appState) cancelHotkeyRecording(s *settingsWindow) {
 // editor 把 Alt+字母 / 符号当作“会输入文本”的键跳过 OnTextKey，导致这些组合
 // 根本录不到（Alt+Space、Alt+` 等都会漏）。HandleInput 在文本处理之前拿到所有
 // KeyDown，只消费按下、忽略自动重复与抬起。
+//
+// mygo v0.8 起单独按下的修饰键（Ctrl/Shift/Alt/Win）、CapsLock 等也会进
+// HandleInput，且 Key 为 KeyUnknown（只有物理位置 Code 有名字）。这类键录不成
+// 热键，直接放行：否则用户「先按 Ctrl 再按字母」的常规手势会被当成无效组合，
+// 每按一次修饰键就弹一次「请按住 Ctrl / Alt / Shift」的错误。
 func (st *appState) recordHotkeyInput(s *settingsWindow, ev ui.InputEvent) bool {
 	if ev.Kind != ui.InputKeyDown || ev.Repeat {
+		return false
+	}
+	if ev.Key == ui.KeyUnknown {
 		return false
 	}
 	return st.recordHotkey(s, ev.Key, ev.Mods)
