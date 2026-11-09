@@ -1,16 +1,29 @@
-# Voke
+<p align="center">
+  <img src="assets/voke-icon.svg" alt="Voke" width="128">
+</p>
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+<h1 align="center">Voke</h1>
 
-<a href="https://awesomemygo.dev/apps/voke"><img src="https://awesomemygo.dev/badge.svg" alt="Listed on Awesome MyGo"></a>
+<p align="center">
+  <a href="README.md">English</a> |
+  <strong>简体中文</strong>
+</p>
 
-[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![CI](https://github.com/zyition/voke/actions/workflows/ci.yml/badge.svg)](https://github.com/zyition/voke/actions/workflows/ci.yml)
-[![language](https://img.shields.io/badge/language-Go-00ADD8)](https://go.dev)
-[![platform](https://img.shields.io/badge/platform-Windows-0078D6)](https://www.microsoft.com/windows)
+<p align="center">
+  <a href="https://awesomemygo.dev/apps/voke"><img src="https://awesomemygo.dev/badge.svg" alt="Listed on Awesome MyGo"></a>
+</p>
 
-**Voke**（读作 /voʊk/，invoke 之魂）是一个 Windows 原生、键盘优先的启动器，类 PowerToys Run。
-Go + [mygo](https://github.com/egoist/mygo) 实现，单 exe、不依赖 .NET / WebView / 外部运行时，托盘常驻。
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
+  <a href="https://github.com/zyition/voke/actions/workflows/ci.yml"><img src="https://github.com/zyition/voke/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/language-Go-00ADD8" alt="Language: Go"></a>
+  <a href="https://www.microsoft.com/windows"><img src="https://img.shields.io/badge/platform-Windows-0078D6" alt="Platform: Windows"></a>
+</p>
+
+<p align="center">
+  <strong>Voke</strong>（读作 /voʊk/，invoke 之魂）是一个 Windows 原生、键盘优先的启动器，类 PowerToys Run。<br>
+  Go + <a href="https://github.com/egoist/mygo">mygo</a> 实现，单 exe、不依赖 .NET / WebView / 外部运行时，托盘常驻。
+</p>
 
 为什么要做它：同类工具多为 Electron / WebView 方案，内存与启动开销偏高。Voke 用 Go 直接调
 Win32 / COM，界面走 mygo 的 D3D11 后端；启动后 PrivateCommit 约 55MB，应用索引完成后约 110MB，

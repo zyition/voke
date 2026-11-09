@@ -1,15 +1,29 @@
-# Voke
+<p align="center">
+  <img src="assets/voke-icon.svg" alt="Voke" width="128">
+</p>
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+<h1 align="center">Voke</h1>
 
-<a href="https://awesomemygo.dev/apps/voke"><img src="https://awesomemygo.dev/badge.svg" alt="Listed on Awesome MyGo"></a>
+<p align="center">
+  <strong>English</strong> |
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![CI](https://github.com/zyition/voke/actions/workflows/ci.yml/badge.svg)](https://github.com/zyition/voke/actions/workflows/ci.yml)
-[![language](https://img.shields.io/badge/language-Go-00ADD8)](https://go.dev)
-[![platform](https://img.shields.io/badge/platform-Windows-0078D6)](https://www.microsoft.com/windows)
+<p align="center">
+  <a href="https://awesomemygo.dev/apps/voke"><img src="https://awesomemygo.dev/badge.svg" alt="Listed on Awesome MyGo"></a>
+</p>
 
-**Voke** (pronounced /voʊk/, the spirit of *invoke*) is a native, keyboard-first launcher for Windows, similar to PowerToys Run. It is built with Go and [mygo](https://github.com/egoist/mygo): a single executable with no .NET, WebView, or external runtime, living in the system tray.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
+  <a href="https://github.com/zyition/voke/actions/workflows/ci.yml"><img src="https://github.com/zyition/voke/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/language-Go-00ADD8" alt="Language: Go"></a>
+  <a href="https://www.microsoft.com/windows"><img src="https://img.shields.io/badge/platform-Windows-0078D6" alt="Platform: Windows"></a>
+</p>
+
+<p align="center">
+  <strong>Voke</strong> (pronounced /voʊk/, the spirit of <em>invoke</em>) is a native, keyboard-first launcher for Windows, similar to PowerToys Run.<br>
+  It is built with Go and <a href="https://github.com/egoist/mygo">mygo</a>: a single executable with no .NET, WebView, or external runtime, living in the system tray.
+</p>
 
 Why it exists: most launchers in this space use Electron or WebView, which cost more memory and start slower. Voke calls Win32 / COM directly from Go and renders through mygo's D3D11 backend. After startup, PrivateCommit is roughly 55 MB, and about 110 MB once the app index is built; most of that is the graphics stack and native system enumeration (the Go heap is only a few MB). The settings window is destroyed on close, icon caches are bounded, and memory does not keep growing with repeated use.
 
