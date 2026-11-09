@@ -657,7 +657,39 @@ func saveConfig(top appcfg.Top, overrides []config.UserOverride) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	return writeFileAtomic(path, data)
+}
+
+// writeFileAtomic 先写同目录临时文件，再 rename 覆盖目标：写到一半崩溃 / 磁盘满
+// 时旧文件保持完整，不会被截成半截配置（下次启动静默退回默认值）。
+//
+// rename 必须同目录（同卷）；Windows 上 os.Rename 走 MoveFileEx(REPLACE_EXISTING)，
+// 可以直接覆盖已存在的 config.toml。Sync 把内容刷到磁盘后再替换，避免「rename
+// 成功但内容还在页缓存」的断电窗口。
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".voke-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		// 成功时 rename 已把文件移走，这里的 Remove 只会失败且无副作用。
+		_ = os.Remove(tmpName)
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	// 临时文件由 CreateTemp 建成 0600（Windows 不区分权限位）。
+	return os.Rename(tmpName, path)
 }
 
 // reloadConfigs 在设置窗保存后重跑装配（读回刚写的 config.json → 归一 → 建表 →

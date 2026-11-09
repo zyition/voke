@@ -5,6 +5,7 @@
 package app
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -14,6 +15,33 @@ import (
 	"voke/internal/logic/engine"
 	"voke/internal/providers"
 )
+
+// TestSaveConfigLeavesNoTempFiles：原子写成功后目录里只剩 config.toml——临时文件
+// 已 rename 走（或被清理），不会在数据目录里越攒越多；重复保存同样干净。
+func TestSaveConfigLeavesNoTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.toml")
+	t.Setenv(configPathEnv, p)
+	for i := 0; i < 2; i++ {
+		if err := saveConfig(appcfg.Top{Hotkey: "ctrl+alt+space"}, nil); err != nil {
+			t.Fatalf("第 %d 次 saveConfig 失败：%v", i+1, err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("读目录失败：%v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "config.toml" {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("目录里应只有 config.toml，实得 %v", names)
+	}
+	if b, err := os.ReadFile(p); err != nil || len(b) == 0 {
+		t.Fatalf("config.toml 内容异常：len=%d err=%v", len(b), err)
+	}
+}
 
 func TestReloadConfigsAppliesSavedOverrides(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.toml")

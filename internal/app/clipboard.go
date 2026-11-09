@@ -167,7 +167,7 @@ func (st *appState) setNotice(msg string) {
 	st.notice = msg
 	st.noticeAt = time.Now()
 	if st.panel != nil && st.panel.IsVisible() {
-		st.panel.Update(func() {})
+		st.panel.Invalidate() // 合并到下一帧重绘，不投递空回调
 	}
 }
 

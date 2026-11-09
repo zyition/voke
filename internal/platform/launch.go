@@ -24,7 +24,8 @@ func Launch(exe string, args []string, noConsole bool) error {
 		log.Printf("voke 启动 %q 失败：%v", exe, err)
 		return err
 	}
-	// 不 Wait：进程生命周期交给 OS；否则 exec.Command 的退出状态回收会挂在后台 goroutine，
-	// 启动器不需要其结果（对齐 apps 路径 Shell.LaunchApp 的 fire-and-forget 语义）。
+	// fire-and-forget，但必须显式交还进程资源，否则 Windows 每次启动泄漏一个
+	// 进程句柄（等 GC），Unix 侧会留下没人回收的僵尸进程。
+	releaseLaunched(cmd)
 	return nil
 }

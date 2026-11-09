@@ -681,7 +681,13 @@ func (st *appState) selectedProviderMatch() (providers.Match, bool) {
 func (st *appState) runProviderIntent(m providers.Match, providerID string) {
 	switch intent := providers.IntentFor(m); intent.Kind {
 	case providers.IntentCopy:
-		platform.WriteClipboard(intent.Text)
+		if err := platform.WriteClipboard(intent.Text); err != nil {
+			// 写剪贴板失败（被其它程序占用、剪贴板链断了）：不记频率、不隐藏，
+			// 面板留着让用户重试或改用「粘贴」动作。
+			log.Printf("voke 复制到剪贴板失败：%v", err)
+			st.setNotice(i18n.L("复制失败：无法写入剪贴板", "Copy failed: could not write to the clipboard"))
+			return
+		}
 		// 只记「查找类且身份稳定」的 provider（见 frequency.Recordable）：
 		// uuid/random/awake 这些结果是生成值，复制它们不该影响任何排序。
 		st.recordUse(providerID, m.Title)
@@ -843,6 +849,8 @@ func (st *appState) execLaunch(acts []panelstate.Action) {
 			app := st.model.Results[a.Index]
 			if err := platform.LaunchApp(app); err != nil {
 				log.Printf("启动 %s 失败：%v", app.Name, err)
+				st.setNotice(i18n.L("无法启动「"+app.Name+"」："+err.Error(),
+					"Could not launch “"+app.Name+"”: "+err.Error()))
 				return
 			}
 			// 启动成功 → 记一次 apps 使用频率（对照生产 search.rs record_use("apps:<name>")），

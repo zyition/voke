@@ -10,6 +10,7 @@ import (
 	"voke/internal/logic/appsmodel"
 	"voke/internal/logic/frequency"
 	"voke/internal/logic/search"
+	"voke/internal/logic/testutil"
 )
 
 // fakeRunner 记录投递的任务，由测试手动「完成」它们。
@@ -55,6 +56,33 @@ func TestAsyncFilterDropsStaleResults(t *testing.T) {
 	st.applyFilterResult(cur, search.FilterApps(cur.query, cur.apps, cur.freq))
 	if got := resultNames(st); got != "Chrome" {
 		t.Fatalf("最新结果应生效，实得 %q", got)
+	}
+}
+
+// TestAppRescanDropsInFlightFilter：重扫装上新的应用快照后，基于旧快照、还在飞的
+// 过滤任务不得把新列表覆盖回去（panel.go 的 applyAppsSnapshot 必须推进 filterGen）。
+func TestAppRescanDropsInFlightFilter(t *testing.T) {
+	st := newWiredState(t, "Chrome")
+	r := &fakeRunner{}
+	st.runner = r
+	r.bind(nil, st.applyFilterResult)
+
+	typeInto(st, "chr")
+	if len(r.jobs) != 1 {
+		t.Fatalf("应投递 1 个过滤任务，实得 %d", len(r.jobs))
+	}
+	old := r.jobs[0]
+
+	// 重扫完成：新快照里只有 Chromium，同步重算出新列表。
+	st.applyAppsSnapshot(testutil.MkApps("Chromium"))
+	if got := resultNames(st); got != "Chromium" {
+		t.Fatalf("重扫后应显示新快照的结果，实得 %q", got)
+	}
+
+	// 旧任务晚到：query 与旧 gen 都可能对得上，但快照世代已推进 → 必须丢弃。
+	st.applyFilterResult(old, search.FilterApps(old.query, old.apps, old.freq))
+	if got := resultNames(st); got != "Chromium" {
+		t.Fatalf("旧快照结果覆盖了新列表：实得 %q", got)
 	}
 }
 

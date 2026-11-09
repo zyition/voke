@@ -345,11 +345,7 @@ func (st *appState) ready() {
 	// 灌数据 + 过滤 + 落 loading。
 	// 「引擎索引完成」的内存快照由 loadAppsAsync 自己打（apps.go），
 	// 这里不重复。
-	bindApps(st.panel, func(apps []appsmodel.AppEntry) {
-		st.model.Apps, st.model.Loading, st.model.Loaded = apps, false, true
-		st.filter()
-		st.refreshGlobalAgg() // apps 首次加载完成后，用最新 Results 重算全局合并行
-	})
+	bindApps(st.panel, st.applyAppsSnapshot)
 	// 异步过滤接缝：按键只投递任务，结果经 Window.Update 回主线程（见 filter_async.go）。
 	st.runner = newAsyncFilter()
 	st.runner.bind(st.panel, st.applyFilterResult)
@@ -365,6 +361,19 @@ func (st *appState) ready() {
 	if selftestRequested() {
 		runSelftest()
 	}
+}
+
+// applyAppsSnapshot 在主线程应用一次应用枚举结果（首载与每次重扫都走这里）。
+//
+// 除灌数据 + 同步过滤外，还必须推进 filterGen：重扫完成时可能还有基于旧 apps
+// 快照的过滤任务在飞，它们回来时 query 与 gen 都没变（applyFilterResult 的校验
+// 因此会放行），把刚装上的新列表覆盖回旧快照。推进世代让这些旧任务一律作废；
+// 本轮用新快照同步重算的结果就是唯一有效结果。
+func (st *appState) applyAppsSnapshot(apps []appsmodel.AppEntry) {
+	st.model.Apps, st.model.Loading, st.model.Loaded = apps, false, true
+	st.filterGen++
+	st.filter()
+	st.refreshGlobalAgg() // 用最新 Results 重算全局合并行
 }
 
 // showPanel 唤出面板：**按主显示器** WorkArea 水平居中、垂直居中略偏上
@@ -735,6 +744,10 @@ func (st *appState) setupTray() {
 	}
 	st.tray = tray
 	tray.OnClick(st.onTrayClick)
+	// 右键弹出前重建一次：mygo 的 SetMenu 是调用时快照，而菜单弹出后没有刷新
+	// 钩子；OnRightClick 在 Windows 的 PopUpMenu 之前同步触发，能把 awake 倒计时
+	// 刷新到「按下右键的那一刻」。菜单已打开期间的倒计时仍然不会变化。
+	tray.OnRightClick(st.refreshTrayMenu)
 	st.refreshTrayMenu()
 }
 

@@ -150,10 +150,10 @@ func WriteClipboardPlain(p ClipPayload) error {
 }
 
 // WriteClipboard 把 text 写入系统剪贴板（对照生产 Copy 动作 / Rust `Action::Copy`）。
-// 无返回值（mygo.Clipboard.WriteText 即 void）；失败静默——真机复制极少失败，
-// 且这是便利操作而非关键路径，不值得为它中断面板流程。
-func WriteClipboard(text string) {
-	mygo.Clipboard.WriteText(text)
+// 返回写入错误：调用方据此保留面板并提示，而不是假装复制成功。
+// mygo.Clipboard.WriteText 会吞掉错误，这里改用同一底层 Write（返回 error）。
+func WriteClipboard(text string) error {
+	return mygo.Clipboard.Write(transfer.TextData(text))
 }
 
 // ReadClipboardText 读回系统剪贴板的文本（对照生产 clipboard_selftest 的
