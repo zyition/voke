@@ -2,11 +2,12 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+<a href="https://awesomemygo.dev/apps/voke"><img src="https://awesomemygo.dev/badge.svg" alt="Listed on Awesome MyGo"></a>
+
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![CI](https://github.com/zyition/voke/actions/workflows/ci.yml/badge.svg)](https://github.com/zyition/voke/actions/workflows/ci.yml)
 [![language](https://img.shields.io/badge/language-Go-00ADD8)](https://go.dev)
 [![platform](https://img.shields.io/badge/platform-Windows-0078D6)](https://www.microsoft.com/windows)
-[![Listed on Awesome MyGo](https://awesomemygo.dev/badge.svg)](https://awesomemygo.dev/apps/voke)
 
 **Voke** (pronounced /voʊk/, the spirit of *invoke*) is a native, keyboard-first launcher for Windows, similar to PowerToys Run. It is built with Go and [mygo](https://github.com/egoist/mygo): a single executable with no .NET, WebView, or external runtime, living in the system tray.
 
