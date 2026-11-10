@@ -4,6 +4,11 @@
 > (grouping rules in `cliff.toml`, release process in `AGENTS.md`). Do not edit manually.
 > Entries up to v0.6.0 are kept in Chinese; later entries are English, optionally bilingual.
 
+## [0.7.2] - 2026-11-10
+
+### Tests
+
+- Isolate logcap tests from awake stub log noise
 ## [0.7.1] - 2026-11-09
 
 ### Bug Fixes
