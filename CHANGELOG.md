@@ -4,6 +4,23 @@
 > (grouping rules in `cliff.toml`, release process in `AGENTS.md`). Do not edit manually.
 > Entries up to v0.6.0 are kept in Chinese; later entries are English, optionally bilingual.
 
+## [0.8.0] - 2026-11-10
+
+### Features
+
+- Use plugin weight for result group order
+
+### Bug Fixes
+
+- Keep logging alive once the log reaches its line cap
+
+### Performance
+
+- Keep shell icon fetches out of the render frame
+
+### Documentation
+
+- Record the main-thread frame budget
 ## [0.7.3] - 2026-11-10
 
 ### Bug Fixes
