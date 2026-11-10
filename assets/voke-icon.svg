@@ -13,7 +13,7 @@
       <stop offset="100%" stop-color="#0CA88D" />
     </linearGradient>
 
-    <!-- 终端提示符太阳金渐变 (Solar Amber) -->
+    <!-- 终端提示符与光标太阳金渐变 (Solar Amber) -->
     <linearGradient id="voke-amber" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#FFD15C" />
       <stop offset="100%" stop-color="#FF8A00" />
@@ -33,8 +33,9 @@
   </defs>
 
   <!-- 1. 圆角底板与边缘微光轮廓 -->
-  <rect x="32" y="32" width="960" height="960" rx="216" ry="216" fill="url(#voke-bg)" stroke="rgba(255, 255, 255, 0.08)" stroke-width="2.5" />
+  <rect x="0" y="0" width="1024" height="1024" rx="140" ry="140" fill="url(#voke-bg)" stroke="rgba(255, 255, 255, 0.08)" stroke-width="2.5" />
 
+  <g transform="translate(512,512) scale(1.38) translate(-512,-512)">
   <!-- 2. 环境氛围背光层 -->
   <g opacity="0.35" filter="url(#voke-glow)">
     <circle cx="462" cy="452" r="220" fill="none" stroke="#2DE2B6" stroke-width="52" />
@@ -56,6 +57,7 @@
   <!-- 7. 终端命令行提示符 `>`（太阳金，粗度强化） -->
   <polyline points="382,387 447,452 382,517" fill="none" stroke="url(#voke-amber)" stroke-width="32" stroke-linecap="round" stroke-linejoin="round" />
 
-  <!-- 8. 终端正在闪烁的光标 `_`（太阳金） -->
-  <line x1="482" y1="514" x2="554" y2="514" stroke="url(#voke-amber)" stroke-width="30" stroke-linecap="round" />
+  <!-- 8. 终端正在闪烁的光标 `_`（采用圆角胶囊矩形，100% 保证全平台稳定渲染） -->
+  <rect x="480" y="500" width="76" height="28" rx="14" ry="14" fill="url(#voke-amber)" />
+  </g>
 </svg>

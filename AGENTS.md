@@ -73,6 +73,36 @@ Rust/gpui 参考实现已归档到 `legacy-rust` 分支与 `v0.1.x` tag；main �
 - 安装器在 `CurStepChanged(ssInstall)` 直接 `taskkill /F` 结束托盘实例（无未保存
   数据）；不用 Restart Manager，避免托盘进程 30 秒超时。
 
+## 图标资产
+
+- **唯一权威源** `assets/voke-icon.svg`；根目录 `voke-icon-*.svg` 只是设计稿，不参与构建。
+  换图先写进权威源，再跑 `bash packaging/gen-icons.sh` 重生成全套；
+  `bash packaging/gen-icons.sh --check` 验证资产可逐字节复现（不写仓库）。
+  脚本不进 CI：发版只消费已提交的资产，CI 不装 resvg / Pillow / windres。
+- 生成链路：`resvg` 在临时目录渲染 2048² 母版（**不入库**）→ Pillow 出 ICO 九档 +
+  128² 托盘两份 → `windres` 从 `packaging/voke.rc` + `assets/voke.ico` 生成
+  `rsrc_windows_amd64.syso`。
+  依赖：`resvg`（mise，可用 `RESVG` 覆盖）、`python3 + Pillow`、
+  `x86_64-w64-mingw32-windres`。**渲染必须用 resvg**——ImageMagick 的 SVG delegate
+  会把透明区填白，只能用于校验位图。
+资产各管一段，别混：
+
+| 文件 | 用途 |
+| --- | --- |
+| `assets/voke-icon.svg` | 矢量源；README 两处 `<img>` 指向这个稳定路径，别改名 |
+| `assets/voke.ico` | Windows 九档图标：`voke.iss` 的 `SetupIconFile`（安装器 exe）+ `voke.rc` 喂给 windres |
+| `rsrc_windows_amd64.syso` | ico 的 PE 封装；Go 在 `windows/amd64` 自动链接 → exe 图标 / 任务栏 / 开始菜单 / 资源管理器 |
+| `assets/voke-tray.png` | 托盘 128² 源副本 |
+| `internal/ui/assets/voke-tray.png` | 托盘 128² 构建副本，`icons.go` 的 `//go:embed` 目标 |
+
+- 托盘两份必须逐字一致：`//go:embed` 只能嵌当前包目录内的文件（不接受 `..`），
+  `internal/ui` 够不到仓库根 `assets/`，所以必须放一份副本；脚本用 `cmp` 校验。
+- ICO 九档 `16/20/24/32/40/48/64/128/256` 别删 20/40（125%/150% DPI 任务栏与
+  资源管理器会直接取这两档）。
+- 设计约束：底板满幅 1024、圆角 140、图形层 1.38×。改设计时保证 256 档可见主体
+  占比 ≥70%，否则在深色任务栏 / 开始菜单上会明显比同侪小一圈（曾因 32px 留白 +
+  图形仅占 52% 偏小）。
+
 ## 发版流程
 
 推 `vX.Y.Z` tag 即触发 **Go 版**发版：`git tag v0.2.3 && git push origin v0.2.3` →
