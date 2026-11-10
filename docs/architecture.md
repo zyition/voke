@@ -219,3 +219,5 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
   [`legacy/voke-go-poc.md`](legacy/voke-go-poc.md)。
 - 当前内存测量与快照标签：[`notes/memory.md`](notes/memory.md)。
 - 匹配 / 拼音一致性：[`notes/matching.md`](notes/matching.md)。
+- 排序分（命中档位 + 有界使用加成）：[`notes/ranking.md`](notes/ranking.md)。
+- 主线程与渲染帧预算（什么不能进帧、怎么量）：[`notes/rendering.md`](notes/rendering.md)。

@@ -221,6 +221,8 @@ Voke 不联网、不上报任何数据（无遥测、无服务端）。涉及自
 - [`docs/BACKLOG.md`](docs/BACKLOG.md) —— 待办、产品决策与未来工作
 - [`docs/notes/memory.md`](docs/notes/memory.md) —— 内存口径、实测与已落地优化
 - [`docs/notes/matching.md`](docs/notes/matching.md) —— 匹配 / 拼音一致性
+- [`docs/notes/ranking.md`](docs/notes/ranking.md) —— 排序分：命中档位与有界使用加成
+- [`docs/notes/rendering.md`](docs/notes/rendering.md) —— 主线程与渲染帧预算：什么不能进帧、怎么量
 - [`docs/legacy/README.md`](docs/legacy/README.md) —— Rust/gpui 时代与 Go PoC 阶段的历史存档
 - [`AGENTS.md`](AGENTS.md) —— 给 AI agent 的仓库须知
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) —— 贡献指南

@@ -207,6 +207,8 @@ reports.
 - [`docs/BACKLOG.md`](docs/BACKLOG.md) — TODO, product decisions, and future work
 - [`docs/notes/memory.md`](docs/notes/memory.md) — memory measurements and implemented optimizations
 - [`docs/notes/matching.md`](docs/notes/matching.md) — matching / pinyin consistency
+- [`docs/notes/ranking.md`](docs/notes/ranking.md) — ranking score: quality tiers and the bounded frequency bonus
+- [`docs/notes/rendering.md`](docs/notes/rendering.md) — main-thread frame budget: what must stay out of the render frame, and how to measure it
 - [`docs/legacy/README.md`](docs/legacy/README.md) — archive of the Rust/gpui era and the Go PoC stage
 - [`AGENTS.md`](AGENTS.md) — repository notes for AI agents
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution guide
