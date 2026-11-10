@@ -382,7 +382,9 @@ func (st *appState) ready() {
 func (st *appState) applyAppsSnapshot(apps []appsmodel.AppEntry) {
 	st.model.Apps, st.model.Loading, st.model.Loaded = apps, false, true
 	if st.engineState.Mode() == engine.Global {
-		st.submitGlobalQuery() // 用最新 apps 快照重算 apps 结果 + 全局合并行
+		// 用最新 apps 快照重算 apps 结果 + 全局合并行；重扫是后台事件，
+		// 不能把用户已经选中的行弹回第一行（见 submitQueryKeepingSelection）。
+		st.submitGlobalQuerySel(st.captureSelection())
 	} else {
 		st.queryGen++ // 插件态不显示 apps，只作废基于旧快照的在途结果
 	}

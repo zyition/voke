@@ -289,7 +289,8 @@ func awakeProvider() *awake.Provider {
 }
 
 // terminalProvider 把 terminal provider 接到真实数据源：读 %LOCALAPPDATA% 下两包
-// settings.json（platform.ReadTerminalSettings，Windows 真读、非 Windows 返回 nil），
+// settings.json 与未打包版路径（platform.ReadTerminalSettings，Windows 真读、
+// 非 Windows 返回 nil），
 // 交纯逻辑 ProfilesFromSettings 合并去重盖章。TTL 缓存 + 唤起失效由装配层 ttlFetch
 // 承担（读盘落在查询线程，provider 无缓存）。wt.exe 兜底路径来自 platform.WTExe()。
 // 非 Windows（含测试）→ 源为空 → provider 恒空，与接线前 NewEmpty 逐字一致（零回归）。
@@ -312,8 +313,9 @@ func terminalProvider(snaps *ttlSnapSet) *terminal.Provider {
 // db.sqlite 的 workspaces 行 / VS Code state.vscdb 的 recentlyOpenedPathsList
 // （platform.Read*，纯 Go SQLite 驱动、跨平台，非 Windows 无 %LOCALAPPDATA%/
 // %USERPROFILE% → 返回 nil），交 workspaces 包的纯逻辑解析/排序/去重。编辑器命令经
-// platform.ZedCommand/VSCodeCommand 发现（装则用编辑器 CLI 打开，VS Code 走
-// cmd.exe /c code.cmd；未装 / 非 Windows 返回 nil → open 退化为直接开路径）。
+// platform.ZedCommand/VSCodeCommand 发现（常见安装目录 → PATH → App Paths；
+// VS Code 优先 cmd.exe /c code.cmd，无 CLI 时退回 Code.exe；未装 / 非 Windows
+// 返回 nil → open 退化为直接开路径）。
 // 非 Windows（含测试）源为空 = 恒空 provider。
 func zedProvider(snaps *ttlSnapSet) *workspaces.Provider {
 	load := func() []workspaces.Entry {

@@ -52,6 +52,9 @@ type queryJob struct {
 	// keepChosen >= 0 时，插件态落地保持该选中行（剪贴板历史「采集 / 操作后
 	// 刷新」用，行数变少时由 chooseProvider 钳位）；-1 = 复位到第 0 行。
 	keepChosen int
+	// sel 非 nil 时，落地按该锚点恢复选中（后台刷新：窗口快照 / 应用重扫）。
+	// nil 且 keepChosen < 0 = 用户输入变化，按旧语义复位到第 0 行。
+	sel *selectionAnchor
 
 	// 以下仅 Global 态填写：
 	// apps 是应用全量列表快照（FilterApps 的输入）。

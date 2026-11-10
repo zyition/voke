@@ -215,6 +215,12 @@ func (st *appState) pickerHint() string {
 // keepChosen >= 0 时落地保持该选中行（剪贴板历史「采集 / 操作后刷新」用）；
 // -1 = 结果到达后复位到第 0 行。主线程只组装不可变快照，本帧立即回显输入。
 func (st *appState) submitProviderQuery(keepChosen int) {
+	st.submitProviderQuerySel(keepChosen, nil)
+}
+
+// submitProviderQuerySel 是 submitProviderQuery 的带锚点版本：sel 非 nil 时，
+// 结果落地按锚点恢复选中（后台刷新用；见 onWindowSnapshot）。
+func (st *appState) submitProviderQuerySel(keepChosen int, sel *selectionAnchor) {
 	st.queryGen++
 	job := queryJob{
 		gen:           st.queryGen,
@@ -222,6 +228,7 @@ func (st *appState) submitProviderQuery(keepChosen int) {
 		providerQuery: true,
 		freq:          st.freqSnapshot(),
 		keepChosen:    keepChosen,
+		sel:           sel,
 	}
 	if st.runner == nil {
 		st.applyQueryResult(job, processQuery(st.pluginReg, job))
@@ -234,8 +241,14 @@ func (st *appState) submitProviderQuery(keepChosen int) {
 // 懒加载闸门（BeginQueryChange）仍在按键路径上就地跑，微秒级：首次非空查询触发
 // apps 枚举，结果回来走 applyAppsSnapshot 再重算。
 func (st *appState) submitGlobalQuery() {
+	st.submitGlobalQuerySel(nil)
+}
+
+// submitGlobalQuerySel 是 submitGlobalQuery 的带锚点版本：sel 非 nil 时结果
+// 落地按锚点恢复选中（应用重扫 / 窗口快照刷新等后台重算用）。
+func (st *appState) submitGlobalQuerySel(sel *selectionAnchor) {
 	st.queryGen++
-	job := queryJob{gen: st.queryGen, state: st.engineState, freq: st.freqSnapshot()}
+	job := queryJob{gen: st.queryGen, state: st.engineState, freq: st.freqSnapshot(), sel: sel}
 	st.execute(st.model.BeginQueryChange(time.Now()))
 	job.apps = st.model.Apps
 	// 只有 Global 态且查询非空才聚合全局 provider（对照原 refreshGlobalAgg 的守卫）：
@@ -261,6 +274,122 @@ func (st *appState) submitQuery() {
 	st.submitGlobalQuery()
 }
 
+// submitQueryKeepingSelection 重跑当前查询并保留选中行：窗口快照等**后台**
+// 刷新会重投查询，结果集通常只是轻微变化；不保留就会每 2 秒把用户选中的行
+// 弹回第一行。按条目身份（provider id + 标题 + 副标题）恢复，找不到时退回
+// 原下标（不是 0），列表缩短才钳位。
+func (st *appState) submitQueryKeepingSelection() {
+	sel := st.captureSelection()
+	if st.providerActive() {
+		st.submitProviderQuerySel(-1, sel)
+		return
+	}
+	st.submitGlobalQuerySel(sel)
+}
+
+// selectionAnchor 是「后台刷新时该保持哪一行」的身份快照：key 是条目身份
+// （找不到同一条时退回 index；不是复位到 0），index 是投递时的行下标。
+// 选中行的内容可能随时间变化（窗口标题），key 失配时就按原下标钳位——
+// 对用户来说「还在原来的位置附近」远好于「跳回第一行」。
+type selectionAnchor struct {
+	key   string
+	index int
+}
+
+// appRowKey / providerRowKey 是选中锚点的身份键：优先名字 + 路径/副标题，
+// 让后台刷新后行序变化也能找回同一条。
+func appRowKey(a appsmodel.AppEntry) string {
+	return "apps\x00" + a.Name + "\x00" + a.Path
+}
+
+func providerRowKey(m providers.Match) string {
+	return "prov\x00" + m.ProviderID + "\x00" + m.Title + "\x00" + m.Subtitle
+}
+
+// captureSelection 记录当前结果区的选中行（无选中 / 空列表返回 nil）。
+// 只在后台重算（窗口快照 / 应用重扫）投递前调用，用户输入变化不经过这里。
+func (st *appState) captureSelection() *selectionAnchor {
+	if st.providerActive() {
+		if st.provChosen < 0 || st.provChosen >= len(st.provRows) {
+			return nil
+		}
+		return &selectionAnchor{key: providerRowKey(st.provRows[st.provChosen].Match), index: st.provChosen}
+	}
+	if st.globalActive() {
+		if st.globalChosen < 0 || st.globalChosen >= len(st.globalRows) {
+			return nil
+		}
+		return &selectionAnchor{key: st.globalRowKey(st.globalRows[st.globalChosen]), index: st.globalChosen}
+	}
+	if st.model.Chosen < 0 || st.model.Chosen >= len(st.model.Results) {
+		return nil
+	}
+	return &selectionAnchor{key: appRowKey(st.model.Results[st.model.Chosen]), index: st.model.Chosen}
+}
+
+// globalRowKey 给合并列表的一行生成身份键（apps 行与 provider 行分开命名空间）。
+func (st *appState) globalRowKey(r globalRow) string {
+	if r.apps {
+		if r.appIdx < 0 || r.appIdx >= len(st.model.Results) {
+			return ""
+		}
+		return appRowKey(st.model.Results[r.appIdx])
+	}
+	if r.provIdx < 0 || r.provIdx >= len(st.globalProvRows) {
+		return ""
+	}
+	return providerRowKey(st.globalProvRows[r.provIdx].Match)
+}
+
+// chooseProviderByAnchor 按锚点挑新结果里的行：同身份优先，否则按原下标钳位。
+func chooseProviderByAnchor(rows []providers.RankedMatch, sel *selectionAnchor) int {
+	if len(rows) == 0 || sel == nil {
+		return 0
+	}
+	if sel.key != "" {
+		for i := range rows {
+			if providerRowKey(rows[i].Match) == sel.key {
+				return i
+			}
+		}
+	}
+	return max(0, min(sel.index, len(rows)-1))
+}
+
+// restoreGlobalSelection 把选中恢复到锚点：合并列表按 globalRows，apps-only
+// 按 model.Results。两者都找不到同身份条目时退回原下标并钳位，而不是回 0。
+func (st *appState) restoreGlobalSelection(sel *selectionAnchor) {
+	if st.globalActive() {
+		idx := -1
+		if sel != nil && sel.key != "" {
+			for i, r := range st.globalRows {
+				if st.globalRowKey(r) == sel.key {
+					idx = i
+					break
+				}
+			}
+		}
+		if idx < 0 && sel != nil {
+			idx = sel.index
+		}
+		st.chooseGlobal(idx)
+		return
+	}
+	idx := -1
+	if sel != nil && sel.key != "" {
+		for i, a := range st.model.Results {
+			if appRowKey(a) == sel.key {
+				idx = i
+				break
+			}
+		}
+	}
+	if idx < 0 && sel != nil {
+		idx = sel.index
+	}
+	st.choose(idx)
+}
+
 // applyQueryResult 是查询线程结果回主线程的落点：世代号或模式状态对不上
 // （期间又敲了字 / 切了模式 / 换了配置）直接丢弃。只在主线程执行
 // （Window.Update 回调 / 同步路径）。
@@ -271,9 +400,12 @@ func (st *appState) applyQueryResult(job queryJob, res queryResult) {
 	if job.providerQuery {
 		st.provRows = res.ranked
 		st.provLastKey = providerQueryKey(job.state) // 落地才记「真跑过的输入」
-		if job.keepChosen >= 0 {
+		switch {
+		case job.keepChosen >= 0:
 			st.chooseProvider(job.keepChosen)
-		} else {
+		case job.sel != nil:
+			st.chooseProvider(chooseProviderByAnchor(res.ranked, job.sel))
+		default:
 			st.provChosen = 0
 			if len(res.ranked) > 0 {
 				st.provList.ScrollIntoView(0)
@@ -296,6 +428,10 @@ func (st *appState) applyQueryResult(job queryJob, res queryResult) {
 	// 没有 provider 行 → globalActive() 为 false，走原 apps-only 路径。
 	st.execute(st.model.SetResults(res.apps))
 	st.globalRows, st.globalProvRows = buildGlobalRows(res.apps, res.agg)
+	if job.sel != nil {
+		st.restoreGlobalSelection(job.sel)
+		return
+	}
 	st.globalChosen = 0
 	if len(st.globalRows) > 0 {
 		st.resetListScroll()
@@ -427,11 +563,11 @@ func (st *appState) onWindowSnapshot() {
 		return
 	}
 	if st.engineState.Mode() == engine.Global && st.engineState.Query() != "" {
-		st.submitQuery()
+		st.submitQueryKeepingSelection()
 		return
 	}
 	if st.providerActive() && st.engineState.PluginID() == windows.ID {
-		st.submitQuery()
+		st.submitQueryKeepingSelection()
 	}
 }
 
@@ -822,9 +958,12 @@ func (st *appState) execPlatformAction(a providers.Action) bool {
 		// WT profile：先 App Activation（对齐 CmdPal / 生产，可带 `--profile "<guid>"`），
 		// 失败（如 WT 非 MSIX 安装的解包版）回退 wt.exe 直启 `-p <profile>`。对照
 		// voke-app dispatcher 的 n_profile（activate_app → 失败兜底 CreateProcess）。
-		if pid, ok := platform.ActivateApp(a.Aumid, terminal.ActivationArguments(a.Profile)); ok {
-			log.Printf("voke：WT App Activation 已提交 aumid=%s profile=%s pid=%d", a.Aumid, a.Profile, pid)
-			return true
+		// 未打包版没有 AUMID：跳过必然失败的 App Activation，直接走 wt.exe 兜底。
+		if a.Aumid != "" {
+			if pid, ok := platform.ActivateApp(a.Aumid, terminal.ActivationArguments(a.Profile)); ok {
+				log.Printf("voke：WT App Activation 已提交 aumid=%s profile=%s pid=%d", a.Aumid, a.Profile, pid)
+				return true
+			}
 		}
 		if a.FallbackPath != "" {
 			if err := platform.Launch(a.FallbackPath, []string{"-p", a.Profile}, true); err == nil {

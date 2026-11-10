@@ -4,6 +4,7 @@ package app
 
 import (
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -224,6 +225,87 @@ func TestApplyQueryResultKeepsChosen(t *testing.T) {
 	st.applyQueryResult(job2, queryResult{ranked: ranked})
 	if st.provChosen != 0 {
 		t.Errorf("keepChosen=-1 应复位选中到第 0 行，实得 %d", st.provChosen)
+	}
+}
+
+// TestSubmitQueryKeepingSelectionCarriesAnchor：后台刷新（窗口快照 / 应用重扫）
+// 投递查询时必须带上当前选中行的锚点，否则落地会复位到第 0 行。
+func TestSubmitQueryKeepingSelectionCarriesAnchor(t *testing.T) {
+	st := newGlobalState(t)
+	st.engineState = engine.NewState(engine.Plugin, "terminal", "", "")
+	st.queryGen = 1
+	st.provRows = []providers.RankedMatch{
+		{Match: providers.MatchExecute("terminal", "a", "", providers.Action{}, 1)},
+		{Match: providers.MatchExecute("terminal", "b", "", providers.Action{}, 1)},
+	}
+	st.provChosen = 1
+	r := &fakeRunner{}
+	st.runner = r
+
+	st.submitQueryKeepingSelection()
+	if len(r.jobs) != 1 {
+		t.Fatalf("应投递 1 个任务，实得 %d", len(r.jobs))
+	}
+	sel := r.jobs[0].sel
+	if sel == nil || sel.index != 1 {
+		t.Fatalf("后台刷新应带选中锚点 index=1：%+v", sel)
+	}
+	if want := providerRowKey(st.provRows[1].Match); sel.key != want {
+		t.Errorf("锚点身份键 = %q，want %q", sel.key, want)
+	}
+}
+
+// TestApplyQueryResultRestoresProviderSelection：结果行重排后按身份键找回原选中，
+// 而不是复位到第 0 行。
+func TestApplyQueryResultRestoresProviderSelection(t *testing.T) {
+	st := newGlobalState(t)
+	state := engine.NewState(engine.Plugin, "terminal", "", "")
+	st.engineState = state
+	st.queryGen = 1
+
+	mk := func(title string) providers.RankedMatch {
+		return providers.RankedMatch{Match: providers.MatchExecute("terminal", title, "", providers.Action{}, 1)}
+	}
+	st.provRows = []providers.RankedMatch{mk("a"), mk("b"), mk("c")}
+	st.provChosen = 1
+	sel := st.captureSelection()
+
+	reordered := []providers.RankedMatch{mk("c"), mk("a"), mk("b")}
+	st.applyQueryResult(queryJob{gen: 1, state: state, providerQuery: true, keepChosen: -1, sel: sel},
+		queryResult{ranked: reordered})
+	if st.provChosen != 2 {
+		t.Errorf("应按身份恢复选中到 b（新列表下标 2），实得 %d", st.provChosen)
+	}
+}
+
+// TestApplyQueryResultRestoresAppsSelection：apps-only 列表（空查询 / 重扫）同样
+// 按名称 + 路径恢复选中；条目消失时退回原下标钳位，不回 0。
+func TestApplyQueryResultRestoresAppsSelection(t *testing.T) {
+	st := newGlobalState(t)
+	state := engine.NewState(engine.Global, "", "", "")
+	st.engineState = state
+	st.queryGen = 1
+	app := func(name string) appsmodel.AppEntry {
+		return appsmodel.AppEntry{Name: name, Path: "shell:AppsFolder\\" + strings.ToLower(name)}
+	}
+	st.model.Results = []appsmodel.AppEntry{app("Chrome"), app("Chromium"), app("Firefox")}
+	st.model.Chosen = 1
+	sel := st.captureSelection()
+
+	st.applyQueryResult(queryJob{gen: 1, state: state, sel: sel},
+		queryResult{apps: []appsmodel.AppEntry{app("Firefox"), app("Chrome"), app("Chromium")}})
+	if st.model.Chosen != 2 {
+		t.Errorf("应按名称 + 路径恢复选中到 Chromium（新下标 2），实得 %d", st.model.Chosen)
+	}
+
+	// 条目消失：原下标 2 仍在范围内 → 保持 2，而不是回 0。
+	st.queryGen = 2
+	st.model.Chosen = 2
+	sel = st.captureSelection()
+	st.applyQueryResult(queryJob{gen: 2, state: state, sel: sel},
+		queryResult{apps: testutil.MkApps("A", "B", "C")})
+	if st.model.Chosen != 2 {
+		t.Errorf("同身份条目消失应按原下标钳位到 2，实得 %d", st.model.Chosen)
 	}
 }
 
