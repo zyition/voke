@@ -57,7 +57,7 @@ Launch at login is controlled by the switch in Settings (it writes/deletes
 The configuration file lives at `%APPDATA%\voke\config.toml`:
 
 - If the file is missing, all defaults apply. You can write only the keys you care about; unspecified keys keep their defaults.
-- Settings can also be edited visually (`Ctrl+,` or the tray menu): hotkey, language, theme, and each plugin's enabled / global / weight / prefix / activation / global shortcut. Changes apply immediately; there is no Save button. When a plugin is disabled, its remaining settings are disabled too.
+- Settings can also be edited visually (`Ctrl+,` or the tray menu): hotkey, language, theme, and each plugin's enabled / global / group order (`weight`) / prefix / activation / global shortcut. Changes apply immediately; there is no Save button. When a plugin is disabled, its remaining settings are disabled too.
 - The top-level `language` key accepts `"system"` (default), `"zh"`, or `"en"`. `"system"` follows the Windows UI language and falls back to English for non-Chinese systems.
 - Plugin shortcuts are written under `[providers.<id>]` as `hotkey` (for example ``hotkey = "Alt+`"``). Clipboard ships with ``Alt+` ``; all other plugins are unbound by default. Only **enabled** plugins register their shortcut, and disabling one unregisters it immediately. Duplicates with the main hotkey or another enabled plugin are reported inline and are not saved. A combination may also be reserved by the system or another app; if Voke reports it as taken, choose another one (for example, ``Alt+` `` is already used by some tools on some machines).
 - Prefix conflicts, whitespace, or reserved letter/digit prefixes are reported inline and are not saved.

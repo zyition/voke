@@ -91,7 +91,7 @@ func FilterApps(query string, apps []appsmodel.AppEntry, freq frequency.Store) [
 		if ok {
 			found = append(found, scored{
 				app: app,
-				final: rank.Final(best.Quality, float64(best.Score), 1,
+				final: rank.Final(best.Quality, float64(best.Score),
 					usageOf(freq, app.Name)),
 			})
 		}

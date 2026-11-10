@@ -38,7 +38,7 @@ var (
 const (
 	// MinWeight / MaxWeight 是 weight 的夹紧区间（C5）。
 	MinWeight = 0.0
-	MaxWeight = 3.0
+	MaxWeight = 10.0
 	// MinCount / MaxCount 是 count 的夹紧区间（C6）。
 	MinCount = 1
 	MaxCount = 50
@@ -128,7 +128,7 @@ func Normalize(descriptors []Descriptor, overrides []UserOverride) (Configs, err
 			}
 		}
 
-		// C5：weight 必须有限，然后 clamp 到 0..3（夹紧是静默的，非有限要吭声）。
+		// C5：weight 必须有限，然后 clamp 到 0..10（夹紧是静默的，非有限要吭声）。
 		weight := derefFloat(ov.Weight, d.DefaultWeight)
 		if !isFinite(weight) {
 			fallback := d.DefaultWeight

@@ -205,7 +205,8 @@ type QueryCtx struct {
 type ProviderConfig struct {
 	Enabled  bool
 	IsGlobal bool
-	Weight   float64
+	// Weight 是该插件的**结果分组顺序**（0–10，越大越靠前，同值按注册序）；不参与条目打分。
+	Weight float64
 	// Prefix 是专属触发前缀（"=" / "#" / "@b"）；空串 = 无前缀。
 	Prefix     string
 	Activation string // "Direct" / "Indirect"；对照 Rust Activation 枚举（此处简化为字符串）。

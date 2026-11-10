@@ -62,7 +62,8 @@ type Descriptor struct {
 	// 注：生产用「`#` 系前缀 → Indirect」这条隐式规则回填，本包**不**照抄——
 	// 按铁律①，默认值就该写在 Descriptor 里，由作者直接声明。
 	DefaultActivation engine.Activation
-	// DefaultWeight 是默认权重（归一时 clamp 到 0..3）。
+	// DefaultWeight 是默认权重 = 结果分组的渲染顺序（归一时 clamp 到 0..10，越大越靠前；
+	// 它不参与条目打分，见 docs/notes/ranking.md §1）。
 	DefaultWeight float64
 	// DefaultCount 是默认条数（random 这类插件用；归一时 clamp 到 1..50）。
 	DefaultCount int
@@ -125,7 +126,8 @@ type ProviderConfig struct {
 	Prefix string
 	// Activation 是生效的激活方式（C7 处理后的 engine.Direct / engine.Indirect）。
 	Activation engine.Activation
-	// Weight 是生效权重（C5 后恒在 0..3）。
+	// Weight 是生效权重 = 结果分组的渲染顺序（C5 后恒在 0..10，越大越靠前，同值按注
+	// 册序）。注意它不是排序分因子：同组条目权重相同，乘进打分只是公因子。
 	Weight float64
 	// Count 是生效条数（C6 后恒在 1..50；不用条数概念的插件忽略它）。
 	Count int

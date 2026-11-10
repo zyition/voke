@@ -9,7 +9,17 @@ import (
 	"voke/internal/logic/frequency"
 	"voke/internal/providers"
 	"voke/internal/providers/base64"
+	"voke/internal/providers/uuid"
 )
+
+// groupIDsOf 取组 id 序列，便于断言组序。
+func groupIDsOf(gs []providers.Group) []string {
+	out := make([]string, len(gs))
+	for i, g := range gs {
+		out[i] = g.ProviderID
+	}
+	return out
+}
 
 func TestRegistryGetAndIDs(t *testing.T) {
 	b := base64.New()
@@ -33,7 +43,7 @@ func TestRunOneLevel1RankedDesc(t *testing.T) {
 	if len(ranked) != 2 {
 		t.Fatalf("第一级应 2 行，实得 %d", len(ranked))
 	}
-	// weight=1.0、freq=nil → final = score：加密 1.0 > 解密 0.9。
+	// freq=nil → final = score：加密 1.0 > 解密 0.9。
 	if ranked[0].Title != "加密" || ranked[0].FinalScore != 1.0 {
 		t.Errorf("首行应为 加密/1.0：%+v", ranked[0])
 	}
@@ -84,12 +94,12 @@ func hintMatch(id, title string) providers.Match {
 	return providers.MatchHint(id, title, "说明")
 }
 
-// TestAggregateGroupsOrderAndHints 对照 engine.rs::aggregate：groups 按传入 batches 顺序、
-// 每组内 Rank 降序；跨批的 Hint 按声明顺序累积到 Hints、不进任何组；只有提示的 provider
-// 不产生组；注册表里查不到的 id 按 weight=1.0 兜底。
+// TestAggregateGroupsOrderAndHints 对照 engine.rs::aggregate：groups 按 provider 权重降序
+// （同权重保持传入 batches 顺序）、每组内 Rank 降序；跨批的 Hint 按声明顺序累积到 Hints、
+// 不进任何组；只有提示的 provider 不产生组；注册表里查不到的 id 按 weight=1.0 兜底。
 func TestAggregateGroupsOrderAndHints(t *testing.T) {
 	b := base64.New()
-	b.SetConfig(providers.ProviderConfig{Enabled: true, Weight: 2.0}) // 放大权重看 final
+	b.SetConfig(providers.ProviderConfig{Enabled: true, Weight: 2.0}) // 权重只决定组序
 	r := providers.NewRegistry(b)
 
 	batches := []providers.Batch{
@@ -107,18 +117,49 @@ func TestAggregateGroupsOrderAndHints(t *testing.T) {
 	if agg.Groups[0].ProviderID != "base64" || agg.Groups[1].ProviderID != "ghost2" {
 		t.Errorf("groups 顺序 = [%s,%s]，想要 [base64,ghost2]", agg.Groups[0].ProviderID, agg.Groups[1].ProviderID)
 	}
-	// base64 weight=2.0：e2=2.0×1.0=2.0 在 e1=2.0×0.5=1.0 前。
+	// base64 weight=2.0 只影响组序（2.0 > ghost2 的兜底 1.0）；组内按 score 降序。
 	g0 := agg.Groups[0].Matches
-	if len(g0) != 2 || g0[0].Title != "e2" || g0[0].FinalScore != 2.0 || g0[1].Title != "e1" || g0[1].FinalScore != 1.0 {
-		t.Errorf("base64 组内应按 weight×score 降序 [e2=2.0,e1=1.0]：%+v", g0)
+	if len(g0) != 2 || g0[0].Title != "e2" || g0[0].FinalScore != 1.0 || g0[1].Title != "e1" || g0[1].FinalScore != 0.5 {
+		t.Errorf("base64 组内应按 score 降序 [e2=1.0,e1=0.5]：%+v", g0)
 	}
-	// ghost2 未注册 → weight 兜底 1.0 → final = 1.0×0.3。
+	// ghost2 未注册 → weight 兜底 1.0 → final = 0.3。
 	if f := agg.Groups[1].Matches[0].FinalScore; f != 0.3 {
-		t.Errorf("未注册 id weight 兜底 1.0，final 应 0.3：%v", f)
+		t.Errorf("未注册 id 的 final 应 0.3：%v", f)
+	}
+	// Group 带生效权重，供上层把 apps 组插到正确位置。
+	if agg.Groups[0].Weight != 2.0 || agg.Groups[1].Weight != 1.0 {
+		t.Errorf("组权重 = [%v,%v]，想要 [2,1]", agg.Groups[0].Weight, agg.Groups[1].Weight)
 	}
 	// hints 跨批按声明顺序：h1（批0）→ h2（批1）。
 	if len(agg.Hints) != 2 || agg.Hints[0].Title != "h1" || agg.Hints[1].Title != "h2" {
 		t.Errorf("hints 顺序 = %+v，想要 [h1,h2]", agg.Hints)
+	}
+}
+
+// TestAggregateSortsGroupsByWeight 钉住「权重 = 分组渲染顺序」：权重大的组排前面，
+// 与 batches 传入顺序无关；未注册 id 按 1.0 参与比较。
+func TestAggregateSortsGroupsByWeight(t *testing.T) {
+	b := base64.New()
+	b.SetConfig(providers.ProviderConfig{Enabled: true, Weight: 0.5})
+	u := uuid.New()
+	u.SetConfig(providers.ProviderConfig{Enabled: true, Weight: 3.0})
+	r := providers.NewRegistry(b, u)
+
+	batches := []providers.Batch{
+		{ProviderID: "base64", Matches: []providers.Match{execMatch("base64", "x", 0.5)}},
+		{ProviderID: "ghost", Matches: []providers.Match{execMatch("ghost", "y", 0.5)}}, // 未注册 → 1.0
+		{ProviderID: uuid.ID, Matches: []providers.Match{execMatch(uuid.ID, "z", 0.5)}},
+	}
+	agg := r.Aggregate(batches, nil)
+	want := []string{uuid.ID, "ghost", "base64"}
+	if got := groupIDsOf(agg.Groups); len(got) != len(want) {
+		t.Fatalf("组数 = %v，想要 %v", got, want)
+	} else {
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("组序 = %v，想要 %v（权重降序）", got, want)
+			}
+		}
 	}
 }
 

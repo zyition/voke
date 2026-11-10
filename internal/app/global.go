@@ -71,18 +71,33 @@ type globalRow struct {
 	groupID  string
 }
 
-// buildGlobalRows 把「已过滤的 apps」放在最前一组，随后拼接 agg 里的非 apps 组，摊平成
-// 单条可导航列表；返回行序列 + provider 行用的扁平 provRows（apps 的 appsMatch 组被忽略，
+// buildGlobalRows 把「已过滤的 apps」与 agg 里的非 apps 组按**权重降序**摊平成单条
+// 可导航列表；返回行序列 + provider 行用的扁平 provRows（apps 的 appsMatch 组被忽略，
 // apps 由 apps 参数单独呈现）。apps 为空时也不产生 apps 组（与 apps-only 旧行为一致）。
-func buildGlobalRows(apps []appsmodel.AppEntry, agg providers.Aggregated) (rows []globalRow, provRows []providers.RankedMatch) {
-	if len(apps) > 0 {
-		for i := range apps {
-			rows = append(rows, globalRow{apps: true, appIdx: i, newGroup: i == 0, groupID: appsProviderID})
+//
+// apps 组与其它组同权比较（默认 1.2 → 默认仍在最前）；同权重时 apps 优先，因为它是
+// 裸查询的主结果，不该被同分插件挤到后面。agg.Groups 已由 Registry.Aggregate 按权重
+// 降序排好，这里只需找到 apps 该插的位置。
+func buildGlobalRows(apps []appsmodel.AppEntry, appsWeight float64, agg providers.Aggregated) (rows []globalRow, provRows []providers.RankedMatch) {
+	var appRows []globalRow
+	for i := range apps {
+		appRows = append(appRows, globalRow{apps: true, appIdx: i, newGroup: i == 0, groupID: appsProviderID})
+	}
+	placed := false
+	emitApps := func() {
+		if placed || len(appRows) == 0 {
+			return
 		}
+		rows = append(rows, appRows...)
+		placed = true
 	}
 	for _, g := range agg.Groups {
 		if g.ProviderID == appsProviderID {
 			continue // apps 组由上面的 apps 参数呈现，不走 provider 执行器
+		}
+		// 组已按权重降序：第一个权重不高于 apps 的组之前，就是 apps 的位置。
+		if g.Weight <= appsWeight {
+			emitApps()
 		}
 		for j, m := range g.Matches {
 			provRows = append(provRows, m)
@@ -91,6 +106,7 @@ func buildGlobalRows(apps []appsmodel.AppEntry, agg providers.Aggregated) (rows 
 			})
 		}
 	}
+	emitApps() // 所有组都比 apps 重 → apps 排最后；apps 为空时这里是空操作
 	return rows, provRows
 }
 
@@ -98,6 +114,15 @@ func buildGlobalRows(apps []appsmodel.AppEntry, agg providers.Aggregated) (rows 
 // 否则（含 Linux/测试：数据型插件恒空）走原 apps-only 路径，逐字不变。
 func (st *appState) globalActive() bool {
 	return st.engineState.Mode() == engine.Global && len(st.globalProvRows) > 0
+}
+
+// appsWeight 取 apps 的生效权重（组序用）。apps 不在 pluginReg，但仍在 ProviderConfig
+// 表里；查不到时退回中性 1.0（测试装配缺配置也安全）。
+func (st *appState) appsWeight() float64 {
+	if pc, ok := st.providers.Lookup(appsProviderID); ok {
+		return pc.Weight
+	}
+	return 1.0
 }
 
 // providerName 取插件显示名（组标题用）；查不到退回 id 原样。

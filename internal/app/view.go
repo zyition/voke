@@ -427,7 +427,7 @@ func (st *appState) applyQueryResult(job queryJob, res queryResult) {
 	// 两步合并，避免中间帧）。空查询时 job.globals 恒空 → agg 为空 → 合并行里
 	// 没有 provider 行 → globalActive() 为 false，走原 apps-only 路径。
 	st.execute(st.model.SetResults(res.apps))
-	st.globalRows, st.globalProvRows = buildGlobalRows(res.apps, res.agg)
+	st.globalRows, st.globalProvRows = buildGlobalRows(res.apps, st.appsWeight(), res.agg)
 	if job.sel != nil {
 		st.restoreGlobalSelection(job.sel)
 		return

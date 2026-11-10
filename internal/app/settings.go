@@ -2,7 +2,7 @@
 // 可缩放、不自动隐藏；面板完全不动）。
 //
 // 装顶层设置（**开机自启 / 界面主题 / 唤隐热键**）+ 每插件配置（设计文档 §385 的 Group：
-// **启用 / 参与全局搜索 / 权重 0–3 / 激活别名(prefix)**，加 §33 的 Direct/Indirect 下拉）。
+// **启用 / 参与全局搜索 / 权重 0–10 / 激活别名(prefix)**，加 §33 的 Direct/Indirect 下拉）。
 // 数据全走 appcfg 落盘 + platform 副作用，保存时尽量当场生效：
 //   - 开机自启：`platform.SetAutostart`；
 //   - 插件配置：写 config.toml 的 enabled/is_global/weight/prefix/activation 覆盖 +
@@ -100,7 +100,7 @@ func aboutConfigPath() string {
 }
 
 // providerEdit 是「插件配置」区的一行（对照设计文档 §385 的每插件 Group：启用 /
-// 参与全局搜索 / 权重 0–3 / 激活别名(prefix)，外加 §33 的 Direct/Indirect 下拉）。
+// 参与全局搜索 / 权重 0–10 / 激活别名(prefix)，外加 §33 的 Direct/Indirect 下拉）。
 // 各字段直接是绑定态（widget 就地改它），保存时逐个包成 *指针* 落 override。
 // 值从 st.providers（归一后的生效态）seed，故「不改直接存」是幂等写回；前缀改坏了
 // 由 prefixSettingsError 在落盘前拦下（冲突 / 空白 / 保留键），其余数值由 Normalize 兜底。
@@ -756,9 +756,9 @@ func (st *appState) settingsProviderCard(c *ui.Context, s *settingsWindow, p *pr
 						st.applySettings()
 					}
 				})
-			settingsRow(c, i18n.L("权重 / 激活", "Weight / activation"),
-				i18n.L("0–3；右侧选择直接或间接", "0–3; choose direct or indirect"), func() {
-					if ui.NumberInput(c, &p.weight, 0, 3, 0.1).Changed() {
+			settingsRow(c, i18n.L("分组顺序 / 激活", "Group order / activation"),
+				i18n.L("0–10，越大越靠前", "0–10, higher comes first"), func() {
+					if ui.NumberInput(c, &p.weight, 0, 10, 0.1).Changed() {
 						st.applySettings()
 					}
 					if ui.Select(c, &p.activation, activationLabels()).Changed() {

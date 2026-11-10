@@ -14,18 +14,22 @@
 | --- | --- | --- | --- |
 | 字符串关系 | `internal/match` | 命中形态（档位）+ nucleo 连续分 | 不认识权重、频率、provider |
 | 使用习惯 | `internal/logic/frequency` | 次数 → **有界**加分 `UsageBonus` | 不认识 provider、不做排序 |
-| 合成排序 | `internal/logic/rank`（新） | 档位折算 + 权重 + 使用加成 → 单一排序分 | 不碰 IO / provider / UI |
+| 合成排序 | `internal/logic/rank`（新） | 档位折算 + 使用加成 → 单一排序分 | 不碰 IO / provider / UI |
 | 记录与落盘 | `internal/app` | 执行成功后 `Record`、启动读 / 变更写 | 不参与权重计算 |
 
 **排序分（唯一形式，单标量）**：
 
 ```
-Final = Weight × (Score + TierBonus[Quality] + UsageBonus(n))
+Final = Score + TierBonus[Quality] + UsageBonus(n)
 
 TierBonus:  Exact 0.40 | Prefix 0.30 | Acronym 0.20 | Substring 0.10 | Fuzzy 0
 UsageBonus(n) = min(0.12, 0.025·ln(1+n))
                1 次 0.017 · 5 次 0.045 · 31 次 0.086 · 100 次 0.115 · ≥147 次封顶 0.12
 ```
+
+**插件权重不在这个公式里**：同一 provider 的条目权重相同，乘进来只是公因子，改不了
+组内顺序。权重现在的语义是「结果分组的渲染顺序」——`providers.Registry.Aggregate`
+按权重降序排组、同权重保持注册序，apps 组默认 1.2（同权重时优先）。
 
 由此得到三条可解释的性质：
 
@@ -113,7 +117,7 @@ internal/logic/frequency
   recordable.go  记录白名单：哪些 provider / 结果才进表       （见 §5.2）
 internal/logic/rank        （新包，唯一排序内核）
   rank.go        TierBonus(q) float64
-                 Final(quality, score, weight, usage) float64
+                 Final(quality, score, usage) float64
                  UsageOf(freq, providerID, title) float64     // nil 安全
                  Sort(items, signalOf)                        // stable
 internal/logic/search      FilterApps：match → rank（删自有 boost 逻辑）

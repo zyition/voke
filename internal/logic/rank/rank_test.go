@@ -29,9 +29,9 @@ func TestTierBonusIsEvenlySpaced(t *testing.T) {
 //   - 跨两档：任何次数都反超不了（0.20 档差）。
 func TestUsageCrossesOneTierOnly(t *testing.T) {
 	const score = 0.5
-	prefix := Signal{Quality: match.QualityPrefix, Score: score, Weight: 1}
-	exact := Signal{Quality: match.QualityExact, Score: score, Weight: 1}
-	acronym := Signal{Quality: match.QualityAcronym, Score: score, Weight: 1}
+	prefix := Signal{Quality: match.QualityPrefix, Score: score}
+	exact := Signal{Quality: match.QualityExact, Score: score}
+	acronym := Signal{Quality: match.QualityAcronym, Score: score}
 
 	// 相邻档：Prefix + 满额使用 vs Exact + 0。
 	usedPrefix := prefix
@@ -51,27 +51,19 @@ func TestUsageCrossesOneTierOnly(t *testing.T) {
 // TestUsageIsBounded 守住「使用习惯不能把散点命中顶到精确命中之前」——
 // 也就是当初用户报的「搜 gma 时一堆乱条目排在 Gmail 前面」。
 func TestUsageIsBounded(t *testing.T) {
-	gmail := Signal{Quality: match.QualityPrefix, Score: 0.44, Weight: 1}
-	junk := Signal{Quality: match.QualityFuzzy, Score: 0.44, Weight: 1, Usage: frequency.UsageCap}
+	gmail := Signal{Quality: match.QualityPrefix, Score: 0.44}
+	junk := Signal{Quality: match.QualityFuzzy, Score: 0.44, Usage: frequency.UsageCap}
 	if junk.Final() >= gmail.Final() {
 		t.Errorf("乱条目 %v 不应压过 Gmail %v", junk.Final(), gmail.Final())
 	}
 }
 
-func TestWeightScalesEverything(t *testing.T) {
-	a := Signal{Quality: match.QualityFuzzy, Score: 0.5, Weight: 2}
-	b := Signal{Quality: match.QualityFuzzy, Score: 0.5, Weight: 1}
-	if !Less(a, b) {
-		t.Errorf("权重高者应在前：%v !> %v", a.Final(), b.Final())
-	}
-}
-
 func TestSortStableByFinal(t *testing.T) {
 	items := []Signal{
-		{Quality: match.QualityFuzzy, Score: 0.4, Weight: 1},
-		{Quality: match.QualityPrefix, Score: 0.4, Weight: 1},
-		{Quality: match.QualityExact, Score: 0.4, Weight: 1},
-		{Quality: match.QualityFuzzy, Score: 0.2, Weight: 1},
+		{Quality: match.QualityFuzzy, Score: 0.4},
+		{Quality: match.QualityPrefix, Score: 0.4},
+		{Quality: match.QualityExact, Score: 0.4},
+		{Quality: match.QualityFuzzy, Score: 0.2},
 	}
 	SortBy(items, func(s Signal) float64 { return s.Final() })
 	want := []match.MatchQuality{match.QualityExact, match.QualityPrefix, match.QualityFuzzy, match.QualityFuzzy}

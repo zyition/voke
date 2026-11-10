@@ -131,6 +131,9 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
   `activation` / `count` / `hotkey`；未写字段回落 Descriptor 默认。`hotkey` 未写时
   回落 `Descriptor.DefaultHotkey`（目前只有剪贴板有默认值 ``Alt+` ``，其余为空 = 不绑定）。
   设置页把有默认值的插件「清除」时会显式写空串，避免重新回落到默认值。
+  `weight`（0–10）决定**结果分组的渲染顺序**：越大越靠前，同值保持注册顺序（apps 默认
+  1.2，同权重时排最前）。它不参与条目打分——同组条目权重相同，乘进 `rank.Final` 只是
+  公因子（见 `docs/notes/ranking.md` §1）。
 - 归一（`internal/logic/config`）：C1 未知 id、C2 触发串冲突、C3 前缀不含空白、
   C4 字母/数字保留键、C5 weight、C6 count、C7 activation、C8 插件热键需可解析且
   至少一个修饰键；错误落日志并降级，不静默。

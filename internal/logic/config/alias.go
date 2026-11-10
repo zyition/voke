@@ -86,7 +86,7 @@ type Candidate struct {
 	Activation engine.Activation
 	// Aliases 是 Descriptor.Aliases（全小写 ASCII 的约定由配置层保证）。
 	Aliases []string
-	// Weight 是**归一后**的权重（0..3）。只乘 fuzzy 通道分，不乘 bonus：
+	// Weight 是**归一后**的权重（0..10）。只乘 fuzzy 通道分，不乘 bonus：
 	// bonus 是「别让条目消失」的兜底，不是可被权重清零的排名信号。
 	Weight float64
 	// Fuzzy 是 fuzzy 引擎给的原始分（0..1）。0 表示「fuzzy 判不掉」，
@@ -194,7 +194,7 @@ func Rank(cands []Candidate, query string) []Ranked {
 	out := make([]Ranked, 0, len(cands))
 	for _, c := range cands {
 		r := Ranked{Candidate: c}
-		// fuzzy 通道分：weight 已在 C5 归一到 0..3，这里只防手搓 Candidate 传负数。
+		// fuzzy 通道分：weight 已在 C5 归一到 0..10，这里只防手搓 Candidate 传负数。
 		w := c.Weight
 		if w < MinWeight {
 			w = MinWeight

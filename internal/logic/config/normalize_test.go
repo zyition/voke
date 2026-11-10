@@ -321,19 +321,19 @@ func TestNormalizeSymbolPrefixesAllAccepted(t *testing.T) {
 	}
 }
 
-// ── C5：weight 有限且 clamp 0..3（静默夹紧） ─────────────────────────────
+// ── C5：weight 有限且 clamp 0..10（静默夹紧） ────────────────────────────
 
 func TestNormalizeWeightClampedSilently(t *testing.T) {
 	tests := []struct {
 		in   float64
 		want float64
 	}{
-		{9.0, 3.0},    // 上限夹紧
-		{3.0, 3.0},    // 边界内
-		{2.5, 2.5},    // 不动
-		{0.0, 0.0},    // 下限边界
-		{-2.0, 0.0},   // 下限夹紧
-		{3.0001, 3.0}, // 刚过界也要夹住
+		{11.0, 10.0},    // 上限夹紧
+		{10.0, 10.0},    // 边界内
+		{2.5, 2.5},      // 不动
+		{0.0, 0.0},      // 下限边界
+		{-2.0, 0.0},     // 下限夹紧
+		{10.0001, 10.0}, // 刚过界也要夹住
 	}
 	for _, tt := range tests {
 		c := mustNormalize(t, fakeRegistry(), []UserOverride{{ID: "calculator", Weight: fp(tt.in)}})

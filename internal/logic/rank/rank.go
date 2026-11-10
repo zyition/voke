@@ -8,7 +8,11 @@
 //
 // 公式（见 docs/notes/ranking.md §1）：
 //
-//	Final = Weight × (Score + TierBonus[Quality] + Usage)
+//	Final = Score + TierBonus[Quality] + Usage
+//
+// 插件权重**不参与**这里的打分：权重是「结果分组的渲染顺序」（见
+// providers.Registry.Aggregate），同组条目的权重相同，乘进来只会是公因子，
+// 既改变不了组内顺序，也不该伪装成排序信号。
 //
 // 量纲约束（由测试守住）：
 //   - 相邻档位差 0.10，Usage 上限 0.12 → 长期高频 + 分数接近时，可顶掉**相邻一档**；
@@ -56,21 +60,19 @@ type Signal struct {
 	// 用 float64 承载：provider 的 Match.Score 就是 float64，来回转 float32 会引入
 	// 0.8999… 这类尾差，让「同分」判定失真。
 	Score float64
-	// Weight 是 provider 的静态权重（配置，>0；apps 恒 1.0）。
-	Weight float64
 	// Usage 是使用习惯加分，取值来自 frequency.UsageBonus（已封顶 0.12）。
 	Usage float64
 }
 
 // Final 返回该候选的排序分（越大越靠前）。
 func (s Signal) Final() float64 {
-	return s.Weight * (s.Score + TierBonus(s.Quality) + s.Usage)
+	return s.Score + TierBonus(s.Quality) + s.Usage
 }
 
 // Final 是 [Signal.Final] 的函数形式，给「不方便就地构造结构体」的调用方用
-// （providers.Registry.Rank、config 的别名排序）。
-func Final(quality match.MatchQuality, score, weight, usage float64) float64 {
-	return Signal{Quality: quality, Score: score, Weight: weight, Usage: usage}.Final()
+// （providers.Registry.Rank、search.FilterApps）。
+func Final(quality match.MatchQuality, score, usage float64) float64 {
+	return Signal{Quality: quality, Score: score, Usage: usage}.Final()
 }
 
 // Less 报告 a 是否应排在 b 之前：Final 降序。

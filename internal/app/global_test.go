@@ -79,7 +79,7 @@ func TestBuildGlobalRows(t *testing.T) {
 	appsEntries := []appsmodel.AppEntry{{Name: "Chrome", Path: "p1"}, {Name: "Edge", Path: "p2"}}
 	agg := globalAggFor(st, "1+1") // 至少含 calculator 组
 
-	rows, provRows := buildGlobalRows(appsEntries, agg)
+	rows, provRows := buildGlobalRows(appsEntries, st.appsWeight(), agg)
 	if len(rows) < 3 {
 		t.Fatalf("至少 2 apps + 1 provider 行：%d", len(rows))
 	}
@@ -102,6 +102,36 @@ func TestBuildGlobalRows(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildGlobalRowsOrderByWeight：apps 组与其它组同权比较——权重更高的插件组排在
+// apps 前面（默认 apps 1.2 仍第一，同权重 apps 优先），权重低的组排在 apps 之后。
+func TestBuildGlobalRowsOrderByWeight(t *testing.T) {
+	st := newGlobalState(t)
+	apps := []appsmodel.AppEntry{{Name: "Chrome", Path: "p1"}}
+
+	mk := func(id string, weight float64) providers.Group {
+		return providers.Group{ProviderID: id, Weight: weight, Matches: []providers.RankedMatch{
+			{Match: providers.Match{ProviderID: id, Title: id + "-row"}},
+		}}
+	}
+	// Aggregate 已按权重降序给出组：vscode(3.0) > calculator(1.0)。
+	agg := providers.Aggregated{Groups: []providers.Group{mk("vscode", 3.0), mk("calculator", 1.0)}}
+
+	rows, _ := buildGlobalRows(apps, st.appsWeight(), agg)
+	if len(rows) != 3 {
+		t.Fatalf("应 1 apps + 2 provider 行：%+v", rows)
+	}
+	if rows[0].apps || rows[0].groupID != "vscode" || !rows[0].newGroup {
+		t.Errorf("行0 应是 vscode 组首（权重 3.0 > apps 1.2）：%+v", rows[0])
+	}
+	if !rows[1].apps || rows[1].appIdx != 0 || !rows[1].newGroup {
+		t.Errorf("行1 应是 apps 组首：%+v", rows[1])
+	}
+	if rows[2].apps || rows[2].groupID != "calculator" || !rows[2].newGroup {
+		t.Errorf("行2 应是 calculator 组首（权重 1.0 < apps 1.2）：%+v", rows[2])
+	}
+}
+
 func groupIDs(gs []providers.Group) []string {
 	out := make([]string, len(gs))
 	for i, g := range gs {
@@ -132,7 +162,7 @@ func TestGlobalView(t *testing.T) {
 			ProviderID: "awake", Title: "仅系统唤醒", Subtitle: "进入后选时长档位",
 		}}}},
 	}}
-	rows, provRows := buildGlobalRows(apps, agg)
+	rows, provRows := buildGlobalRows(apps, st.appsWeight(), agg)
 	st.globalRows, st.globalProvRows = rows, provRows
 
 	view := st.globalView()
