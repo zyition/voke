@@ -37,3 +37,11 @@ func TestWTExePath(t *testing.T) {
 		t.Errorf("wt.exe path = %q，want %q", got, want)
 	}
 }
+
+func TestWTUnpackagedSettingsPath(t *testing.T) {
+	base := "C:/Users/y/AppData/Local"
+	want := filepath.Join(base, "Microsoft", "Windows Terminal", "settings.json")
+	if got := WTUnpackagedSettingsPath(base); got != want {
+		t.Errorf("未打包 wt settings path = %q，want %q", got, want)
+	}
+}

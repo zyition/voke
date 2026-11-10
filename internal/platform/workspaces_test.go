@@ -158,3 +158,81 @@ func TestEditorCommandsNotFound(t *testing.T) {
 		t.Errorf("未装 VS Code 应 nil：%+v", c)
 	}
 }
+
+func TestFirstExistingInRootsPrefersCandidateOrder(t *testing.T) {
+	lad, pf := t.TempDir(), t.TempDir()
+	t.Setenv("LOCALAPPDATA", lad)
+	t.Setenv("ProgramFiles", pf)
+	t.Setenv("ProgramFiles(x86)", t.TempDir())
+
+	stable := filepath.Join(pf, "Programs", "Microsoft VS Code", "bin", "code.cmd")
+	insiders := filepath.Join(lad, "Programs", "Microsoft VS Code Insiders", "bin", "code-insiders.cmd")
+	for _, p := range []string{stable, insiders} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := firstExistingInRoots(installRoots(), vscodeCliCandidates); got != stable {
+		t.Errorf("候选序应先命中 stable（用户/系统安装都可），实得 %q", got)
+	}
+}
+
+func TestEditorCommandFindsSystemInstall(t *testing.T) {
+	lad, pf := t.TempDir(), t.TempDir()
+	t.Setenv("LOCALAPPDATA", lad)
+	t.Setenv("ProgramFiles", pf)
+	t.Setenv("ProgramFiles(x86)", t.TempDir())
+
+	zed := filepath.Join(pf, "Zed", "Zed.exe")
+	cli := filepath.Join(pf, "Microsoft VS Code", "bin", "code.cmd")
+	for _, p := range []string{zed, cli} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c := ZedCommand(); c == nil || c.Exe != zed {
+		t.Errorf("系统安装的 Zed 应命中 %q：%+v", zed, c)
+	}
+	if c := VSCodeCommand(); c == nil || len(c.PreArgs) != 2 || c.PreArgs[1] != cli {
+		t.Errorf("系统安装的 VS Code 应包 cmd /c %q：%+v", cli, c)
+	}
+}
+
+func TestVSCodeCommandFallsBackToCodeExe(t *testing.T) {
+	lad, pf := t.TempDir(), t.TempDir()
+	t.Setenv("LOCALAPPDATA", lad)
+	t.Setenv("ProgramFiles", pf)
+	t.Setenv("ProgramFiles(x86)", t.TempDir())
+
+	exe := filepath.Join(pf, "Microsoft VS Code", "Code.exe")
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := VSCodeCommand()
+	if c == nil || c.Exe != exe || len(c.PreArgs) != 0 {
+		t.Errorf("无 CLI 时应退回 Code.exe（直接带 --folder-uri）：%+v", c)
+	}
+}
+
+func TestFindExecutableInDirs(t *testing.T) {
+	dir := t.TempDir()
+	want := filepath.Join(dir, "code.cmd")
+	if err := os.WriteFile(want, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := findExecutableInDirs([]string{"", "  ", dir}, "code.cmd"); got != want {
+		t.Errorf("应在目录列表里找到 %q，实得 %q", want, got)
+	}
+	if got := findExecutableInDirs([]string{dir}, "missing.exe"); got != "" {
+		t.Errorf("不存在的名字应返回空串，实得 %q", got)
+	}
+}

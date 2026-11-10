@@ -1,5 +1,6 @@
 // terminal.go：Windows Terminal 设置文件**定位**（terminal provider 数据源的 sys 半边，
 // 对照 voke-sys/src/terminal.rs）。路径拼接是**纯函数**（任何平台编译、Linux 原生可单测）；
+// 包版（Packages\…\LocalState）与未打包版（Microsoft\Windows Terminal）都在这里拼。
 // 真正读文件的 ReadTerminalSettings 挂 windows（依赖 %LOCALAPPDATA% 语义与真实文件系统布局），
 // 非 Windows 是占位（返回 nil → provider 恒空，与接线前逐字一致）。
 //
@@ -33,6 +34,13 @@ func WTSettingsPath(localAppData, pkg string) string {
 // 用完整路径而非裸 `wt.exe`：启动行为与用户改过的 PATH 无关。
 func WTExePath(localAppData string) string {
 	return filepath.Join(localAppData, "Microsoft", "WindowsApps", "wt.exe")
+}
+
+// WTUnpackagedSettingsPath：未打包版（Scoop / Chocolatey / ZIP）的 settings.json。
+// 官方文档：`%LOCALAPPDATA%\Microsoft\Windows Terminal\settings.json`。
+// 这类安装没有包 AUMID，App Activation 必失败，执行层会回退到 wt.exe 直启。
+func WTUnpackagedSettingsPath(localAppData string) string {
+	return filepath.Join(localAppData, "Microsoft", "Windows Terminal", "settings.json")
 }
 
 // TerminalSource 是一份 settings.json 原文 + 所属 WT 包的 AUMID（上层转成

@@ -269,56 +269,79 @@ type EditorCmd struct {
 	PreArgs []string
 }
 
-// Zed 的 GUI/CLI exe 候选（相对 %LOCALAPPDATA%）：bin\Zed.exe 是 CLI（控制台子系统，调用方
-// 配 CREATE_NO_WINDOW），根目录 Zed.exe 是 GUI 主程序。Programs\Zed 下实测存在两者。
+// Zed 的 GUI/CLI exe 候选（相对安装根目录）：bin\Zed.exe 是 CLI（控制台子系统，
+// 调用方配 CREATE_NO_WINDOW），根目录 Zed.exe 是 GUI 主程序。Programs\Zed 是用户
+// 安装；根目录 Zed 是系统安装（Program Files）与自定义目录的常见布局。
 var zedExeCandidates = [][]string{
 	{"Programs", "Zed", "bin", "Zed.exe"},
 	{"Programs", "Zed", "Zed.exe"},
+	{"Zed", "bin", "Zed.exe"},
+	{"Zed", "Zed.exe"},
 }
 
-// VS Code CLI 候选（相对 %LOCALAPPDATA%）：是批处理 `bin\code.cmd`（非 exe）。stable / Insiders 两版。
+// VS Code CLI 候选（相对安装根目录）：是批处理 `bin\code.cmd`（非 exe）。
+// 覆盖用户安装 / 系统安装、stable / Insiders；Insiders 目录名在不同版本里有
+// 两种写法（有无 ` - `），都试一遍。
 var vscodeCliCandidates = [][]string{
 	{"Programs", "Microsoft VS Code", "bin", "code.cmd"},
-	{"Programs", "Microsoft VS Code - Insiders", "bin", "code.cmd"},
+	{"Microsoft VS Code", "bin", "code.cmd"},
+	{"Programs", "Microsoft VS Code Insiders", "bin", "code-insiders.cmd"},
+	{"Microsoft VS Code Insiders", "bin", "code-insiders.cmd"},
+	{"Programs", "Microsoft VS Code - Insiders", "bin", "code-insiders.cmd"},
+	{"Microsoft VS Code - Insiders", "bin", "code-insiders.cmd"},
 }
 
-// firstExisting：候选里第一个真实存在的文件（都不存在返回 ""）。纯路径逻辑，Linux 可测。
-func firstExisting(root string, candidates [][]string) string {
-	for _, suffix := range candidates {
-		p := root
-		for _, part := range suffix {
-			p = filepath.Join(p, part)
-		}
-		if fileExists(p) {
-			return p
-		}
-	}
-	return ""
+// VS Code GUI 主程序候选：没有 CLI（便携版 / 只保留 Code.exe）时直接用 GUI 起，
+// 参数仍是 --folder-uri / --file-uri（PowerToys Run 的 VSCodeWorkspaces 同款）。
+var vscodeExeCandidates = [][]string{
+	{"Programs", "Microsoft VS Code", "Code.exe"},
+	{"Microsoft VS Code", "Code.exe"},
+	{"Programs", "Microsoft VS Code Insiders", "Code - Insiders.exe"},
+	{"Microsoft VS Code Insiders", "Code - Insiders.exe"},
+	{"Programs", "Microsoft VS Code - Insiders", "Code - Insiders.exe"},
+	{"Microsoft VS Code - Insiders", "Code - Insiders.exe"},
 }
 
-// ZedCommand：Zed CLI 绝对路径命令；没装（LOCALAPPDATA 缺失 / 无候选文件）返回 nil。
+// ZedCommand：Zed CLI 绝对路径命令；没装返回 nil。
+// 顺序：常见安装根目录 → PATH（注册表当前值）→ App Paths。
 func ZedCommand() *EditorCmd {
-	lad := os.Getenv("LOCALAPPDATA")
-	if lad == "" {
-		return nil
+	if exe := firstExistingInRoots(installRoots(), zedExeCandidates); exe != "" {
+		return &EditorCmd{Exe: exe}
 	}
-	if exe := firstExisting(lad, zedExeCandidates); exe != "" {
+	if exe := findExecutableInDirs(pathDirs(), "Zed.exe", "zed.exe"); exe != "" {
+		return &EditorCmd{Exe: exe}
+	}
+	if exe := appPathExe("zed.exe"); exe != "" {
 		return &EditorCmd{Exe: exe}
 	}
 	return nil
 }
 
-// VSCodeCommand：VS Code CLI 命令（包 cmd.exe /c code.cmd，理由见 EditorCmd）；没装返回 nil。
-// exe 取 COMSPEC（缺省 cmd.exe）。
+// VSCodeCommand：VS Code 打开工作区的命令；没装返回 nil。
+// 有 code.cmd 时包 `cmd.exe /c`（批处理不能直接 CreateProcess），否则退回
+// Code.exe；再退 PATH / App Paths。顺序与 PowerToys 一致：PATH 上有 CLI 就用 CLI。
 func VSCodeCommand() *EditorCmd {
-	lad := os.Getenv("LOCALAPPDATA")
-	if lad == "" {
-		return nil
+	roots := installRoots()
+	if cli := firstExistingInRoots(roots, vscodeCliCandidates); cli != "" {
+		return cmdWrapper(cli)
 	}
-	cli := firstExisting(lad, vscodeCliCandidates)
-	if cli == "" {
-		return nil
+	if cli := findExecutableInDirs(pathDirs(), "code.cmd", "code-insiders.cmd"); cli != "" {
+		return cmdWrapper(cli)
 	}
+	if exe := firstExistingInRoots(roots, vscodeExeCandidates); exe != "" {
+		return &EditorCmd{Exe: exe}
+	}
+	if exe := findExecutableInDirs(pathDirs(), "Code.exe", "Code - Insiders.exe"); exe != "" {
+		return &EditorCmd{Exe: exe}
+	}
+	if exe := appPathExe("Code.exe"); exe != "" {
+		return &EditorCmd{Exe: exe}
+	}
+	return nil
+}
+
+// cmdWrapper：执行 `.cmd` 必须经 COMSPEC /c（理由见 EditorCmd）。
+func cmdWrapper(cli string) *EditorCmd {
 	comspec := os.Getenv("COMSPEC")
 	if comspec == "" {
 		comspec = "cmd.exe"
