@@ -19,6 +19,7 @@
 package platform
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -101,11 +102,31 @@ type logFile interface {
 // `go test` 里 t.TempDir 会因为文件仍被占用而删不掉。
 type rollingSink struct {
 	*logcap.RollingLogWriter
-	file io.Closer
+	file logFile
+	// trimWarned 保证「裁剪失败」的警告只落一次。
+	trimWarned bool
 }
 
 // Close 关掉底层日志文件句柄（封顶状态随之作废）。
 func (s *rollingSink) Close() error { return s.file.Close() }
+
+// Write 转发给 logcap，并在**第一次**裁剪失败时往底层文件直接补一行警告。
+//
+// 为什么不走 log：「裁剪失败」是 logcap 已经降级成纯追加之后的事，这条警告若
+// 走 log 会重新进本 writer（虽不至于死循环，但会绕一圈）；直接 fmt.Fprintf 到
+// 文件最省事。警告文案里带上错误，方便下次真机排查（TrimError 的场景正是
+// Windows 的句柄权限 / 文件被占用）。这一行绕过了 logcap 的行计数，账目会差
+// 一行——只在已经降级的异常态下发生，可以忽略。
+func (s *rollingSink) Write(p []byte) (int, error) {
+	n, err := s.RollingLogWriter.Write(p)
+	if !s.trimWarned {
+		if e := s.RollingLogWriter.TrimError(); e != nil {
+			s.trimWarned = true
+			fmt.Fprintf(s.file, "---- 日志裁剪失败，已降级为不封顶的纯追加：%v ----\n", e)
+		}
+	}
+	return n, err
+}
 
 // newLogWriter 是「把已打开的日志文件包成封顶输出」的唯一接缝（§7.1 O9）。
 //
@@ -124,7 +145,7 @@ func newLogWriter(f logFile, maxLines int) io.Writer {
 	return &rollingSink{RollingLogWriter: w, file: f}
 }
 
-// InitLog 初始化日志：数据目录 %APPDATA%\voke\（与生产共用），日志文件 voke-go.log，
+// InitLog 初始化日志：数据目录 %APPDATA%\voke\（与生产共用），日志文件 voke.log，
 // 跨启动追加不清空，总行数受 [logMaxLinesRaw]（默认 9999）上限的滚动删除控制
 // —— §7.1 O9 接生产 `voke-sys/src/logcap.rs` 的同款语义。
 // 失败只影响文件日志，不阻断启动。
@@ -136,9 +157,13 @@ func InitLog() {
 	}
 	// O_RDWR（不是 O_WRONLY）是**封顶的硬前提**：删头批要把整个文件读回来数行，
 	// 打开时也要数一遍既有行数当跨启动基线，只写句柄的 ReadAt 会 EBADF。
-	// O_APPEND 的「写永远追加到末尾」不受影响（ReadAt 不动写偏移），与生产
-	// `open_log_file_append()` 的 create + append + read 三件套逐条对应。
-	f, err := os.OpenFile(filepath.Join(dir, logFileName), os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
+	//
+	// **不要 O_APPEND**（2026-11-10 真机定因）：Go 在 Windows 上遇到 O_APPEND 会
+	// 摘掉 GENERIC_WRITE 只给 FILE_APPEND_DATA，而 Truncate 走 SetEndOfFile 需要
+	// FILE_WRITE_DATA —— 删头批恒 EACCES，而 log 包会**丢弃 Write 的错误**，
+	// 于是日志攒到上限后每一行都被静默丢掉（这次的真实事故）。改为自己维护写
+	// 偏移：[logcap.New] 负责 Seek 到末尾，删头批后自己 Seek(0) 再重写。
+	f, err := os.OpenFile(filepath.Join(dir, logFileName), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		log.Printf("打开日志文件失败（继续，仅写 stderr）：%v", err)
 		return

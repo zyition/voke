@@ -38,7 +38,7 @@
 //     （不保证 UTF-8，行级解码会出错），只能数字节里的 `\n`；打开时判断
 //     文件末尾是否残留未完成行同理。
 //
-// ## 与 Rust 的三处**受控**差异（都在退化路径上，不改正常口径）
+// ## 与 Rust 的四处**受控**差异（都在退化路径上，不改正常口径）
 //
 //  1. 空 buf / 0 字节写：Rust 的 `buf_line_delta(&[])` 在 `partial == true`
 //     时算 `0 + 0 - 1`，`usize` 直接下溢（debug 构建 panic）。Go 里同一笔算出
@@ -48,7 +48,13 @@
 //     对应 logcap.rs:120-125、183-190。
 //  2. 读回不做 UTF-8 校验：Rust 的 `BufRead::lines()` 遇非法 UTF-8 报错，
 //     Go 的字符串是字节切片，原样保留。日志写入侧恒为 UTF-8，正常不会走到。
-//  3. 删头批的写回按「没写全就接着写」补全（[printlnFull]）：Rust 的
+//  3. **裁剪失败降级为纯追加**：Go 的 log 包会丢弃 writer 的错误，把
+//     Truncate/Seek 的失败抛回去等于**静默丢掉这一行及之后所有行**（Windows
+//     的 O_APPEND 句柄正是这样把日志写死的，见 [File]）。Rust 侧 write 失败会
+//     由 logcap 向上抛、其日志宏同样只吞错，行为等价但症状更隐蔽；这里改为
+//     「记下错误、继续追加、不再裁剪」，并留 [RollingLogWriter.TrimError]
+//     给接线层报一次警告。
+//  4. 删头批的写回按「没写全就接着写」补全（[printlnFull]）：Rust 的
 //     `writeln!` 走 `write_fmt`，内部按 `write_all` 语义消化短写；Go 的
 //     `fmt.Fprintln` **不重试**，碰上短写的底层 writer 会静默丢掉行尾字节，
 //     而删头批是整文件重写——丢的就是历史日志。
@@ -76,15 +82,32 @@ const DefaultMaxLines = 9999
 // 拆开来看（对应 Rust 直接用 `File` 的 `Seek`/`read_exact`/`set_len`/`metadata`，
 // logcap.rs:81-86、130-131、141、74）：
 //
-//   - [io.Writer]：追加本行（依赖调用方的 `O_APPEND` 语义，与 Rust 同一契约）。
+//   - [io.Writer]：**从当前偏移**写本行（调用方打开后 Seek 到末尾，见 [New]）。
 //   - [io.ReaderAt]：删头批时读回全文、打开时看末尾字节。**刻意用 ReadAt
 //     而非 Seek+Read**：ReadAt 不移动写偏移，纯逻辑侧不用操心游标状态。
+//   - [io.Seeker]：删头批清空文件后把写偏移拉回 0 —— Truncate 只改 EOF、不动
+//     游标，不 Seek 回去就会在旧偏移处写出一个带空洞的稀疏文件。
 //   - Truncate：删头批前清空文件（Rust `set_len(0)`）。
 //   - Sync：[RollingLogWriter.Flush] 落盘。
 //   - Stat：取文件长度作为「是否为空文件」的判据（Rust `metadata()?.len()`）。
+//
+// ## 为什么不用 `O_APPEND`（2026-11-10 Windows 真机定因）
+//
+// 原先的契约是「调用方以 `O_APPEND` 打开，本包只管写」。在 POSIX 上成立，在
+// **Windows 上不成立**：Go 的 syscall.Open 遇到 O_APPEND 会**摘掉 GENERIC_WRITE、
+// 只给 FILE_APPEND_DATA**，而 `SetEndOfFile`（`Truncate` 的底层）要求
+// FILE_WRITE_DATA —— 于是删头批的 Truncate 恒返回 Access denied。
+// 更糟的是 Go 的 log 包会**丢弃 Write 的错误**：一旦日志攒到上限，之后每一行
+// 都被静默丢掉，文件永远停在恰好 maxLines 行（本次就是这个症状：日志从
+// 2026-11-09 11:42 起再没写过）。
+//
+// 所以契约改成「O_RDWR 打开 + 打开后 Seek 到末尾」，写偏移自己维护：写永远在
+// EOF，删头批后显式 Seek(0) 再重写。附带一条兜底：裁剪失败**不吞日志**，降级为
+// 纯追加并把错误留给接线层（见 [RollingLogWriter.TrimError]）。
 type File interface {
 	io.Writer
 	io.ReaderAt
+	io.Seeker
 	Truncate(size int64) error
 	Sync() error
 	Stat() (fs.FileInfo, error)
@@ -107,14 +130,21 @@ type RollingLogWriter struct {
 	partial bool
 	// rolls 是累计滚动删除（删头批）次数，排查「日志怎么只剩这些」时看这个。
 	rolls uint64
+	// trimErr 是**第一次**裁剪失败的错误；非 nil 后本 writer 降级为纯追加
+	// （不再尝试裁剪），由接线层报一次警告。绝不因为裁剪失败丢日志。
+	trimErr error
 }
 
-// New 包装一个已打开的（追加模式）日志文件，并数出既有行数
-// （logcap.rs:66-95）。
+// New 包装一个已打开（**O_RDWR，不要 O_APPEND**，见 [File]）的日志文件，
+// 把写偏移 Seek 到末尾，并数出既有行数（logcap.rs:66-95）。
 //
-// 既有内容只读不改（跨启动追加的基线）。
+// 既有内容只读不改（跨启动追加的基线）。Seek 放在这里而不是交给调用方，
+// 是因为「写到末尾」是本包的硬前提，散在接线层容易漏。
 func New(file File, maxLines int) (*RollingLogWriter, error) {
 	w := &RollingLogWriter{file: file, maxLines: maxLines}
+	if _, err := file.Seek(0, io.SeekEnd); err != nil {
+		return nil, err
+	}
 	fi, err := file.Stat()
 	if err != nil {
 		return nil, err
@@ -142,6 +172,11 @@ func (w *RollingLogWriter) Lines() int { return w.lines }
 
 // RollCount 返回累计滚动删除次数（排查用，logcap.rs:102-105）。
 func (w *RollingLogWriter) RollCount() uint64 { return w.rolls }
+
+// TrimError 返回第一次裁剪失败的错误（nil = 裁剪一直正常）。非 nil 表示
+// writer 已降级为**不封顶的纯追加**：日志照写，但总量不再受 maxLines 约束，
+// 接线层应据此落一条警告（见 platform.newLogWriter 的 rollingSink）。
+func (w *RollingLogWriter) TrimError() error { return w.trimErr }
 
 // batchSize 是一批删多少行：总上限的 10%，至少 1 行（9999 → 100，10 → 1）。
 // 与 Rust `batch_size()` 严格同式：`std::cmp::max(1, max_lines / 10)`
@@ -225,6 +260,11 @@ func (w *RollingLogWriter) pruneHead(drop int) error {
 	if err := w.file.Truncate(0); err != nil {
 		return err
 	}
+	// Truncate 只把 EOF 置 0，不移动写游标：不 Seek 回去就会在旧偏移处写出
+	// 一个前面带空洞的稀疏文件（Windows 上尤其明显）。
+	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
 	for _, line := range out {
 		if err := printlnFull(w.file, line); err != nil {
 			return err
@@ -281,13 +321,16 @@ func (w *RollingLogWriter) Write(buf []byte) (int, error) {
 		return 0, nil
 	}
 	delta, _ := w.bufLineDelta(buf)
-	if delta > 0 && w.lines+delta > w.maxLines {
+	if delta > 0 && w.lines+delta > w.maxLines && w.trimErr == nil {
 		// 一批 = max(1, N/10)；若一批不足以把「剩余 + 本次写入」压回上限内
 		// （只可能发生在 N < 20 的小上限），按需多删，保证有界、不会每写
 		// 一行就删一批导致文件无限涨（logcap.rs:176-181）。
 		drop := max(w.batchSize(), w.lines+delta-w.maxLines)
 		if err := w.pruneHead(drop); err != nil {
-			return 0, err
+			// **绝不把裁剪失败变成丢日志**：Go 的 log 包会丢弃 Write 的错误，
+			// 返回 err 等于这一行和之后所有行一起消失（Windows 的 O_APPEND
+			// 句柄就是这么把日志写死的）。降级为纯追加，错误留给 TrimError。
+			w.trimErr = err
 		}
 	}
 	n, err := w.file.Write(buf)

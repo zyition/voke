@@ -86,7 +86,7 @@ func TestPruneLinesOnEmptyFileLeavesOnlyMarker(t *testing.T) {
 // TestNewOnEmptyFileCountsZero：空日志基线为 0 行、无残留部分行。
 func TestNewOnEmptyFileCountsZero(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "empty.log")
-	w, err := New(openAppend(t, path), 10)
+	w, err := New(openLog(t, path), 10)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -109,7 +109,7 @@ func TestNewCountsUnterminatedLastLineAsOne(t *testing.T) {
 	if err := os.WriteFile(path, []byte("half-0\nhalf-1-tail"), 0o644); err != nil {
 		t.Fatalf("预置日志失败：%v", err)
 	}
-	w, err := New(openAppend(t, path), 10)
+	w, err := New(openLog(t, path), 10)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -131,7 +131,7 @@ func TestExactlyAtLimitDoesNotPrune(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "exact.log")
 	lines := rollScenario(t, path, 5, 5)
 	equalLines(t, lines, []string{"line-0", "line-1", "line-2", "line-3", "line-4"})
-	w, err := New(openAppend(t, path), 5)
+	w, err := New(openLog(t, path), 5)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -144,7 +144,7 @@ func TestExactlyAtLimitDoesNotPrune(t *testing.T) {
 // （多出的正是**计入行数**的那行标记；批大小 1，因为 N=5 < 10）。
 func TestJustOverLimitPrunesOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "justover.log")
-	w, err := New(openAppend(t, path), 5)
+	w, err := New(openLog(t, path), 5)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -176,7 +176,7 @@ func TestJustOverLimitPrunesOnce(t *testing.T) {
 // （logcap.rs:345-365 场景⑥ 也在描述这件事）。
 func TestSmallLimitSecondRollDropsMore(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tworoll.log")
-	w, err := New(openAppend(t, path), 10)
+	w, err := New(openLog(t, path), 10)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -206,7 +206,7 @@ func TestSmallLimitSecondRollDropsMore(t *testing.T) {
 // 追加；下一笔再按 need 多删，总量有界（logcap.rs:135-136、176-181）。
 func TestSingleWriteBiggerThanLimitStaysBounded(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bigwrite.log")
-	w, err := New(openAppend(t, path), 3)
+	w, err := New(openLog(t, path), 3)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -239,7 +239,7 @@ func TestSingleWriteBiggerThanLimitStaysBounded(t *testing.T) {
 // 保证批大小至少 1）。
 func TestZeroLimitStaysBounded(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "zero.log")
-	w, err := New(openAppend(t, path), 0)
+	w, err := New(openLog(t, path), 0)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -261,7 +261,7 @@ func TestZeroLimitStaysBounded(t *testing.T) {
 // 任何一处行数算错都会红。
 func TestLinesMatchesFileEveryStep(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "steady-step.log")
-	w, err := New(openAppend(t, path), 7)
+	w, err := New(openLog(t, path), 7)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -284,7 +284,7 @@ func TestLinesMatchesFileEveryStep(t *testing.T) {
 // 去掉守卫就会把标记行插进行中间并多出一个标记。
 func TestSplitWriteDoesNotReprune(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "split.log")
-	w, err := New(openAppend(t, path), 3)
+	w, err := New(openLog(t, path), 3)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -321,7 +321,7 @@ func TestSplitWriteDoesNotReprune(t *testing.T) {
 // 早返回是显式契约 + 防「以后有人动那两道判据」，不是行为必需。
 func TestEmptyWriteIsNoOp(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "emptywrite.log")
-	w, err := New(openAppend(t, path), 3)
+	w, err := New(openLog(t, path), 3)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -385,7 +385,7 @@ func writeFull(t *testing.T, w *RollingLogWriter, s string) {
 // 收尾仍是 2 行、无残留部分行。
 func TestShortWriteCountsOnlyWrittenBytes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "short.log")
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		t.Fatalf("打开失败：%v", err)
 	}
@@ -409,7 +409,7 @@ func TestShortWriteCountsOnlyWrittenBytes(t *testing.T) {
 // 完全一致。
 func TestShortWritePruneAtLimit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "shortprune.log")
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		t.Fatalf("打开失败：%v", err)
 	}
@@ -440,7 +440,7 @@ func TestShortWritePruneAtLimit(t *testing.T) {
 // （口径对齐 `BufRead::lines()`，logcap.rs:30）。
 func TestCRLFLineEndsCountAsOneLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "crlf.log")
-	w, err := New(openAppend(t, path), 10)
+	w, err := New(openLog(t, path), 10)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -458,7 +458,7 @@ func TestCRLFLineEndsCountAsOneLine(t *testing.T) {
 // 行数少算 1，计数与文件从此错开。
 func TestPruneClearsPartialFlag(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "prune-partial.log")
-	w, err := New(openAppend(t, path), 1)
+	w, err := New(openLog(t, path), 1)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -489,7 +489,7 @@ func TestPruneClearsPartialFlag(t *testing.T) {
 // `\r`；本笔追加的内容原样落盘（不去 `\r`）。整段原文逐字钉死。
 func TestPruneRewritesCRLFAsLF(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "crlfprune.log")
-	w, err := New(openAppend(t, path), 3)
+	w, err := New(openLog(t, path), 3)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -526,7 +526,7 @@ func TestPruneRewritesCRLFAsLF(t *testing.T) {
 // logcap.rs:131-133），这是「日志怎么只剩这些」时最该看到的形状。
 func TestSteadyStateMarkerCadence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "markers.log")
-	w, err := New(openAppend(t, path), 40)
+	w, err := New(openLog(t, path), 40)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}

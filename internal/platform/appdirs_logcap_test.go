@@ -70,11 +70,12 @@ func diskLines(t *testing.T, path string) []string {
 	return out
 }
 
-// openAppend 按**生产 InitLog 的打开方式**建句柄：O_CREATE + O_APPEND +
-// O_RDWR（删头批要读回全文，纯 O_WRONLY 会 EBADF）。
-func openAppend(t *testing.T, path string) *os.File {
+// openLog 按**生产 InitLog 的打开方式**建句柄：O_CREATE + O_RDWR
+// （删头批要读回全文，纯 O_WRONLY 会 EBADF；**不能带 O_APPEND**——Windows 上
+// 它会让 Truncate 恒 EACCES，见 internal/logic/logcap 的 File 文档）。
+func openLog(t *testing.T, path string) *os.File {
 	t.Helper()
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		t.Fatalf("打开日志文件失败 %s：%v", path, err)
 	}
@@ -130,7 +131,7 @@ func TestResolveLogMaxLines(t *testing.T) {
 // 就会是 21 行且没有标记行。
 func TestNewLogWriterCapsAtMaxLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), logFileName)
-	f := openAppend(t, path)
+	f := openLog(t, path)
 
 	w := newLogWriter(f, 20)
 	sink, ok := w.(*rollingSink)
@@ -166,14 +167,14 @@ func TestNewLogWriterCapsAtMaxLines(t *testing.T) {
 func TestNewLogWriterAppendsAcrossReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), logFileName)
 
-	first := newLogWriter(openAppend(t, path), 20)
+	first := newLogWriter(openLog(t, path), 20)
 	for i := 0; i < 3; i++ {
 		if _, err := fmt.Fprintln(first, fmt.Sprintf("old-%d", i)); err != nil {
 			t.Fatalf("第一轮写日志失败：%v", err)
 		}
 	}
 
-	second, ok := newLogWriter(openAppend(t, path), 20).(*rollingSink)
+	second, ok := newLogWriter(openLog(t, path), 20).(*rollingSink)
 	if !ok {
 		t.Fatalf("第二轮 newLogWriter 没接到封顶 sink")
 	}
@@ -317,6 +318,11 @@ type brokenFile struct {
 func (b *brokenFile) Write(p []byte) (int, error) { return b.written.Write(p) }
 func (b *brokenFile) ReadAt([]byte, int64) (int, error) {
 	return 0, errors.New("read 系统调用失败：bad file descriptor")
+}
+func (b *brokenFile) Seek(int64, int) (int64, error) {
+	// 这个假件只用于「New 数行失败」的降级分支：Seek 在 New 的 Stat/ReadAt
+	// 之后才用不到，给个成功返回即可（顺序见 logcap.New：先 Seek 到末尾）。
+	return 0, nil
 }
 func (b *brokenFile) Truncate(int64) error { return nil }
 func (b *brokenFile) Sync() error          { return nil }

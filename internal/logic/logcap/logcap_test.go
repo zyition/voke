@@ -5,6 +5,7 @@
 package logcap
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,12 +14,16 @@ import (
 	"testing"
 )
 
-// openAppend 模拟接线层的打开方式：创建 + **追加** + 可读写
-// （删头批要读回全文，纯 append 是 O_WRONLY 读会 EBADF），对应 Rust 的
-// `open_append`（logcap.rs:208-217）。
-func openAppend(t *testing.T, path string) *os.File {
+// openLog 模拟接线层的打开方式：创建 + 可读写（**不要 O_APPEND**）。
+//
+// 为什么测试也照生产这么开（2026-11-10）：Go 在 Windows 上遇到 O_APPEND 会摘掉
+// GENERIC_WRITE 只给 FILE_APPEND_DATA，而 Truncate（SetEndOfFile）要求
+// FILE_WRITE_DATA —— 用 O_APPEND 开的句柄删头批恒 EACCES。Linux 上两者等价，
+// 所以旧测试一直是绿的，真机日志却从攒满上限那一刻起静默停写。测试的打开方式
+// 必须与生产一致，否则这类平台差异永远测不出来。
+func openLog(t *testing.T, path string) *os.File {
 	t.Helper()
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		t.Fatalf("打开日志文件失败 %s：%v", path, err)
 	}
@@ -72,7 +77,7 @@ func writeLog(t *testing.T, w *RollingLogWriter, s string) {
 // 对应 Rust 的 `roll_scenario`（logcap.rs:232-242）。
 func rollScenario(t *testing.T, path string, max, total int) []string {
 	t.Helper()
-	w, err := New(openAppend(t, path), max)
+	w, err := New(openLog(t, path), max)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -89,7 +94,7 @@ func rollScenario(t *testing.T, path string, max, total int) []string {
 // 文件，旧内容仍在，且 New() 数到的基线包含旧行（上限跨重启生效）。
 func TestAppendAcrossRestartsKeepsHistory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "append.log")
-	w1, err := New(openAppend(t, path), 100)
+	w1, err := New(openLog(t, path), 100)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -101,7 +106,7 @@ func TestAppendAcrossRestartsKeepsHistory(t *testing.T) {
 	}
 
 	// 第二次「启动」：旧内容仍在，计数含旧 3 行。
-	w2, err := New(openAppend(t, path), 100)
+	w2, err := New(openLog(t, path), 100)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -109,7 +114,7 @@ func TestAppendAcrossRestartsKeepsHistory(t *testing.T) {
 		t.Errorf("重启后应数到旧 3 行，得 %d", got)
 	}
 
-	w3, err := New(openAppend(t, path), 100)
+	w3, err := New(openLog(t, path), 100)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -126,7 +131,7 @@ func TestAppendAcrossRestartsKeepsHistory(t *testing.T) {
 // 场景②（logcap.rs:273-288）：未超限纯追加、顺序原样、无标记。
 func TestUnderLimitAppendsVerbatim(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "verbatim.log")
-	w, err := New(openAppend(t, path), 10)
+	w, err := New(openLog(t, path), 10)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -201,7 +206,7 @@ func TestBatchSizeIsMaxOneTenth(t *testing.T) {
 // （标记行 + 最新一行）。
 func TestLimitOneDoesNotPanic(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "limit1.log")
-	w, err := New(openAppend(t, path), 1)
+	w, err := New(openLog(t, path), 1)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -227,7 +232,7 @@ func TestLimitOneDoesNotPanic(t *testing.T) {
 // 场景⑥（logcap.rs:345-365）：删批后连续写不会每写一行就删一批。
 func TestNoPruneOnEveryWriteAfterBatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "steady.log")
-	w, err := New(openAppend(t, path), 100)
+	w, err := New(openLog(t, path), 100)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -260,7 +265,7 @@ func TestNoPruneOnEveryWriteAfterBatch(t *testing.T) {
 // 场景⑦（logcap.rs:367-388）：无换行写入也计数，且与行级读回口径一致。
 func TestWritesWithoutNewlineAreCounted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "partial.log")
-	w, err := New(openAppend(t, path), 3)
+	w, err := New(openLog(t, path), 3)
 	if err != nil {
 		t.Fatalf("New 失败：%v", err)
 	}
@@ -300,6 +305,37 @@ func TestWritesWithoutNewlineAreCounted(t *testing.T) {
 	if got := w.Lines(); got != len(lines) {
 		t.Errorf("计数与文件行数应同口径：Lines = %d，文件 %d", got, len(lines))
 	}
+}
+
+// truncateFailFile 让 Truncate 恒失败，复现 Windows 上 O_APPEND 句柄的 EACCES
+// （或杀软/其他进程占用文件），那是真机日志从上限那一刻起静默停写的根因。
+type truncateFailFile struct{ *os.File }
+
+func (f truncateFailFile) Truncate(int64) error { return errors.New("access denied") }
+
+// TestTrimFailureKeepsAppending：**裁剪失败绝不能吞日志**。
+//
+// Go 的 log 包会丢弃 writer 返回的错误，所以 Write 一旦把裁剪错误抛回去，
+// 这一行连同之后所有行都会消失——2026-11-10 的真实事故就是这么让日志恰好停在
+// 9999 行的。降级契约：本行照写、返回 n == len(buf) 且 err == nil，错误只记在
+// TrimError 上，之后本 writer 不再尝试裁剪（纯追加）。
+func TestTrimFailureKeepsAppending(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "broken.log")
+	w, err := New(truncateFailFile{openLog(t, path)}, 2)
+	if err != nil {
+		t.Fatalf("New 失败：%v", err)
+	}
+	writeLog(t, w, "a")
+	writeLog(t, w, "b") // 恰好上限，不触发裁剪
+	writeLog(t, w, "c") // 触发裁剪 → Truncate 失败
+	if err := w.TrimError(); err == nil {
+		t.Fatal("裁剪失败应记入 TrimError，实际为 nil")
+	}
+	if got := w.RollCount(); got != 0 {
+		t.Errorf("裁剪没成功，rolls 应为 0，得 %d", got)
+	}
+	// 关键断言：c 必须落在文件里，一行都不能丢。
+	equalLines(t, fileLines(t, path), []string{"a", "b", "c"})
 }
 
 // 场景⑧（logcap.rs:390-394）：兜底值三处一致（本包 / build.rs / main.rs，
