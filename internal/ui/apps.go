@@ -253,21 +253,60 @@ func Icon(icons *IconCache, app appsmodel.AppEntry) *goui.Bitmap {
 // iconForPath 是 apps 行与「带图标的 provider 行」（如窗口切换器按进程路径取图标）共用的
 // 懒取 + 缓存核心（O4：FileIcon 走 onMainValue、只许主线程、行首次可见才取，禁批量预取）。
 // 命中缓存即返（含负缓存 nil）；AppIcon 零长 / 解码失败 → 缓存并返回 nil，调用方据此降级。
+//
+// 装配层接上 IconCache.OnMiss 后，这里是**纯查缓存**：未命中只登记需求、本帧返回 nil，
+// 取图交给 app 层的补齐泵（internal/app/iconpump.go）——FileIcon 单次 10~70ms 且只能
+// 主线程，塞在渲染帧里就是用户感知到的「删字符顿一下」。未接泵（测试 / 旧装配）时
+// 仍是原来的同步取图。
 func iconForPath(icons *IconCache, path, label string) *goui.Bitmap {
 	if b, ok := icons.Get(path); ok {
 		return b
 	}
-	var b *goui.Bitmap
-	if data := platform.AppIcon(path); len(data) > 0 {
-		decoded, err := goui.DecodeBitmap(data)
-		if err != nil {
-			log.Printf("解码 %s 的图标失败：%v", label, err)
-		} else {
-			b = decoded
+	if icons != nil && icons.OnMiss != nil {
+		// 磁盘缓存命中：读盘 + 解码约 0.3ms（48px PNG 1~6KB），可以直接进渲染帧；
+		// 它覆盖「重启后第一次显示」这种最常见的情况，不需要等补齐泵。
+		if b, ok := LoadIconCached(path, label); ok {
+			icons.Put(path, b)
+			return b
 		}
+		icons.OnMiss(path)
+		return nil
 	}
+	b := LoadIcon(path, label)
 	icons.Put(path, b)
 	return b
+}
+
+// LoadIconCached 先查磁盘缓存再解码。ok=false 表示磁盘也没有（需要走 Shell）。
+// ok=true 且位图为 nil = 负缓存（这条来源已知没有图标）。
+func LoadIconCached(path, label string) (*goui.Bitmap, bool) {
+	png, ok := platform.LoadIconPNG(path)
+	if !ok {
+		return nil, false
+	}
+	return DecodeIcon(png, label), true
+}
+
+// LoadIcon 同步取一条路径的图标（Shell.FileIcon + 解码），**不碰缓存**：
+// 缓存与节流由调用方负责（见 IconCache.OnMiss 与 app 层补齐泵）。
+// 只许主线程——背后是 mygo 的 onMainValue。
+func LoadIcon(path, label string) *goui.Bitmap {
+	return DecodeIcon(platform.AppIcon(path), label)
+}
+
+// DecodeIcon 把图标 PNG 字节解码成位图；零长或解码失败只记日志并返回 nil
+// （行渲染降级为首字母 / 插件角标占位）。解码是纯 CPU（scene.NewImage 只取一个
+// 原子 id），不碰主线程状态，耗时亚毫秒（实测 144 次无一超 1ms）。
+func DecodeIcon(data []byte, label string) *goui.Bitmap {
+	if len(data) == 0 {
+		return nil
+	}
+	decoded, err := goui.DecodeBitmap(data)
+	if err != nil {
+		log.Printf("解码 %s 的图标失败：%v", label, err)
+		return nil
+	}
+	return decoded
 }
 
 // EmptyHint 是 apps 结果为空时的占位文案（四态），逐字委托

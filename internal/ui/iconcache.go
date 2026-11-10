@@ -32,6 +32,15 @@ type IconCache struct {
 	max   int
 	clock uint64
 	items map[string]*iconCacheEntry
+	// OnMiss 在某条路径**未命中**时被调用（在渲染帧内，主线程）。
+	//
+	// 非 nil 表示装配层接管了取图：iconForPath 本帧返回 nil（行内用既有占位），
+	// 由 app 层的「图标补齐泵」在空闲帧里取好再写进本缓存——因为
+	// Shell.FileIcon 单次 10~70ms（实测）且只能主线程，一帧里补 8 个新行就是
+	// 100ms+ 的顿帧，正是「删字符卡一下」的来源。见 internal/app/iconpump.go。
+	//
+	// nil 时退回同步取图（测试与未接泵的装配，行为与改造前逐字一致）。
+	OnMiss func(path string)
 }
 
 // NewIconCache 构造生产用默认容量的缓存。

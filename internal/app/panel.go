@@ -148,6 +148,14 @@ type appState struct {
 	// 世代号：showPanel 或新的 hidePanel 都会让旧定时器失效（Wox 同款延迟裁剪）。
 	iconTrimTimer *time.Timer
 	iconTrimGen   int
+	// iconQueue / iconQueued / iconPumpTimer / iconPumpGen 是图标补齐泵的状态
+	// （见 iconpump.go）：待补来源队列、去重集合、一次性定时器、世代号。
+	// 渲染帧只查缓存，miss 登记到这里，停手后一拍一张地补——FileIcon 单次
+	// 10~70ms 且只能主线程，塞在渲染帧里就是「删字符顿一下」。
+	iconQueue     []string
+	iconQueued    map[string]struct{}
+	iconPumpTimer *time.Timer
+	iconPumpGen   int
 	// trayLastClick 是托盘左键上一次点击的时刻：mygo 原生只上报单击（wmLButtonUp），
 	// 双击表现为两次 Clicked；据此在系统双击时间窗内识别双击并唤出面板。只主线程读写。
 	trayLastClick time.Time
@@ -235,6 +243,9 @@ func (st *appState) ready() {
 	// 防止长会话里不同 exe 路径把堆无限推高；隐藏 10s 后另裁到 64 条。
 	// 只主线程读写，见 internal/ui/iconcache.go。
 	st.icons = appui.NewIconCache()
+	// 取图改由补齐泵接管：渲染帧里 miss 只登记需求、返回 nil（行内占位），
+	// 停手后再一拍一张地取（见 iconpump.go）。
+	st.icons.OnMiss = st.requestIcon
 	// 指针采样入口：列表的「hover 即选中」只在指针真的动过时才跟随
 	// （见 pointer.go 与 internal/ui/hoverselect.go）。必须在建窗之前接上，
 	// 首帧起就有信号。
@@ -638,6 +649,9 @@ func (st *appState) hidePanel() {
 	if wasVisible {
 		st.armIconTrimTimer()
 	}
+	// 隐藏期间预热图标：把应用列表与窗口快照里的来源排进补齐队列，
+	// 一拍一张、只写字节/磁盘缓存（不重建视图），下次唤起直接命中。
+	st.prewarmIcons()
 }
 
 // windowRefreshInterval 是面板可见期间的窗口快照刷新间隔。
