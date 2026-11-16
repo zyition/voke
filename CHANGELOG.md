@@ -4,6 +4,11 @@
 > (grouping rules in `cliff.toml`, release process in `AGENTS.md`). Do not edit manually.
 > Entries up to v0.6.0 are kept in Chinese; later entries are English, optionally bilingual.
 
+## [0.9.0] - 2026-11-16
+
+### Features
+
+- Guarantee every pattern segment in random strings
 ## [0.8.0] - 2026-11-10
 
 ### Features
