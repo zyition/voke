@@ -54,6 +54,12 @@ func Compile(pattern string) ([]rune, error) {
 	if err != nil {
 		return nil, err
 	}
+	return compileExpression(expr, pattern)
+}
+
+// compileExpression 编译已经带方括号的字符类表达式；literals 是用于补充非 ASCII
+// 字面字符的原始文本（Compile 传完整 pattern，分组编译传段内容）。
+func compileExpression(expr, literals string) ([]rune, error) {
 	re, err := regexp.Compile(expr)
 	if err != nil {
 		return nil, fmt.Errorf(i18n.L("正则无效：%v", "invalid regular expression: %v"), err)
@@ -74,8 +80,8 @@ func Compile(pattern string) ([]rune, error) {
 			add(r)
 		}
 	}
-	// 非 ASCII 没有可枚举的通用字符表，只认正则里直接写出来的字面字符（如 `￥`）。
-	for _, r := range pattern {
+	// 非 ASCII 没有可枚举的通用字符表，只认正则里直接写出来的字面字符。
+	for _, r := range literals {
 		if r > 0x7e && unicode.IsPrint(r) && re.MatchString(string(r)) {
 			add(r)
 		}
@@ -85,6 +91,13 @@ func Compile(pattern string) ([]rune, error) {
 			"empty character set: the pattern matches no printable characters"))
 	}
 	return out, nil
+}
+
+// compileContent 把字符类内容（不含外层方括号）编译成字符列表。与 Compile 的
+// 「已带方括号就原样使用」不同，这里始终包一层，避免 [:alpha:] 之类的内容被
+// 当成普通字符类。仅由本包的分组逻辑调用。
+func compileContent(content string) ([]rune, error) {
+	return compileExpression("["+content+"]", content)
 }
 
 // expression 把用户写的字符类内容规范成可直接编译的正则。

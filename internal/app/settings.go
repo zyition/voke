@@ -830,8 +830,8 @@ func (st *appState) settingsCharsets(c *ui.Context, p *providerEdit) {
 	t := c.Theme()
 	ui.Column(c).Gap(8).Children(func() {
 		ui.Text(c, i18n.L("字符集", "Character sets")).FontSize(theme.TitleSize).Bold().TextColor(t.Text)
-		ui.Text(c, i18n.L("左侧开关控制是否出现在一级列表；长度 0 = 跟随默认长度；名称唯一（区分大小写）；正则为字符类内容，如 a-zA-Z0-9、a-f0-9、!@#$%",
-			"The switch controls whether an entry appears in the first level; length 0 follows the default length; names are unique (case-sensitive); patterns are character classes such as a-zA-Z0-9, a-f0-9, !@#$%")).
+		ui.Text(c, i18n.L("左侧开关控制是否出现在一级列表；长度 0 = 跟随默认长度；名称唯一（区分大小写）；正则为字符类内容，如 a-zA-Z0-9、a-f0-9、!@#$%；长度足够时每段至少出现一次",
+			"The switch controls whether an entry appears in the first level; length 0 follows the default length; names are unique (case-sensitive); patterns are character classes such as a-zA-Z0-9, a-f0-9, !@#$%; when the length permits, every segment appears at least once")).
 			FontSize(theme.HintSize).TextColor(t.TextMuted)
 
 		deleteAt := -1

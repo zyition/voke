@@ -56,6 +56,30 @@ func alphabetOf(t *testing.T, p *Provider, name string) []rune {
 	return nil
 }
 
+func groupsOf(t *testing.T, p *Provider, name string) [][]rune {
+	t.Helper()
+	for _, cs := range p.charsets {
+		if cs.name == name {
+			return cs.groups
+		}
+	}
+	t.Fatalf("找不到字符集 %q", name)
+	return nil
+}
+
+func containsAnyRune(s string, set []rune) bool {
+	ok := make(map[rune]bool, len(set))
+	for _, r := range set {
+		ok[r] = true
+	}
+	for _, r := range s {
+		if ok[r] {
+			return true
+		}
+	}
+	return false
+}
+
 func TestMetadata(t *testing.T) {
 	p := seeded()
 	if p.ID() != "random" || p.Name() != "随机值" || p.Description() != "随机整数 / 随机字符串" {
@@ -334,15 +358,108 @@ func TestDegenerateRange(t *testing.T) {
 func TestStringAlnumAndNotConstant(t *testing.T) {
 	p := seeded()
 	alpha := alphabetOf(t, p, nameAlnum)
-	a, b := p.randomStringWith(32, alpha), p.randomStringWith(32, alpha)
+	a, b := p.randomStringWith(32, alpha, nil), p.randomStringWith(32, alpha, nil)
 	if !isAlnum(a) || len(a) != 32 {
 		t.Errorf("随机串应 32 位全字母数字：%q", a)
 	}
 	if a == b {
 		t.Error("连续生成不能相同")
 	}
-	if p.randomStringWith(8, nil) != "" {
+	if p.randomStringWith(8, nil, nil) != "" {
 		t.Error("空字符集应返回空串而不是 panic")
+	}
+}
+
+func TestStringGuaranteesEachGroup(t *testing.T) {
+	p := withCount(50)
+	for _, name := range []string{nameAlnum, nameSymbols, nameHex} {
+		groups := groupsOf(t, p, name)
+		if len(groups) < 2 {
+			t.Fatalf("%s 至少应有两组，实得 %d", name, len(groups))
+		}
+		hits := randMode(p, "", "cs:"+name)
+		for _, h := range hits[1:] {
+			for i, g := range groups {
+				if !containsAnyRune(h.Title, g) {
+					t.Errorf("%s 第 %d 组未出现：%q（组 %q）", name, i, h.Title, string(g))
+					break
+				}
+			}
+		}
+	}
+}
+
+func TestStringShortLengthFallsBackToUniform(t *testing.T) {
+	p := withCount(1)
+	cfg := p.Config()
+	cfg.Charsets = []charset.Spec{{Name: "短", Pattern: "a-z0-9!", Enabled: true, Length: 2}}
+	p.SetConfig(cfg)
+
+	full := alphabetOf(t, p, "短")
+	groups := groupsOf(t, p, "短")
+	if len(groups) != 3 {
+		t.Fatalf("短字符集应 3 组，实得 %d", len(groups))
+	}
+	missingLiteral := false
+	for i := 0; i < 200; i++ {
+		v := p.randomStringWith(2, full, groups)
+		if len(v) != 2 {
+			t.Fatalf("长度应固定 2：%q", v)
+		}
+		if !allIn(v, string(full)) {
+			t.Fatalf("出现字符集之外的字符：%q", v)
+		}
+		if !containsAnyRune(v, groups[2]) {
+			missingLiteral = true
+		}
+	}
+	if !missingLiteral {
+		t.Error("长度小于组数时应退回均匀随机，不应每组强制保底")
+	}
+}
+
+func TestStringLengthEqualsGroupCount(t *testing.T) {
+	p := withCount(30)
+	cfg := p.Config()
+	cfg.Charsets = []charset.Spec{{Name: "三类", Pattern: "a-z0-9!", Enabled: true, Length: 3}}
+	p.SetConfig(cfg)
+
+	groups := groupsOf(t, p, "三类")
+	if len(groups) != 3 {
+		t.Fatalf("三类应 3 组，实得 %d", len(groups))
+	}
+	positions := make(map[int]bool)
+	for _, h := range randMode(p, "", "cs:三类")[1:] {
+		if len(h.Title) != 3 {
+			t.Fatalf("长度应固定 3：%q", h.Title)
+		}
+		for i, g := range groups {
+			if !containsAnyRune(h.Title, g) {
+				t.Errorf("第 %d 组未出现：%q", i, h.Title)
+			}
+		}
+		positions[strings.IndexRune(h.Title, '!')] = true
+	}
+	if len(positions) < 2 {
+		t.Errorf("洗牌后字面组位置应变化，实得位置集合 %v", positions)
+	}
+}
+
+func TestRandomIndexInRange(t *testing.T) {
+	p := seeded()
+	seen := make(map[int]bool)
+	for i := 0; i < 1000; i++ {
+		v := p.randomIndex(5)
+		if v < 0 || v >= 5 {
+			t.Fatalf("randomIndex(5) = %d，越界", v)
+		}
+		seen[v] = true
+	}
+	if len(seen) != 5 {
+		t.Errorf("randomIndex(5) 未覆盖全部下标：%v", seen)
+	}
+	if p.randomIndex(0) != 0 || p.randomIndex(1) != 0 {
+		t.Error("n<=1 时应返回 0")
 	}
 }
 

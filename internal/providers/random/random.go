@@ -65,6 +65,8 @@ type resolvedCharset struct {
 	enabled  bool
 	length   int
 	alphabet []rune
+	// groups 是按 pattern 书写段拆出的抽样组；长度足够时每组至少取一个。
+	groups [][]rune
 }
 
 // request 是一次生成的规格：isString=false 走整数 [low, high]，否则定长字符串。
@@ -74,6 +76,7 @@ type request struct {
 	high        int64
 	length      int
 	alphabet    []rune
+	groups      [][]rune
 	charsetName string
 }
 
@@ -151,6 +154,7 @@ func (p *Provider) rebuildCharsets() {
 		p.charsets = append(p.charsets, resolvedCharset{
 			name: name, pattern: strings.TrimSpace(spec.Pattern),
 			enabled: spec.Enabled, length: spec.Length, alphabet: alphabet,
+			groups: charset.CompileGroups(spec.Pattern),
 		})
 	}
 }
@@ -262,7 +266,7 @@ func (p *Provider) queryInt(query string) []providers.Match {
 // queryCharset 二级：首条固定「重新生成」，随后按默认 / 指定长度生成 count 条。
 func (p *Provider) queryCharset(cs resolvedCharset, query string) []providers.Match {
 	out := p.refreshRows()
-	req := request{isString: true, length: p.effectiveLength(cs), alphabet: cs.alphabet, charsetName: cs.name}
+	req := request{isString: true, length: p.effectiveLength(cs), alphabet: cs.alphabet, groups: cs.groups, charsetName: cs.name}
 	if query != "" {
 		n, ok := parseLengthParam(query)
 		if !ok {
@@ -305,7 +309,7 @@ func (p *Provider) appendMany(out []providers.Match, req request, count int) []p
 
 func (p *Provider) generate(req request) (string, string) {
 	if req.isString {
-		return p.randomStringWith(req.length, req.alphabet),
+		return p.randomStringWith(req.length, req.alphabet, req.groups),
 			fmt.Sprintf(i18n.L("随机字符串（%d 位 · %s）", "Random string (%d chars · %s)"), req.length, req.charsetName)
 	}
 	return strconv.FormatInt(p.randomInt(req.low, req.high), 10),
@@ -329,18 +333,57 @@ func (p *Provider) randomInt(low, high int64) int64 {
 
 // randomStringWith 从给定字符表生成定长随机字符串（长度封顶 maxStringLen）。
 // 长度按 rune 计，字符集含非 ASCII 字符时输出字节数会更多。
-func (p *Provider) randomStringWith(n int, alphabet []rune) string {
+//
+// groups 非空且长度足够时，先从每组各取一个保底，再用整集填满并洗牌；否则退回
+// 整集逐位均匀抽取。该保底行为与 Chromium / KeePassXC / Bitwarden 一致。
+func (p *Provider) randomStringWith(n int, alphabet []rune, groups [][]rune) string {
 	if len(alphabet) == 0 || n <= 0 {
 		return ""
 	}
 	if n > maxStringLen {
 		n = maxStringLen
 	}
+	if len(groups) >= 2 && n >= len(groups) {
+		out := make([]rune, 0, n)
+		for _, g := range groups {
+			if len(g) == 0 {
+				continue
+			}
+			out = append(out, g[p.randomIndex(len(g))])
+		}
+		for len(out) < n {
+			out = append(out, alphabet[p.randomIndex(len(alphabet))])
+		}
+		p.shuffleRunes(out)
+		return string(out)
+	}
 	out := make([]rune, n)
 	for i := range out {
-		out[i] = alphabet[p.randomU64()%uint64(len(alphabet))]
+		out[i] = alphabet[p.randomIndex(len(alphabet))]
 	}
 	return string(out)
+}
+
+// randomIndex 返回 [0, n) 内的均匀随机下标；用拒绝采样消除取模偏差。
+func (p *Provider) randomIndex(n int) int {
+	if n <= 1 {
+		return 0
+	}
+	limit := ^uint64(0) - ^uint64(0)%uint64(n)
+	for {
+		v := p.randomU64()
+		if v < limit {
+			return int(v % uint64(n))
+		}
+	}
+}
+
+// shuffleRunes 做 Fisher-Yates 洗牌，避免保底字符集中在字符串开头。
+func (p *Provider) shuffleRunes(rs []rune) {
+	for i := len(rs) - 1; i > 0; i-- {
+		j := p.randomIndex(i + 1)
+		rs[i], rs[j] = rs[j], rs[i]
+	}
 }
 
 func (p *Provider) randomU64() uint64 {
