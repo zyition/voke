@@ -95,7 +95,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $ldflags = "-s -w -H windowsgui -X voke/internal/app.buildVersion=$env:VOKE_VERSION"
-          go build -tags mygo_noinspector -ldflags="$ldflags" -o voke.exe .
+          go build -tags "mygo_noinspector mygo_nowebview" -ldflags="$ldflags" -o voke.exe .
           if ($LASTEXITCODE -ne 0) { throw "go build 失败（exit=$LASTEXITCODE）" }
 
       - name: 安装 Inno Setup 7

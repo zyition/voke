@@ -147,7 +147,7 @@ Full environment setup, layering rules, and verification commands are in [`CONTR
 gofmt -l . && go vet ./... && go test -race -count=1 -shuffle=on ./...
 
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
-  -tags mygo_noinspector -ldflags="-s -w -H windowsgui" -o /tmp/voke.exe .
+  -tags "mygo_noinspector mygo_nowebview" -ldflags="-s -w -H windowsgui" -o /tmp/voke.exe .
 ```
 
 - Artifact: `/tmp/voke.exe` (cross build). The installer is built with `bash packaging/build-installer.sh`,

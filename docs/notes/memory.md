@@ -57,6 +57,8 @@
 - **面板窗口关闭 resize / vibrancy / transparent**：`DisableResize: true`，
   `Vibrancy` 留空、`Transparent` 关闭，避免额外的合成缓冲和 resize 重建。
 - **构建期 `mygo_noinspector`**：不打包 inspector，减小二进制与运行时开销。
+- **构建期 `mygo_nowebview`**：两个窗口都是原生 UI，不打包 WebView2 后端
+  （不再引用 `WebView2Loader.dll`），交付 exe 约小 0.5MB。
 - **日志行数上限**：默认 9999，跨启动追加、超限删头批，避免日志无限增长。
 
 ## 4. 已知边界

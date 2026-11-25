@@ -179,12 +179,12 @@ type appState struct {
 	// clipSeq 是最近一次已处理的剪贴板序列号；程序化写入后同步置位，用于抑制
 	// 自己写剪贴板又被监控采集（例如「纯文本粘贴」降级出的新条目）。
 	clipSeq atomic.Uint32
-	// clipWatchOn 是剪贴板后台轮询的开关：插件停用时后台空转（不做系统调用、
-	// 不叫醒主线程）。由 syncClipboardWatch 在 ready / 配置重载时写入。
+	// clipWatchOn 是剪贴板监听的开关：插件停用时注销监听、零回调。
+	// 由 syncClipboardWatch 在 ready / 配置重载时写入。
 	clipWatchOn atomic.Bool
-	// clipWatchStop 停掉事件驱动的剪贴板监听（非 Windows / 监听失败时为 nil，
-	// 此时在跑的是轮询回退）。退出流程调用，避免留线程。
-	clipWatchStop func()
+	// clipWatchOff 注销 mygo Clipboard.OnChanged 监听（未注册时为 nil）。
+	// 只在主线程读写（ready / 配置重载 / syncClipboardWatch）。
+	clipWatchOff func()
 	// clipTarget 是唤起面板前的前台窗口快照，粘贴时恢复它并发送按键。
 	clipTarget platform.ClipTarget
 	// notice 是一次性操作提示（粘贴失败 / 置顶已满 / 结束任务失败），显示在底部
@@ -372,8 +372,7 @@ func (st *appState) ready() {
 		st.applyQueryResult)
 	// 窗口快照接缝：枚举在后台跑（见 winsnapshot.go），刷新完成后回主线程按需重算。
 	winSnap.bind(st.panel, st.onWindowSnapshot)
-	// 剪贴板监控：后台只轮询序列号，变化后回主线程读内容并写入内存历史。
-	st.syncClipboardWatch()
+	// 剪贴板监控：系统事件驱动，变化后主线程读内容并写入内存历史。
 	st.startClipboardWatcher()
 	platform.SnapshotMem("启动")
 	log.Printf("voke 就绪（版本 %s，热键 %s）", aboutVersion(), showHotkey)

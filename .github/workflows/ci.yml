@@ -82,7 +82,7 @@ jobs:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: '0'
-        run: go build -tags mygo_noinspector -ldflags="-s -w -H windowsgui" -o voke.exe .
+        run: go build -tags "mygo_noinspector mygo_nowebview" -ldflags="-s -w -H windowsgui" -o voke.exe .
 
       - name: Upload voke.exe
         uses: actions/upload-artifact@v7

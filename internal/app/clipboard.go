@@ -1,4 +1,4 @@
-// clipboard.go：剪贴板历史的运行时装配——后台轮询采集、程序化写入抑制、
+// clipboard.go：剪贴板历史的运行时装配——系统事件驱动采集、程序化写入抑制、
 // 粘贴回原窗口、置顶 / 删除动作与失败提示。
 //
 // 逻辑边界：历史存储（cliphist）与 provider（providers/clipboard）都是纯 Go；
@@ -22,9 +22,6 @@ import (
 )
 
 const (
-	// clipboardPollInterval 是序列号轮询周期。只读一个 DWORD，500ms 足够及时，
-	// 又不会为后台轮询占太多 CPU。
-	clipboardPollInterval = 500 * time.Millisecond
 	// clipboardPasteDelay 是隐藏面板到发送按键之间的等待：让前台切换完成，
 	// 避免把 Ctrl+V 发到正在消失的面板。
 	clipboardPasteDelay = 120 * time.Millisecond
@@ -46,61 +43,19 @@ func clipboardMaxEntries(loaded appcfg.Loaded) int {
 	return cliphist.DefaultMaxEntries
 }
 
-// startClipboardWatcher 启动后台轮询：只读 Win32 序列号，**变化后**才回主线程
-// 读内容、写历史。
+// startClipboardWatcher 启动系统剪贴板变化监听（mygo `Clipboard.OnChanged`：
+// Windows 走原生 WM_CLIPBOARDUPDATE，回调在主线程）。**变化后**才读内容、写历史。
 //
-// 省电约束（笔记本场景）：
-//   - 序列号比较放在后台 goroutine 里，稳态下**不产生任何主线程唤醒**（早先在每次
-//     tick 都投一次 RunOnMain，等于每 500ms 白叫一次消息循环）；
-//   - 剪贴板插件被停用时 clipWatchOn=false，连序列号系统调用都不做；
-//   - 空转时只有一个 ticker 与一次 GetClipboardSequenceNumber（读一个 DWORD）。
-//
-// 必须等 App 就绪后调用（ready 里）；goroutine 生命周期与进程一致。
+// 省电约束：剪贴板插件停用时由 syncClipboardWatch 注销监听，空闲零回调；
+// 监听挂在 mygo 应用自己的消息窗口上，不需要自建线程 / 窗口 / 轮询。
+// 必须等 App 就绪后调用（ready 里）。
 func (st *appState) startClipboardWatcher() {
 	st.clipSeq.Store(platform.ClipboardSequence())
-	// 首选事件驱动：系统级 WM_CLIPBOARDUPDATE（见 platform.StartClipboardWatch），
-	// 空闲时零唤醒、零系统调用。
-	if ch, stop, ok := platform.StartClipboardWatch(); ok {
-		st.clipWatchStop = stop
-		go func() {
-			for range ch {
-				if !st.clipWatchOn.Load() {
-					continue
-				}
-				mygo.RunOnMain(st.onClipboardSignal)
-			}
-		}()
-		return
-	}
-	// 回退：500ms 轮询序列号（非 Windows / 监听窗口创建失败）。只读一个 DWORD，
-	// 序列号比较放在后台，稳态下不唤醒主线程。
-	go func() {
-		ticker := time.NewTicker(clipboardPollInterval)
-		defer ticker.Stop()
-		var last uint32
-		for range ticker.C {
-			if !st.clipWatchOn.Load() {
-				last = 0 // 停用期间不做任何系统调用
-				continue
-			}
-			seq := platform.ClipboardSequence()
-			if seq == 0 || seq == last {
-				continue // 序列号不可用 / 没变化
-			}
-			last = seq
-			if st.clipSeq.Load() == seq {
-				continue // 程序化写入已同步过
-			}
-			mygo.RunOnMain(func() {
-				st.clipSeq.Store(seq)
-				st.captureClipboard()
-			})
-		}
-	}()
+	st.syncClipboardWatch()
 }
 
-// onClipboardSignal 在主线程处理「系统剪贴板可能变了」：事件会合并、也会被我们自己
-// 的写入触发，所以重读序列号去重，真变了才读内容。
+// onClipboardSignal 在主线程处理「系统剪贴板可能变了」：mygo 会合并连续变化，
+// 也会把程序化写入报告回来，所以重读序列号去重，真变了才读内容。
 func (st *appState) onClipboardSignal() {
 	if !st.clipWatchOn.Load() {
 		return
@@ -113,7 +68,7 @@ func (st *appState) onClipboardSignal() {
 	st.captureClipboard()
 }
 
-// syncClipboardWatch 按配置决定后台轮询是否工作（剪贴板插件停用 → 完全空转）。
+// syncClipboardWatch 按配置决定是否监听剪贴板（插件停用 → 注销监听，零回调）。
 // 只在主线程调用（ready / 配置重载）。
 func (st *appState) syncClipboardWatch() {
 	on := true
@@ -124,6 +79,16 @@ func (st *appState) syncClipboardWatch() {
 		}
 	}
 	st.clipWatchOn.Store(on)
+	if on {
+		if st.clipWatchOff == nil {
+			st.clipWatchOff = mygo.Clipboard.OnChanged(st.onClipboardSignal)
+		}
+		return
+	}
+	if st.clipWatchOff != nil {
+		st.clipWatchOff()
+		st.clipWatchOff = nil
+	}
 }
 
 // captureClipboard 在主线程读当前剪贴板并写入历史。

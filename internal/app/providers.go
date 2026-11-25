@@ -798,7 +798,7 @@ func (st *appState) reloadConfigs() {
 	}
 	st.cfg, st.providers, st.table = loaded, cfg, table
 	st.invalidateChangedProviderResults(changedProviderIDs(old, st.providers))
-	st.syncClipboardWatch() // 剪贴板插件被停用后，后台轮询随即空转
+	st.syncClipboardWatch() // 剪贴板插件被停用后，立即注销系统监听
 }
 
 // changedProviderIDs 返回新旧归一配置里 ProviderConfig 发生变化的插件 id。

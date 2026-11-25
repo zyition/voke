@@ -284,11 +284,11 @@ provider.Query + 排序）都被收拢到唯一的**查询线程**，主线程�
 
 ### 常驻开销清单（笔记本口径，2026-10-23 审计）
 
-目标：空闲 / 隐藏时除了剪贴板必须的那点轮询，不应该有任何周期性工作。
+目标：空闲 / 隐藏时除了剪贴板必须的那点事件监听，不应该有任何周期性工作。
 
 | 来源 | 触发条件 | 空闲成本 | 备注 |
 | --- | --- | --- | --- |
-| 剪贴板 | **事件驱动**：`AddClipboardFormatListener` + `WM_CLIPBOARDUPDATE`（`platform/clipboard_watch_windows.go`） | 空闲 0 唤醒、0 系统调用 | 监听失败 / 非 Windows 自动回退 500ms 轮询；插件停用时空转（`clipWatchOn`） |
+| 剪贴板 | **事件驱动**：mygo `Clipboard.OnChanged`（Windows 为原生 `AddClipboardFormatListener`） | 空闲 0 唤醒、0 系统调用 | 插件停用即注销监听；回调在主线程，序列号去重 |
 | 窗口快照 | 面板唤起 + 可见期每 2s | 隐藏时为 0 | 隐藏 / 退出即停表 |
 | 图标缓存裁剪 | 隐藏后 10s 一次性 | 0 | 10s 后把解码缓存 256→64 |
 | 保持唤醒重申 | 仅用户开启时，30s | 一次 `SetThreadExecutionState` | 功能本身 |
@@ -299,6 +299,7 @@ provider.Query + 排序）都被收拢到唯一的**查询线程**，主线程�
 常驻内存的大头（都有上界）：搜索键缓存 `CacheCapacity`=4096（约 1MB 上限）、
 解码图标缓存 256 条（隐藏 10s 后 64）、剪贴板历史（按配置条数）、频率表（按不同应用名）。
 
-剪贴板监听已改为事件驱动（自建 message-only 窗口，见上）。mygo 的 `listeners` 类型与
-`AppHandler` 接口都在 internal 包里、不对外暴露，无法注册自定义原生事件，所以事件源
-只能自己建——这也是 voke 里唯一一处「绕过 mygo 自建窗口」的地方。
+剪贴板监听走 mygo v0.10 的 `Clipboard.OnChanged`：Windows 上它把
+`AddClipboardFormatListener` 挂在应用自己的消息窗口上，回调直接在主线程，
+连续变化由 mygo 合并。此前 voke 自建的 message-only 窗口 / 独立线程 / 轮询回退
+已随 mygo 升级删除，`internal/platform` 只保留序列号去重与粘贴按键。

@@ -10,7 +10,7 @@ import (
 // clipboard_windows.go：剪贴板监控与「粘贴到原窗口」的 Win32 半边。
 //
 // 只做三件事：
-//   - ClipboardSequence：GetClipboardSequenceNumber，供后台轮询判断剪贴板是否变化；
+//   - ClipboardSequence：GetClipboardSequenceNumber，供监听回调去重（自己写入后同步置位）；
 //   - ForegroundTarget：唤起面板前记住前台窗口（句柄 / 类名 / 进程名 / 是否终端）；
 //   - PasteToTarget：恢复目标窗口前台并发送 Ctrl+V 或 Shift+Insert。
 //
@@ -59,7 +59,8 @@ var (
 )
 
 // ClipboardSequence 返回系统剪贴板序列号：内容/所有权每次变化都会递增。
-// 只读取一个 DWORD，任意线程可调；后台轮询用它做「是否值得回主线程读内容」的闸门。
+// 只读取一个 DWORD，任意线程可调；监听回调用它区分「真的变了」与
+// 「自己刚写入 / 合并后的重复通知」。
 func ClipboardSequence() uint32 {
 	n, _, _ := procGetClipboardSequenceNumber.Call()
 	return uint32(n)

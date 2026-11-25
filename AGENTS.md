@@ -58,7 +58,7 @@ Go（当前主线，与 CI 同款）：
 ```bash
 gofmt -l . && go vet ./... && go test -race -count=1 -shuffle=on ./...
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
-  -tags mygo_noinspector -ldflags="-s -w -H windowsgui" -o /tmp/voke.exe .
+  -tags "mygo_noinspector mygo_nowebview" -ldflags="-s -w -H windowsgui" -o /tmp/voke.exe .
 ```
 
 Rust/gpui 参考实现已归档到 `legacy-rust` 分支与 `v0.1.x` tag；main 上没有 Cargo
@@ -148,8 +148,9 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 
   `db.sqlite`，打开时用对应编辑器 CLI。旧配置的 `[providers.workspaces]` 在加载时迁移成
   两条覆盖（前缀 / 插件热键只留给 vscode，避免两个插件争同一触发串）——
   `internal/app/providers.go`、`internal/platform/workspaces.go`。
-- 剪贴板历史（`@c`）：内存态、不持久化；后台每 500ms 轮询 `GetClipboardSequenceNumber`，
-  变化后回主线程经 mygo `Clipboard.Read` 采文本/HTML/RTF/PNG，跳过敏感标记与文件列表。
+- 剪贴板历史（`@c`）：内存态、不持久化；mygo `Clipboard.OnChanged` 事件驱动（Windows 为
+  `AddClipboardFormatListener`），变化后主线程经 mygo `Clipboard.Read` 采文本/HTML/RTF/PNG，
+  跳过敏感标记与文件列表；插件停用即注销监听。
   粘贴写回后先恢复唤起前的窗口，再发 `Ctrl+V`（终端用 `Shift+Insert`）；失败时保留面板并
   提示手动粘贴。历史存储 `internal/logic/cliphist`，采集/按键 `internal/platform/clipboard*`，
   监控与自我写入抑制 `internal/app/clipboard.go`。

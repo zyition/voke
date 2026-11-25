@@ -63,7 +63,7 @@ fi
 (
   cd "$GO_DIR"
   GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-    go build -tags mygo_noinspector -ldflags="$LDFLAGS" -o "$EXE" .
+    go build -tags "mygo_noinspector mygo_nowebview" -ldflags="$LDFLAGS" -o "$EXE" .
 )
 if [ ! -f "$EXE" ]; then
   echo "错误：构建后仍未找到产物 $EXE" >&2

@@ -38,7 +38,7 @@ gofmt -l . && go vet ./... && go test -race -count=1 -shuffle=on ./...
 
 # Windows 交付构建（GUI 子系统 + 图标 syso）
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
-  -tags mygo_noinspector -ldflags="-s -w -H windowsgui" -o /tmp/voke.exe .
+  -tags "mygo_noinspector mygo_nowebview" -ldflags="-s -w -H windowsgui" -o /tmp/voke.exe .
 
 # 安装包（Go 构建 + Inno Setup；版本号默认取最近的 vX.Y.Z tag）
 bash packaging/build-installer.sh

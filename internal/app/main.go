@@ -56,13 +56,11 @@ func Main() {
 	// 的 OnClose 不再「关=隐藏」而是放行真关闭——否则 w.close() 被 veto 返回 false，
 	// prepareQuit 会提前中止、永不 os.Exit，进程退不掉（托盘退出的根因修复）。
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { st.quitting = true })
-	// 退出前销毁托盘图标。
+	// 退出前销毁托盘图标。剪贴板监听由 mygo 挂在 App.OnQuit 上自动注销，
+	// 这里不再单独停止。
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
 		st.stopIconTrimTimer()
 		st.stopWindowRefreshTimer()
-		if st.clipWatchStop != nil {
-			st.clipWatchStop()
-		}
 		if st.tray != nil {
 			st.tray.Destroy()
 		}

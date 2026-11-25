@@ -112,7 +112,7 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
   不占普通名额、总预算 64MiB、单图 16MiB、富文本 1MiB），SHA-256 去重、FIFO 淘汰、
   48px 缩略图；
 - `internal/providers/clipboard`：纯查询与行文案 / 动作声明；
-- `internal/platform/clipboard*.go`：序列号轮询、多格式读写、敏感标记与文件列表跳过、
+- `internal/platform/clipboard*.go`：序列号去重、多格式读写、敏感标记与文件列表跳过、
   前台窗口捕获与 `Ctrl+V` / `Shift+Insert` 按键模拟；
 - `internal/app/clipboard.go`：监控生命周期、自我写入抑制、粘贴失败回退提示。
 - 管理员窗口：`platform.IsProcessElevated` 判定目标进程权限；目标更高时 UIPI 会
@@ -157,7 +157,7 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
 | 开机自启 | Win32 注册表 `HKCU\...\Run\voke`（`autostart_windows.go`） |
 | 窗口枚举 / 激活 | user32 EnumWindows + SetForegroundWindow（`windows_enum_windows.go`） |
 | 终端配置 / 编辑器工作区 | 读取 Windows Terminal settings.json；只读 SQLite（Zed / VS Code） |
-| 剪贴板 | mygo `Clipboard` + 序列号轮询 / `SendInput` / 提权粘贴辅助（`clipboard*.go`） |
+| 剪贴板 | mygo `Clipboard.OnChanged` 事件 / `SendInput` / 提权粘贴辅助（`clipboard*.go`） |
 | 提权 | Token 完整性判定 + `ShellExecuteEx(runas)` 一次性辅助进程（`elevate*.go`） |
 | 结束进程 | `OpenProcess` + `TerminateProcess`，拒绝自身与核心系统进程（`endtask*.go`） |
 | 内存快照 | `K32GetProcessMemoryInfo` + `runtime.ReadMemStats`（`mem_windows.go`） |
@@ -201,7 +201,7 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
 ```bash
 gofmt -l . && go vet ./... && go test -race -count=1 -shuffle=on ./...
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
-  -tags mygo_noinspector -ldflags="-s -w -H windowsgui" -o /tmp/voke.exe .
+  -tags "mygo_noinspector mygo_nowebview" -ldflags="-s -w -H windowsgui" -o /tmp/voke.exe .
 ```
 
 - CI：`.github/workflows/ci.yml`（gofmt / tidy / vet / race / Windows 交叉构建）。
