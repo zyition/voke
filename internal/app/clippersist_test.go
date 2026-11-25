@@ -96,6 +96,73 @@ func TestClipboardPersistenceDisableDeletesDB(t *testing.T) {
 	}
 }
 
+// TestClipboardPersistenceMaxEntriesReconcile 覆盖条数上限：内存淘汰后，
+// 后台对账把库里多余的行删掉；重启加载的条数与内存一致。
+func TestClipboardPersistenceMaxEntriesReconcile(t *testing.T) {
+	path := withTempClipDB(t)
+	st := &appState{hist: cliphist.New(10)}
+	st.startClipboardPersistence()
+	defer st.stopClipboardPersistence(false)
+	base := time.Unix(5000, 0)
+	items := make([]cliphist.Item, 0, 6)
+	for i := range 6 {
+		it, err := st.hist.Add(cliphist.Payload{Text: string(rune('a' + i))}, base.Add(time.Duration(i)*time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		st.persistClipUpsert(it)
+		items = append(items, it)
+	}
+	// 置顶最老的一条：它不占普通条数。
+	if !st.hist.Pin(items[0].ID) {
+		t.Fatal("置顶失败")
+	}
+	st.persistClipItem(items[0].ID)
+	if removed := st.hist.SetMaxEntries(3); removed != 2 {
+		t.Fatalf("SetMaxEntries 淘汰 %d 条，期望 2", removed)
+	}
+	st.persistClipReconcile()
+	st.stopClipboardPersistence(false)
+
+	db, recs, err := openClipDB(path)
+	if err != nil {
+		t.Fatalf("重开库失败：%v", err)
+	}
+	db.Close()
+	if len(recs) != 4 {
+		t.Fatalf("库内应为 3 普通 + 1 置顶，实得 %d：%+v", len(recs), recs)
+	}
+	got := map[string]bool{}
+	for _, r := range recs {
+		got[r.ID] = r.Pinned
+	}
+	for _, want := range []struct {
+		id     string
+		pinned bool
+	}{
+		{items[0].ID, true},  // 最老但置顶
+		{items[5].ID, false}, // 最新
+		{items[4].ID, false},
+		{items[3].ID, false},
+	} {
+		pinned, ok := got[want.id]
+		if !ok || pinned != want.pinned {
+			t.Errorf("库内条目 %s 缺失或置顶不符：ok=%v pinned=%v，期望 %v", want.id[:8], ok, pinned, want.pinned)
+		}
+	}
+	if _, ok := got[items[1].ID]; ok {
+		t.Error("被条数上限淘汰的条目仍在库里")
+	}
+
+	// 重启加载：内存条数与库一致（4 条，其中 1 条置顶）。
+	st2 := &appState{hist: cliphist.New(10)}
+	st2.startClipboardPersistence()
+	defer st2.stopClipboardPersistence(false)
+	if st2.hist.Len() != 4 || st2.hist.PinnedLen() != 1 {
+		t.Fatalf("重启后 Len=%d Pinned=%d，期望 4/1", st2.hist.Len(), st2.hist.PinnedLen())
+	}
+}
+
 // TestClipboardPersistDefaultAndExplicitOff 锁默认值：缺键 = 开启；显式 false
 // 才删除残留库，避免配置损坏回落默认时误删历史。
 func TestClipboardPersistDefaultAndExplicitOff(t *testing.T) {
