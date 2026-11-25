@@ -318,6 +318,51 @@ func TestClipboardMaxEntriesRoundtrip(t *testing.T) {
 	}
 }
 
+func TestClipboardPersistRoundtrip(t *testing.T) {
+	// 未写 persist：Has=false，由 app 层按默认开启处理。
+	plain, err := FromTOML([]byte("[clipboard]\nmax_entries = 100\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.HasClipboardPersist {
+		t.Fatalf("未写 persist 时不应有显式值：%+v", plain)
+	}
+
+	// 显式 true → 落盘并回读；即使没写 max_entries 也要有 [clipboard] 节。
+	on := true
+	data, err := Encode(Top{ClipboardPersist: &on}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "[clipboard]") || !strings.Contains(string(data), "persist = true") {
+		t.Fatalf("落盘应有 [clipboard] persist = true：\n%s", data)
+	}
+	back, err := FromTOML(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !back.HasClipboardPersist || !back.ClipboardPersist {
+		t.Fatalf("回读应为开启：%+v", back)
+	}
+
+	// 显式 false 必须写出来：缺键 = 默认开启，省略会把「关」读成「开」。
+	off := false
+	data, err = Encode(Top{ClipboardMaxEntries: 250, ClipboardPersist: &off}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "persist = false") {
+		t.Fatalf("关闭时必须写 persist = false：\n%s", data)
+	}
+	back, err = FromTOML(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !back.HasClipboardPersist || back.ClipboardPersist || back.ClipboardMaxEntries != 250 {
+		t.Fatalf("关闭态回读不对：%+v", back)
+	}
+}
+
 func TestCharsetRoundtrip(t *testing.T) {
 	specs := []charset.Spec{
 		{Name: "小写十六进制", Pattern: "a-f0-9", Enabled: true, Length: 32},

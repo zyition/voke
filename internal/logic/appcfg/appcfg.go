@@ -53,7 +53,11 @@ type Loaded struct {
 	// 表示没写，由调用方回落 cliphist.DefaultMaxEntries。
 	ClipboardMaxEntries    int
 	HasClipboardMaxEntries bool
-	Overrides              []config.UserOverride
+	// ClipboardPersist 是剪贴板历史是否落盘；HasClipboardPersist=false 表示没写，
+	// 上层按默认开启处理（设置页可显式关闭）。
+	ClipboardPersist    bool
+	HasClipboardPersist bool
+	Overrides           []config.UserOverride
 }
 
 // providerPatch 是单个 provider 的部分覆盖（指针字段：nil = 没写；omitempty 让没写的不落盘）。
@@ -95,9 +99,10 @@ type configFile struct {
 	Providers map[string]providerPatch `json:"providers" toml:"providers"`
 }
 
-// clipboardPatch 是 `[clipboard]` 表（目前只有历史条数上限）。
+// clipboardPatch 是 `[clipboard]` 表（历史条数上限 + 是否持久化）。
 type clipboardPatch struct {
-	MaxEntries *int `json:"max_entries,omitempty" toml:"max_entries,omitempty"`
+	MaxEntries *int  `json:"max_entries,omitempty" toml:"max_entries,omitempty"`
+	Persist    *bool `json:"persist,omitempty" toml:"persist,omitempty"`
 }
 
 // FromJSON 解码配置字节。坏 JSON → 返回 error（调用方据此回落默认，对照 Rust
@@ -147,6 +152,9 @@ func decodeFile(f configFile) Loaded {
 	}
 	if f.Clipboard != nil && f.Clipboard.MaxEntries != nil {
 		out.ClipboardMaxEntries, out.HasClipboardMaxEntries = *f.Clipboard.MaxEntries, true
+	}
+	if f.Clipboard != nil && f.Clipboard.Persist != nil {
+		out.ClipboardPersist, out.HasClipboardPersist = *f.Clipboard.Persist, true
 	}
 
 	// provider 覆盖按 id 稳定序输出（map 无序 → 排序保证 Normalize 的警告 / 错误确定）。
@@ -257,6 +265,9 @@ type Top struct {
 	// ClipboardMaxEntries > 0 时落 `[clipboard] max_entries`；0 = 不写该节
 	// （旧配置迁移 / 非设置页路径保持文件原样）。
 	ClipboardMaxEntries int
+	// ClipboardPersist 非 nil 时落 `[clipboard] persist = <bool>`；nil = 不写该键
+	// （缺键在 app 层按默认开启处理）。
+	ClipboardPersist *bool
 }
 
 // Encode 把顶层设置 + provider 覆盖序列化回 **TOML**（与生产 config.toml 同形：
@@ -279,9 +290,13 @@ func Encode(top Top, overrides []config.UserOverride) ([]byte, error) {
 		Language:  &languageStr,
 		Providers: map[string]providerPatch{},
 	}
-	if top.ClipboardMaxEntries > 0 {
-		maxEntries := top.ClipboardMaxEntries
-		file.Clipboard = &clipboardPatch{MaxEntries: &maxEntries}
+	if top.ClipboardMaxEntries > 0 || top.ClipboardPersist != nil {
+		patch := &clipboardPatch{Persist: top.ClipboardPersist}
+		if top.ClipboardMaxEntries > 0 {
+			maxEntries := top.ClipboardMaxEntries
+			patch.MaxEntries = &maxEntries
+		}
+		file.Clipboard = patch
 	}
 	for _, ov := range overrides {
 		patch := providerPatch{

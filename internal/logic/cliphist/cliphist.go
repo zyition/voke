@@ -4,7 +4,8 @@
 // 采集（平台格式、敏感标记）与粘贴（前台窗口、SendInput）都不在这里。
 // 写方法（Add/Pin/…）只在主线程调用；读取（Items/Find）另可从查询线程调用
 // （provider 的数据源闭包在后台跑，见 internal/app/query_async.go）——内部用
-// RWMutex 保护，写写互斥、读读并行。不持久化，退出即清。
+// RWMutex 保护，写写互斥、读读并行。本包不碰磁盘；是否持久化由装配层决定
+// （见 internal/app/clippersist.go，可选 SQLite）。
 package cliphist
 
 import (
@@ -15,6 +16,7 @@ import (
 	"errors"
 	"image"
 	"image/png"
+	"sort"
 	"sync"
 	"time"
 
@@ -211,6 +213,103 @@ func (s *Store) Add(p Payload, now time.Time) (Item, error) {
 	s.bytes += it.Bytes
 	s.trimCount()
 	return *it, nil
+}
+
+// Restore 用外部快照重建历史（启动加载持久化数据 / 运行时开启持久化时合并）。
+// 输入顺序不限：按置顶优先、LastUsedAt 从新到旧重排；同内容按 hash 去重，
+// Pinned 取并集、LastUsedAt 取较新、CreatedAt 取较早（缺省值不算）。
+// 条数上限与总字节预算照旧生效（置顶不占条数，但同样受 64MiB 预算约束）。
+//
+// 缩略图：优先用快照里的 ThumbPNG；缺失且有 PNG 时才现解码生成（老库兼容）。
+// 只应在启动 / 主线程调用。
+func (s *Store) Restore(items []Item) {
+	best := make(map[[32]byte]*Item, len(items))
+	for _, src := range items {
+		p, err := normalize(Payload{Text: src.Text, HTML: src.HTML, RTF: src.RTF, PNG: src.PNG})
+		if err != nil {
+			continue
+		}
+		thumb, w, h := src.ThumbPNG, src.Width, src.Height
+		if len(p.PNG) == 0 {
+			thumb, w, h = nil, 0, 0
+		} else if cfg, err := png.DecodeConfig(bytes.NewReader(p.PNG)); err != nil ||
+			cfg.Width <= 0 || cfg.Height <= 0 ||
+			int64(cfg.Width)*int64(cfg.Height) > MaxImagePixels {
+			p.PNG, thumb, w, h = nil, nil, 0, 0
+			if p.Text == "" && p.HTML == "" && len(p.RTF) == 0 {
+				continue
+			}
+		} else if len(thumb) == 0 {
+			var ok bool
+			thumb, w, h, ok = thumbnail(p.PNG)
+			if !ok {
+				p.PNG, thumb, w, h = nil, nil, 0, 0
+				if p.Text == "" && p.HTML == "" && len(p.RTF) == 0 {
+					continue
+				}
+			}
+		} else {
+			w, h = cfg.Width, cfg.Height
+		}
+		hash := hashPayload(p)
+		it := &Item{
+			Text: p.Text, HTML: p.HTML, RTF: p.RTF, PNG: p.PNG,
+			ThumbPNG: thumb, Width: w, Height: h,
+			Pinned: src.Pinned, CreatedAt: src.CreatedAt, LastUsedAt: src.LastUsedAt,
+			hash: hash,
+		}
+		if prev := best[hash]; prev != nil {
+			if it.LastUsedAt.After(prev.LastUsedAt) {
+				prev.LastUsedAt = it.LastUsedAt
+			}
+			if !it.CreatedAt.IsZero() &&
+				(prev.CreatedAt.IsZero() || it.CreatedAt.Before(prev.CreatedAt)) {
+				prev.CreatedAt = it.CreatedAt
+			}
+			prev.Pinned = prev.Pinned || it.Pinned
+			continue
+		}
+		best[hash] = it
+	}
+
+	list := make([]*Item, 0, len(best))
+	for _, it := range best {
+		it.ID = hex.EncodeToString(it.hash[:16])
+		it.Bytes = itemBytes(it)
+		list = append(list, it)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].Pinned != list[j].Pinned {
+			return list[i].Pinned
+		}
+		if !list[i].LastUsedAt.Equal(list[j].LastUsedAt) {
+			return list[i].LastUsedAt.After(list[j].LastUsedAt)
+		}
+		return list[i].ID < list[j].ID
+	})
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pinned, s.unpinned = nil, nil
+	s.byID = map[string]*Item{}
+	s.byHash = map[[32]byte]*Item{}
+	s.bytes = 0
+	for _, it := range list {
+		if s.bytes+it.Bytes > MaxTotalBytes {
+			continue
+		}
+		if it.Pinned && len(s.pinned) < MaxPinned {
+			s.pinned = append(s.pinned, it)
+		} else if len(s.unpinned) < s.maxEntries {
+			it.Pinned = false // 置顶超上限的旧数据降级为普通条目
+			s.unpinned = append(s.unpinned, it)
+		} else {
+			continue
+		}
+		s.byID[it.ID] = it
+		s.byHash[it.hash] = it
+		s.bytes += it.Bytes
+	}
 }
 
 // Find 按 id 取条目副本。

@@ -148,12 +148,17 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 
   `db.sqlite`，打开时用对应编辑器 CLI。旧配置的 `[providers.workspaces]` 在加载时迁移成
   两条覆盖（前缀 / 插件热键只留给 vscode，避免两个插件争同一触发串）——
   `internal/app/providers.go`、`internal/platform/workspaces.go`。
-- 剪贴板历史（`@c`）：内存态、不持久化；mygo `Clipboard.OnChanged` 事件驱动（Windows 为
+- 剪贴板历史（`@c`）：内存态（可选持久化，见下条）；mygo `Clipboard.OnChanged` 事件驱动（Windows 为
   `AddClipboardFormatListener`），变化后主线程经 mygo `Clipboard.Read` 采文本/HTML/RTF/PNG，
   跳过敏感标记与文件列表；插件停用即注销监听。
   粘贴写回后先恢复唤起前的窗口，再发 `Ctrl+V`（终端用 `Shift+Insert`）；失败时保留面板并
   提示手动粘贴。历史存储 `internal/logic/cliphist`，采集/按键 `internal/platform/clipboard*`，
   监控与自我写入抑制 `internal/app/clipboard.go`。
+- 剪贴板持久化（默认开）：`[clipboard] persist = false` 可关闭；开启时写
+  `%APPDATA%\voke\clipboard.db`（glebarez/go-sqlite 纯 Go 驱动，表 `clips`）；
+  启动按内容哈希合并、后台单线程增量写 + 按内存 id 对账，关闭开关删库——
+  `internal/app/clippersist.go`、`internal/platform/clipdb.go`。不做加密（SQLCipher/SEE
+  需 cgo 或商业授权），按 Ditto 式明文 + 用户目录 ACL 处理；敏感标记不落盘。
 - 管理员窗口粘贴：UIPI 会静默拦截 SendInput（可能仍返回成功），不能靠返回值判断。
   `platform.TargetNeedsElevation` 先检测目标进程权限；更高时经 `ShellExecuteEx(runas)`
   拉起 `voke.exe --elevated-paste` 辅助进程代发粘贴键（UAC）。辅助进程在单实例锁之前

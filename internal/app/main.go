@@ -61,6 +61,8 @@ func Main() {
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
 		st.stopIconTrimTimer()
 		st.stopWindowRefreshTimer()
+		// 刷完持久化队列、关闭剪贴板库（保留文件）；退出后不再有采集回调。
+		st.stopClipboardPersistence(false)
 		if st.tray != nil {
 			st.tray.Destroy()
 		}

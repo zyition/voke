@@ -187,3 +187,60 @@ func TestSetMaxEntriesTrims(t *testing.T) {
 		t.Fatalf("上限应夹到 %d，实际 %d", MaxMaxEntries, s.MaxEntries())
 	}
 }
+
+func TestRestoreOrdersDedupesAndPins(t *testing.T) {
+	base := time.Unix(100, 0)
+	s := New(5)
+	s.Restore([]Item{
+		{Text: "old", LastUsedAt: base},
+		{Text: "new", LastUsedAt: base.Add(20 * time.Second)},
+		{Text: "pinned", Pinned: true, LastUsedAt: base.Add(5 * time.Second)},
+		{Text: "new", LastUsedAt: base.Add(30 * time.Second)}, // 同内容：取较新的 LastUsedAt
+		{Text: "pinned", Pinned: true, LastUsedAt: base.Add(6 * time.Second)},
+		{Text: "", LastUsedAt: base}, // 空内容跳过
+	})
+	if got := strings.Join(texts(s.Items()), ","); got != "pinned,new,old" {
+		t.Fatalf("顺序=%s，期望 pinned,new,old", got)
+	}
+	if s.Len() != 3 || s.PinnedLen() != 1 {
+		t.Fatalf("Len=%d Pinned=%d，期望 3/1", s.Len(), s.PinnedLen())
+	}
+	items := s.Items()
+	if !items[0].Pinned || items[0].ID == "" {
+		t.Fatalf("置顶条目应有 id 且 pinned：%+v", items[0])
+	}
+	if !items[1].LastUsedAt.Equal(base.Add(30 * time.Second)) {
+		t.Fatalf("去重应保留较新的 LastUsedAt：%v", items[1].LastUsedAt)
+	}
+	if items[1].Bytes == 0 {
+		t.Fatal("Restore 应重算 Bytes")
+	}
+}
+
+func TestRestoreTrimsAndMergesPinned(t *testing.T) {
+	base := time.Unix(200, 0)
+	s := New(1)
+	s.Restore([]Item{
+		{Text: "a", LastUsedAt: base.Add(1 * time.Second)},
+		{Text: "b", LastUsedAt: base.Add(2 * time.Second)},
+		{Text: "c", LastUsedAt: base.Add(3 * time.Second)},
+		{Text: "d", LastUsedAt: base.Add(4 * time.Second)},
+		{Text: "b", Pinned: true, LastUsedAt: base.Add(5 * time.Second)},
+	})
+	if got := strings.Join(texts(s.Items()), ","); got != "b,d" {
+		t.Fatalf("顺序=%s，期望 b,d（b 置顶且取并集，d 最新；c/a 超条数）", got)
+	}
+	it := s.Items()[0]
+	if !it.Pinned || !it.LastUsedAt.Equal(base.Add(5*time.Second)) {
+		t.Fatalf("去重应合并 pinned 与更新时间：%+v", it)
+	}
+}
+
+func TestRestoreReplacesExisting(t *testing.T) {
+	s := New(5)
+	add(t, s, Payload{Text: "memory-only"}, 1)
+	s.Restore([]Item{{Text: "from-disk", LastUsedAt: time.Unix(50, 0)}})
+	if got := strings.Join(texts(s.Items()), ","); got != "from-disk" {
+		t.Fatalf("Restore 应整体替换，实际 %s", got)
+	}
+}

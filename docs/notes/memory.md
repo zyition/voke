@@ -56,6 +56,9 @@
   - 面板隐藏 10 秒后把解码缓存裁到 64 条（设置窗打开时跳过）。
 - **面板窗口关闭 resize / vibrancy / transparent**：`DisableResize: true`，
   `Vibrancy` 留空、`Transparent` 关闭，避免额外的合成缓冲和 resize 重建。
+- **剪贴板持久化库有界**：开启 `[clipboard] persist` 后 `clipboard.db` 与内存同一套
+  预算（64MiB 总字节、条数上限、置顶 10 条），每次写入按内存 id 对账删除淘汰行，
+  不会随使用时长无限增长。
 - **构建期 `mygo_noinspector`**：不打包 inspector，减小二进制与运行时开销。
 - **构建期 `mygo_nowebview`**：两个窗口都是原生 UI，不打包 WebView2 后端
   （不再引用 `WebView2Loader.dll`），交付 exe 约小 0.5MB。

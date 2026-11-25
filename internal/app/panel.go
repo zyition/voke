@@ -174,8 +174,11 @@ type appState struct {
 	// GPU 设备类型归因加）：由 view.go 根元素的 Draw 回调在首帧绘制时
 	// 落位，见该处注释为何不能复用 shownOnce。
 	gpuDiagOnce bool
-	// hist 是剪贴板内存历史（主线程专用）。ready() 建，退出即清，不持久化。
+	// hist 是剪贴板内存历史（主线程专用）。ready() 建；可选落盘见 clipPersist。
 	hist *cliphist.Store
+	// clipPersist 是可选 SQLite 持久化的后台写库器（默认关闭）。主线程读写
+	// 指针；真正写库在它自己的 goroutine（见 clippersist.go）。
+	clipPersist *clipPersist
 	// clipSeq 是最近一次已处理的剪贴板序列号；程序化写入后同步置位，用于抑制
 	// 自己写剪贴板又被监控采集（例如「纯文本粘贴」降级出的新条目）。
 	clipSeq atomic.Uint32
@@ -255,6 +258,8 @@ func (st *appState) ready() {
 	st.cursorPoint = platform.CursorScreenPoint
 	// 剪贴板内存历史：条数上限来自顶层 `[clipboard] max_entries`，未写则默认 100。
 	st.hist = cliphist.New(clipboardMaxEntries(loaded))
+	// 可选持久化：开启时读回上次历史；关闭时清掉残留库（启动只做一次）。
+	st.initClipboardPersistence(loaded)
 	// 已落地 provider 注册表 + 进程内频率表（装配一次）。剪贴板 provider 接
 	// 真实历史快照闭包（cliphist.Store 自带锁，可从查询线程读）；数据型 provider
 	// 的 TTL 失效句柄登记进 st.snaps 供面板唤起时统一失效。

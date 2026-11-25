@@ -125,12 +125,21 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
   （`voke.exe --elevated-paste <hwnd> <gui|terminal>`）代为粘贴。辅助进程只发粘贴键、
   不发送回车，并复核目标确为管理员进程；UAC 取消或辅助进程失败时回退为“已复制，
   请手动粘贴”。同一套 `platform.RunElevated` 也用于终端的“以管理员身份打开”。
-历史**不持久化**，退出即清；`[clipboard] max_entries` 在设置页可改。
+历史默认**持久化**：写入 `%APPDATA%\voke\clipboard.db`（SQLite，单表 `clips`，启动时
+按内容哈希合并内存历史；后台单线程增量写，主线程不做磁盘 IO）。设置页「持久化存储」
+或 `[clipboard] persist = false` 可关闭；关闭会删除库文件，历史退回纯内存、退出即清。
+预算仍由 cliphist 控制（64MiB / 条数上限），写库时按内存 id 集合对账，不会无限增长。
+
+不加密：SQLCipher / SEE 分别需要 cgo+OpenSSL 与商业授权，都会破坏纯 Go 交叉构建；
+本机单用户场景沿用 Ditto 等主流剪贴板工具的明文 SQLite + 用户目录 ACL。敏感标记 /
+文件列表在采集层直接跳过，不进入内存历史，也就不会落盘。
+
+`[clipboard] max_entries` / `persist` 均可在设置页修改。
 
 ## 5. 配置
 
 - 路径：`%APPDATA%\voke\config.toml`（与旧 Rust 版同格式，可互相读取）。
-- 顶层：`hotkey` / `autostart` / `theme` / `language` / `[clipboard] max_entries`
+- 顶层：`hotkey` / `autostart` / `theme` / `language` / `[clipboard] max_entries` / `[clipboard] persist`
   （默认 100，范围 1–1000）。`language` 取 `system`（默认）/ `zh` / `en`。
 - 插件节：`[providers.<id>]`，字段 `enabled` / `is_global` / `weight` / `prefix` /
   `activation` / `count` / `hotkey`；未写字段回落 Descriptor 默认。`hotkey` 未写时

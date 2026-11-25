@@ -145,7 +145,10 @@ type settingsWindow struct {
 	theme        string
 	language     string
 	clipboardMax float64 // 剪贴板上限（1–1000），落盘前转 int
-	edits        []providerEdit
+	// clipboardPersist 是剪贴板历史的持久化开关（默认开）；变化经 applySettings
+	// 落盘并触发 reloadConfigs → syncClipboardPersistence。
+	clipboardPersist bool
+	edits            []providerEdit
 	// closed 防重复进入销毁流程：OnClose 与「完成」按钮可能先后触发；销毁本身
 	// 经 Window.Update 延到当前帧之后执行。
 	closed bool
@@ -263,6 +266,7 @@ func (st *appState) seedSettings(s *settingsWindow) {
 	s.theme = themeLabel(st.cfg.Theme)
 	s.language = languageLabel(st.cfg.Language)
 	s.clipboardMax = float64(clipboardMaxEntries(st.cfg))
+	s.clipboardPersist = clipboardPersistEnabled(st.cfg)
 	s.edits = s.edits[:0]
 	for _, p := range st.providers.Providers {
 		ed := providerEdit{
@@ -837,6 +841,13 @@ func (st *appState) settingsProviderCard(c *ui.Context, s *settingsWindow, p *pr
 							st.applySettings()
 						}
 					})
+				settingsRow(c, i18n.L("持久化存储", "Persist history"),
+					i18n.L("重启后保留历史；关闭会删除已保存的数据", "Keep history across restarts; turning it off deletes saved data"), func() {
+						ui.Spacer(c)
+						if ui.Switch(c, &s.clipboardPersist).Changed() {
+							st.applySettings()
+						}
+					})
 			}
 			if p.id == random.ID {
 				settingsRow(c, i18n.L("默认长度", "Default length"),
@@ -1102,9 +1113,11 @@ func (st *appState) applySettings() {
 		clipMax = cliphist.MaxMaxEntries
 	}
 	langPref := languageCode(s.language)
+	persist := s.clipboardPersist
 	top := appcfg.Top{
 		Hotkey: hotkey, Autostart: autostart, Theme: themeCode(s.theme),
 		Language: langPref, ClipboardMaxEntries: clipMax,
+		ClipboardPersist: &persist,
 	}
 
 	if err := saveConfig(top, overrides); err != nil {
@@ -1118,6 +1131,7 @@ func (st *appState) applySettings() {
 	// 历史上限即时生效：超出新上限的普通条目当场淘汰（置顶不计入）。
 	if st.hist != nil {
 		st.hist.SetMaxEntries(clipMax)
+		st.persistClipReconcile() // 条数上限变小 → 库里同步删掉被淘汰的行
 		if st.isClipboardPlugin() {
 			st.refreshClipboardRows()
 		}

@@ -106,10 +106,12 @@ func (st *appState) captureClipboard() {
 		}
 		st.clipSuppressUntil = time.Time{}
 	}
-	if _, err := st.hist.Add(cliphist.Payload{Text: p.Text, HTML: string(p.HTML), RTF: p.RTF, PNG: p.PNG}, time.Now()); err != nil {
+	it, err := st.hist.Add(cliphist.Payload{Text: p.Text, HTML: string(p.HTML), RTF: p.RTF, PNG: p.PNG}, time.Now())
+	if err != nil {
 		// 空内容 / 超上限是预期跳过，不刷日志；其它错误同样不应打断面板。
 		return
 	}
+	st.persistClipUpsert(it)
 	if st.isClipboardPlugin() && st.panel != nil && st.panel.IsVisible() {
 		st.refreshClipboardRows()
 	}
@@ -262,11 +264,14 @@ func (st *appState) toggleClipboardPin(ref string) {
 		return
 	}
 	if it.Pinned {
-		st.hist.Unpin(ref)
+		if !st.hist.Unpin(ref) {
+			return
+		}
 	} else if !st.hist.Pin(ref) {
 		st.setNotice(i18n.L("置顶最多 10 条，请先取消一条", "At most 10 pinned items—unpin one first"))
 		return
 	}
+	st.persistClipItem(ref)
 	st.refreshClipboardRows()
 }
 
@@ -278,6 +283,7 @@ func (st *appState) deleteClipboardItem(ref string) {
 	if !st.hist.Delete(ref) {
 		return
 	}
+	st.persistClipReconcile()
 	st.refreshClipboardRows()
 }
 
