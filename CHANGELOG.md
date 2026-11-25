@@ -4,6 +4,21 @@
 > (grouping rules in `cliff.toml`, release process in `AGENTS.md`). Do not edit manually.
 > Entries up to v0.6.0 are kept in Chinese; later entries are English, optionally bilingual.
 
+## [0.9.2] - 2026-11-25
+
+### Features
+
+- Use mygo clipboard change events and drop WebView2
+- Disable plugins whose host app is missing
+- Persist clipboard history in SQLite
+
+### Refactoring
+
+- Probe plugin requirements only on manual enable
+
+### Tests
+
+- Cover clipboard persistence trim reconciliation
 ## [0.9.0] - 2026-11-16
 
 ### Features
