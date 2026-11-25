@@ -131,6 +131,9 @@ prefixes require the prefix plus one space.
 | `random` | Random integers / strings with configurable character sets and default length, with regenerate | `@r` + space (Indirect) |
 | `clipboard` | Clipboard history (text / HTML / RTF / images; paste, plain-text paste, pin, delete) | `@c` (Direct), default shortcut ``Alt+` `` |
 
+`terminal`, `vscode`, and `zed` are disabled while their host app is not installed; the settings
+page shows the missing app and a link to its official download / install docs.
+
 > `#` is reserved for the plugin picker. Plugin prefixes live under the `@` namespace to avoid a
 > short prefix shadowing a longer one. Settings rejects prefixes that are prefixes of each other;
 > legacy `#b/#u/#t/#r` values are migrated to the new defaults on load.

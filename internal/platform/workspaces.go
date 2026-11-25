@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -339,6 +340,14 @@ func VSCodeCommand() *EditorCmd {
 	}
 	return nil
 }
+
+// ZedInstalled 判断 Zed 是否可用于本插件：能在安装根目录 / PATH / App Paths
+// 找到 Zed 命令。非 Windows 恒 false（工作区插件只服务 Windows 桌面）。
+func ZedInstalled() bool { return runtime.GOOS == "windows" && ZedCommand() != nil }
+
+// VSCodeInstalled 判断 VS Code（含 Insiders）是否可用于本插件。判据与启动命令
+// 发现一致：命令都找不到时，插件只能退化成「用默认程序打开路径」，不算可用。
+func VSCodeInstalled() bool { return runtime.GOOS == "windows" && VSCodeCommand() != nil }
 
 // cmdWrapper：执行 `.cmd` 必须经 COMSPEC /c（理由见 EditorCmd）。
 func cmdWrapper(cli string) *EditorCmd {

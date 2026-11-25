@@ -785,6 +785,8 @@ func (st *appState) reloadConfigs() {
 	if err != nil {
 		log.Printf("voke 重载配置退回纯全局模式：%v", err)
 	}
+	// 环境依赖不满足的插件按停用处理（与 ready 同一判据），再下发到 provider 实例。
+	cfg, table = applyPluginAvailability(cfg, pluginRequirements())
 	old := st.providers
 	// 配置写进 live provider 实例：SetConfig 必须与查询线程的 Query/Config 串行
 	// （否则并发读写 config 字段），经 runner.sync 排进查询线程执行。再推进世代

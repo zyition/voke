@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
 )
 
 // ReadTerminalSettings 读出 %LOCALAPPDATA% 下**存在的** settings.json：两包（stable
@@ -41,10 +42,8 @@ func appendSettings(out []TerminalSource, path, aumid string) []TerminalSource {
 	return append(out, TerminalSource{Contents: string(b), AUMID: aumid})
 }
 
-// WTExe 返回 wt.exe 完整路径（App Activation 失败兜底直启用）。先试 MSIX 的 App
-// Execution Alias；未打包版（没有 alias）再查 PATH（注册表当前值，Scoop / winget
-// shim 在这里）与 App Paths；都找不到才退回裸 "wt.exe" 交给 CreateProcess。
-func WTExe() string {
+// findWTExe 返回可执行的 wt.exe 完整路径；都找不到返回 ""。
+func findWTExe() string {
 	if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
 		if p := WTExePath(localAppData); fileExists(p) {
 			return p
@@ -53,8 +52,37 @@ func WTExe() string {
 	if p := findExecutableInDirs(pathDirs(), "wt.exe"); p != "" {
 		return p
 	}
-	if p := appPathExe("wt.exe"); p != "" {
+	return appPathExe("wt.exe")
+}
+
+// WTExe 返回 wt.exe 完整路径（App Activation 失败兜底直启用）。先试 MSIX 的 App
+// Execution Alias；未打包版（没有 alias）再查 PATH（注册表当前值，Scoop / winget
+// shim 在这里）与 App Paths；都找不到才退回裸 "wt.exe" 交给 CreateProcess。
+func WTExe() string {
+	if p := findWTExe(); p != "" {
 		return p
 	}
 	return "wt.exe"
+}
+
+// WindowsTerminalInstalled 判断 Windows Terminal 是否可用于本插件：
+//   - 能找到 wt.exe（App Execution Alias / PATH / App Paths）→ 可直启；
+//   - 或 MSIX 包的数据目录存在 → 即使 alias 被用户关掉，仍能按 AUMID 激活。
+//
+// 未打包版若 wt.exe 不在 PATH / App Paths，voke 无法启动它，按未安装处理。
+func WindowsTerminalInstalled() bool {
+	if findWTExe() != "" {
+		return true
+	}
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData == "" {
+		return false
+	}
+	for _, pkg := range WTPackages() {
+		p := filepath.Join(localAppData, "Packages", pkg)
+		if st, err := os.Stat(p); err == nil && st.IsDir() {
+			return true
+		}
+	}
+	return false
 }

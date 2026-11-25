@@ -8,3 +8,6 @@ func ReadTerminalSettings() []TerminalSource { return nil }
 
 // WTExe 非 Windows：无 App Execution Alias，退回裸名（真机上这条不会被执行到）。
 func WTExe() string { return "wt.exe" }
+
+// WindowsTerminalInstalled 非 Windows：Windows Terminal 是 Windows 概念，恒未安装。
+func WindowsTerminalInstalled() bool { return false }

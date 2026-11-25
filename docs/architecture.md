@@ -107,6 +107,11 @@ type Provider interface {
 
 Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可编辑**。
 
+外部软件依赖：`terminal` / `vscode` / `zed` 在启动与配置重载时探测对应软件是否安装
+（`wt.exe` 发现、编辑器命令发现，见 `internal/platform/terminal_windows.go` /
+`workspaces.go`）。未安装时插件按停用处理（只影响本次运行，不改写 `config.toml`），
+设置页开关回弹并在卡片上给出官方安装 / 下载链接（`internal/app/pluginreq.go`）。
+
 剪贴板历史的运行时分工：
 - `internal/logic/cliphist`：内存态有界存储（默认 100 条、上限 1000、置顶最多 10 条
   不占普通名额、总预算 64MiB、单图 16MiB、富文本 1MiB），SHA-256 去重、FIFO 淘汰、

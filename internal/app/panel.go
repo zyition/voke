@@ -219,6 +219,9 @@ func (st *appState) ready() {
 			log.Printf("voke 前缀表装配失败，退回纯全局模式（不打前缀）：%v", err)
 		}
 	}
+	// 环境依赖：没装 Windows Terminal / VS Code / Zed 的插件按停用处理（只影响本次
+	// 运行的生效配置，不改写 config.toml），前缀表随之重建。设置页另有安装入口。
+	providers, table = applyPluginAvailability(providers, pluginRequirements())
 	st.providers, st.table = providers, table
 	st.cfg = loaded // 供设置窗 seed 当前热键 / 自启 / 主题
 	// 顶层设置：热键（配置里有且可解析才覆盖默认）+ 开机自启（注册表 Run 键）+ 主题。

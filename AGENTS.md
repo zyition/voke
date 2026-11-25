@@ -176,6 +176,10 @@ ISCC 用 `-dVokeVersion` 覆盖安装器 AppVersion 与产物文件名。手动 
   `@b/@t/@r/@u` 为 Indirect。旧配置加载时只丢弃冲突项的 Prefix
   覆盖，设置页保存前同一套校验——`internal/logic/config/prefix.go`、
   `internal/app/providers.go`、`internal/app/settings.go`。
+- 插件环境依赖：`terminal` / `vscode` / `zed` 启动与配置重载时探测软件是否安装
+  （`wt.exe` / 编辑器命令发现，`internal/platform/terminal_windows.go`、`workspaces.go`）；
+  缺失则按停用处理（不改写 config.toml），设置页开关回弹并给官方安装链接——
+  `internal/app/pluginreq.go`。
 
 ## AI skill 约定（面向 AI agent）
 
