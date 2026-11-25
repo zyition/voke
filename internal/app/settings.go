@@ -114,9 +114,8 @@ type providerEdit struct {
 	prefix      string
 	activation  string // 显示值（本地化后的 Direct / Indirect 标签），save 时映射回 "direct"/"indirect"
 	hotkey      string // 插件全局快捷键；空 = 未绑定
-	// available / software / installURL 仅对声明了环境依赖的插件有意义（见
-	// pluginreq.go）：available=false 时开关回弹，卡片上给出软件名与安装链接。
-	available  bool
+	// 仅记录用户尝试启用时探测失败的原因；打开设置页不主动探测（失败后再显示）。
+	unmet      bool
 	software   string
 	installURL string
 	// defaultLength 仅随机值插件使用：字符集未单独设置长度时的默认值。
@@ -265,23 +264,12 @@ func (st *appState) seedSettings(s *settingsWindow) {
 	s.language = languageLabel(st.cfg.Language)
 	s.clipboardMax = float64(clipboardMaxEntries(st.cfg))
 	s.edits = s.edits[:0]
-	reqs := pluginRequirements()
 	for _, p := range st.providers.Providers {
-		req, required := reqs[p.ID]
 		ed := providerEdit{
 			id: p.ID, name: p.Name, description: p.Description,
 			enabled: p.Enabled, isGlobal: p.IsGlobal,
 			weight: p.Weight, prefix: p.Prefix, activation: activationLabel(p.Activation),
-			hotkey:    p.Hotkey,
-			available: true,
-		}
-		if required {
-			// 每次开设置窗现测：用户可能刚装好软件，无需重启 voke 就能打开开关。
-			ed.available = req.probe()
-			ed.software, ed.installURL = req.software, req.url
-			if !ed.available {
-				ed.enabled = false // 与本次运行的生效态一致，避免开关显示开着却不可用
-			}
+			hotkey: p.Hotkey,
 		}
 		if p.ID == random.ID {
 			ed.defaultLength = float64(p.DefaultLength)
@@ -751,24 +739,26 @@ func (st *appState) settingsProviderCard(c *ui.Context, s *settingsWindow, p *pr
 			})
 			if ui.Switch(c, &p.enabled).Changed() {
 				if p.enabled {
-					// 启用前现测环境（用户可能刚装好软件）：不满足就回弹、不落盘，
-					// 卡片下方给出原因与安装入口。
+					// 只在用户手动启用时现测环境：不满足就回弹、不落盘，卡片下方
+					// 给出缺失的软件与官方安装入口。
 					if req, required := pluginRequirements()[p.id]; required {
 						if !req.probe() {
 							p.enabled = false
+							p.unmet = true
+							p.software, p.installURL = req.software, req.url
 							return
 						}
-						p.available, p.software, p.installURL = true, req.software, req.url
 					}
 				}
+				p.unmet = false
 				st.applySettings()
 			}
 		})
-		if !p.available {
+		if p.unmet {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, fmt.Sprintf(
-					i18n.L("未检测到 %s，插件已自动停用；安装后重新打开设置即可启用。",
-						"%s was not found, so this plugin is disabled. Reopen settings after installing it."),
+					i18n.L("未检测到 %s，插件未启用；安装后可重新启用。",
+						"%s was not found, so this plugin stays disabled. Install it, then enable again."),
 					p.software)).
 					FontSize(theme.HintSize).TextColor(t.Danger).Grow(1)
 				ui.Link(c, i18n.L("安装文档 / 下载", "Install / download"), p.installURL).
