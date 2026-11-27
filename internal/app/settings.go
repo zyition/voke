@@ -148,7 +148,10 @@ type settingsWindow struct {
 	// clipboardPersist 是剪贴板历史的持久化开关（默认开）；变化经 applySettings
 	// 落盘并触发 reloadConfigs → syncClipboardPersistence。
 	clipboardPersist bool
-	edits            []providerEdit
+	// clipboardMoveToTop 是「粘贴后移至顶部」开关（默认开）；落盘后粘贴路径直接从
+	// st.cfg 读回，不需要额外的运行时同步。
+	clipboardMoveToTop bool
+	edits              []providerEdit
 	// closed 防重复进入销毁流程：OnClose 与「完成」按钮可能先后触发；销毁本身
 	// 经 Window.Update 延到当前帧之后执行。
 	closed bool
@@ -267,6 +270,7 @@ func (st *appState) seedSettings(s *settingsWindow) {
 	s.language = languageLabel(st.cfg.Language)
 	s.clipboardMax = float64(clipboardMaxEntries(st.cfg))
 	s.clipboardPersist = clipboardPersistEnabled(st.cfg)
+	s.clipboardMoveToTop = clipboardMoveToTopEnabled(st.cfg)
 	s.edits = s.edits[:0]
 	for _, p := range st.providers.Providers {
 		ed := providerEdit{
@@ -848,6 +852,14 @@ func (st *appState) settingsProviderCard(c *ui.Context, s *settingsWindow, p *pr
 							st.applySettings()
 						}
 					})
+				settingsRow(c, i18n.L("粘贴后移至顶部", "Move to top after paste"),
+					i18n.L("从历史粘贴后，把该条目移到普通历史最前；置顶条目仍在它上面",
+						"After pasting from history, move the item to the top of the list. Pinned items stay above it"), func() {
+						ui.Spacer(c)
+						if ui.Switch(c, &s.clipboardMoveToTop).Changed() {
+							st.applySettings()
+						}
+					})
 			}
 			if p.id == random.ID {
 				settingsRow(c, i18n.L("默认长度", "Default length"),
@@ -1114,10 +1126,12 @@ func (st *appState) applySettings() {
 	}
 	langPref := languageCode(s.language)
 	persist := s.clipboardPersist
+	moveToTop := s.clipboardMoveToTop
 	top := appcfg.Top{
 		Hotkey: hotkey, Autostart: autostart, Theme: themeCode(s.theme),
 		Language: langPref, ClipboardMaxEntries: clipMax,
-		ClipboardPersist: &persist,
+		ClipboardPersist:   &persist,
+		ClipboardMoveToTop: &moveToTop,
 	}
 
 	if err := saveConfig(top, overrides); err != nil {

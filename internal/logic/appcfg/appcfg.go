@@ -57,7 +57,11 @@ type Loaded struct {
 	// 上层按默认开启处理（设置页可显式关闭）。
 	ClipboardPersist    bool
 	HasClipboardPersist bool
-	Overrides           []config.UserOverride
+	// ClipboardMoveToTop 是「粘贴后移至顶部」开关；HasClipboardMoveToTop=false
+	// 表示没写，上层按默认开启处理。
+	ClipboardMoveToTop    bool
+	HasClipboardMoveToTop bool
+	Overrides             []config.UserOverride
 }
 
 // providerPatch 是单个 provider 的部分覆盖（指针字段：nil = 没写；omitempty 让没写的不落盘）。
@@ -99,10 +103,11 @@ type configFile struct {
 	Providers map[string]providerPatch `json:"providers" toml:"providers"`
 }
 
-// clipboardPatch 是 `[clipboard]` 表（历史条数上限 + 是否持久化）。
+// clipboardPatch 是 `[clipboard]` 表（历史条数上限 + 是否持久化 + 粘贴后是否置顶）。
 type clipboardPatch struct {
 	MaxEntries *int  `json:"max_entries,omitempty" toml:"max_entries,omitempty"`
 	Persist    *bool `json:"persist,omitempty" toml:"persist,omitempty"`
+	MoveToTop  *bool `json:"move_to_top,omitempty" toml:"move_to_top,omitempty"`
 }
 
 // FromJSON 解码配置字节。坏 JSON → 返回 error（调用方据此回落默认，对照 Rust
@@ -155,6 +160,9 @@ func decodeFile(f configFile) Loaded {
 	}
 	if f.Clipboard != nil && f.Clipboard.Persist != nil {
 		out.ClipboardPersist, out.HasClipboardPersist = *f.Clipboard.Persist, true
+	}
+	if f.Clipboard != nil && f.Clipboard.MoveToTop != nil {
+		out.ClipboardMoveToTop, out.HasClipboardMoveToTop = *f.Clipboard.MoveToTop, true
 	}
 
 	// provider 覆盖按 id 稳定序输出（map 无序 → 排序保证 Normalize 的警告 / 错误确定）。
@@ -268,6 +276,9 @@ type Top struct {
 	// ClipboardPersist 非 nil 时落 `[clipboard] persist = <bool>`；nil = 不写该键
 	// （缺键在 app 层按默认开启处理）。
 	ClipboardPersist *bool
+	// ClipboardMoveToTop 非 nil 时落 `[clipboard] move_to_top = <bool>`；nil = 不写
+	// 该键（缺键在 app 层按默认开启处理）。
+	ClipboardMoveToTop *bool
 }
 
 // Encode 把顶层设置 + provider 覆盖序列化回 **TOML**（与生产 config.toml 同形：
@@ -290,8 +301,8 @@ func Encode(top Top, overrides []config.UserOverride) ([]byte, error) {
 		Language:  &languageStr,
 		Providers: map[string]providerPatch{},
 	}
-	if top.ClipboardMaxEntries > 0 || top.ClipboardPersist != nil {
-		patch := &clipboardPatch{Persist: top.ClipboardPersist}
+	if top.ClipboardMaxEntries > 0 || top.ClipboardPersist != nil || top.ClipboardMoveToTop != nil {
+		patch := &clipboardPatch{Persist: top.ClipboardPersist, MoveToTop: top.ClipboardMoveToTop}
 		if top.ClipboardMaxEntries > 0 {
 			maxEntries := top.ClipboardMaxEntries
 			patch.MaxEntries = &maxEntries

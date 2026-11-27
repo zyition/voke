@@ -428,3 +428,40 @@ func TestMergeAppliesCharsetOverride(t *testing.T) {
 		t.Errorf("用户字符集应整份替换默认值：%+v", p.Charsets)
 	}
 }
+
+func TestClipboardMoveToTopRoundtrip(t *testing.T) {
+	// 未写 move_to_top：Has=false，由 app 层按默认开启处理。
+	plain, err := FromTOML([]byte("[clipboard]\npersist = true\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.HasClipboardMoveToTop {
+		t.Fatalf("未写 move_to_top 时不应有显式值：%+v", plain)
+	}
+
+	// 显式 false 必须写出来：缺键 = 默认开启，省略会把「关」读成「开」。
+	off := false
+	data, err := Encode(Top{ClipboardMoveToTop: &off}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "[clipboard]") || !strings.Contains(string(data), "move_to_top = false") {
+		t.Fatalf("落盘应有 [clipboard] move_to_top = false：\n%s", data)
+	}
+	back, err := FromTOML(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !back.HasClipboardMoveToTop || back.ClipboardMoveToTop {
+		t.Fatalf("关闭态回读不对：%+v", back)
+	}
+
+	// 不写该键时不得凭空落盘。
+	data, err = Encode(Top{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "move_to_top") {
+		t.Fatalf("未设置时不应写 move_to_top：\n%s", data)
+	}
+}

@@ -134,13 +134,16 @@ Aliases 由 Descriptor 固定用于 picker 过滤，**不在用户配置里可�
 本机单用户场景沿用 Ditto 等主流剪贴板工具的明文 SQLite + 用户目录 ACL。敏感标记 /
 文件列表在采集层直接跳过，不进入内存历史，也就不会落盘。
 
-`[clipboard] max_entries` / `persist` 均可在设置页修改。
+`[clipboard] max_entries` / `persist` / `move_to_top` 均可在设置页修改。`move_to_top`
+默认开启：从历史粘贴（含无目标窗口的「仅复制」回退）后，普通条目更新 `LastUsedAt`
+并移到普通区最前；置顶条目不动，因此不会越过置顶组。变化经 `persistClipUpsert`
+落盘，重启后顺序保持。
 
 ## 5. 配置
 
 - 路径：`%APPDATA%\voke\config.toml`（与旧 Rust 版同格式，可互相读取）。
-- 顶层：`hotkey` / `autostart` / `theme` / `language` / `[clipboard] max_entries` / `[clipboard] persist`
-  （默认 100，范围 1–1000）。`language` 取 `system`（默认）/ `zh` / `en`。
+- 顶层：`hotkey` / `autostart` / `theme` / `language` / `[clipboard] max_entries` / `[clipboard] persist` / `[clipboard] move_to_top`
+  （`max_entries` 默认 100，范围 1–1000）。`language` 取 `system`（默认）/ `zh` / `en`。
 - 插件节：`[providers.<id>]`，字段 `enabled` / `is_global` / `weight` / `prefix` /
   `activation` / `count` / `hotkey`；未写字段回落 Descriptor 默认。`hotkey` 未写时
   回落 `Descriptor.DefaultHotkey`（目前只有剪贴板有默认值 ``Alt+` ``，其余为空 = 不绑定）。

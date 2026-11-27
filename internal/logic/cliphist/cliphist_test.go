@@ -244,3 +244,53 @@ func TestRestoreReplacesExisting(t *testing.T) {
 		t.Fatalf("Restore 应整体替换，实际 %s", got)
 	}
 }
+
+// TestPromoteMovesUnpinnedOnly 锁「粘贴后移至顶部」的语义：普通条目提到普通区
+// 最前并刷新 LastUsedAt；置顶条目的位置与时间都不动（不能越过置顶）。
+func TestPromoteMovesUnpinnedOnly(t *testing.T) {
+	s := New(10)
+	a := add(t, s, Payload{Text: "a"}, 1)
+	b := add(t, s, Payload{Text: "b"}, 2)
+	add(t, s, Payload{Text: "c"}, 3) // 普通区：[c,b,a]
+	if !s.Pin(b.ID) {
+		t.Fatal("置顶 b 失败")
+	}
+	if got := strings.Join(texts(s.Items()), ","); got != "b,c,a" {
+		t.Fatalf("置顶后顺序 = %q，想要 b,c,a", got)
+	}
+
+	// 提升普通条目 a：去普通区最前，仍在置顶 b 之后。
+	promoted, changed := s.Promote(a.ID, time.Unix(10, 0))
+	if !changed || promoted.Text != "a" {
+		t.Fatalf("Promote(a) = %+v,%v，想要 a,true", promoted, changed)
+	}
+	if got := strings.Join(texts(s.Items()), ","); got != "b,a,c" {
+		t.Fatalf("提升后顺序 = %q，想要 b,a,c", got)
+	}
+	if !promoted.LastUsedAt.Equal(time.Unix(10, 0)) {
+		t.Fatalf("LastUsedAt = %v，想要 10", promoted.LastUsedAt)
+	}
+
+	// 已经最前也更新 LastUsedAt（持久化按它排序），顺序不变。
+	again, changed := s.Promote(a.ID, time.Unix(11, 0))
+	if !changed || !again.LastUsedAt.Equal(time.Unix(11, 0)) {
+		t.Fatalf("重复提升 = %+v,%v，想要新时间且 changed", again, changed)
+	}
+	if got := strings.Join(texts(s.Items()), ","); got != "b,a,c" {
+		t.Fatalf("重复提升后顺序 = %q，想要 b,a,c", got)
+	}
+
+	// 置顶条目不参与：位置与 LastUsedAt 都不动。
+	before := s.Items()[0]
+	if got, changed := s.Promote(b.ID, time.Unix(12, 0)); changed || !got.LastUsedAt.Equal(before.LastUsedAt) {
+		t.Fatalf("置顶条目被提升 = %+v,%v，期望 completely 不变", got, changed)
+	}
+	if got := strings.Join(texts(s.Items()), ","); got != "b,a,c" {
+		t.Fatalf("提升置顶条目后顺序 = %q，想要 b,a,c", got)
+	}
+
+	// 未知 id 不产生变化。
+	if _, changed := s.Promote("nope", time.Unix(13, 0)); changed {
+		t.Fatal("未知 id 不应报告变化")
+	}
+}

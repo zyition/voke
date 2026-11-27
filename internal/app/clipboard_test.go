@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"strings"
 	"testing"
 	"time"
 
@@ -173,5 +174,69 @@ func TestClipboardMaxEntriesFallbacks(t *testing.T) {
 		if got := clipboardMaxEntries(c.in); got != c.want {
 			t.Errorf("%s：得到 %d，想要 %d", c.name, got, c.want)
 		}
+	}
+}
+
+// TestClipboardMoveToTopDefaultAndExplicitOff 锁默认值：缺键 = 开启，只有显式
+// false 才关闭（避免配置损坏回落默认时把功能误关）。
+func TestClipboardMoveToTopDefaultAndExplicitOff(t *testing.T) {
+	if !clipboardMoveToTopEnabled(appcfg.Loaded{}) {
+		t.Fatal("缺 [clipboard] move_to_top 时应默认开启")
+	}
+	if clipboardMoveToTopEnabled(appcfg.Loaded{HasClipboardMoveToTop: true, ClipboardMoveToTop: false}) {
+		t.Fatal("显式 false 应关闭")
+	}
+	if !clipboardMoveToTopEnabled(appcfg.Loaded{HasClipboardMoveToTop: true, ClipboardMoveToTop: true}) {
+		t.Fatal("显式 true 应开启")
+	}
+}
+
+// TestPromoteAfterPasteRespectsSwitch 锁粘贴后提权的接线：开关缺省开启、显式
+// false 时完全不动，置顶条目即使开关开着也不越过置顶组。
+func TestPromoteAfterPasteRespectsSwitch(t *testing.T) {
+	st := &appState{hist: cliphist.New(10)}
+	push := func(text string, at int) cliphist.Item {
+		t.Helper()
+		it, err := st.hist.Add(cliphist.Payload{Text: text}, time.Unix(int64(at), 0))
+		if err != nil {
+			t.Fatalf("Add(%s) 失败：%v", text, err)
+		}
+		return it
+	}
+	order := func() string {
+		items := st.hist.Items()
+		names := make([]string, len(items))
+		for i := range items {
+			names[i] = items[i].Text
+		}
+		return strings.Join(names, ",")
+	}
+
+	a := push("a", 1)
+	b := push("b", 2)
+	c := push("c", 3) // 普通区：[c,b,a]
+
+	// 缺键 = 默认开启：a 提到最前。
+	st.promoteClipboardAfterPaste(a.ID)
+	if got := order(); got != "a,c,b" {
+		t.Fatalf("默认开启时顺序 = %q，想要 a,c,b", got)
+	}
+
+	// 显式关闭：b 原地不动。
+	st.cfg = appcfg.Loaded{HasClipboardMoveToTop: true, ClipboardMoveToTop: false}
+	st.promoteClipboardAfterPaste(b.ID)
+	if got := order(); got != "a,c,b" {
+		t.Fatalf("关闭后顺序 = %q，想要 a,c,b（不动）", got)
+	}
+
+	// 重新开启后置顶条目仍不参与：c 置顶后不因粘贴而移动。
+	st.cfg = appcfg.Loaded{}
+	if !st.hist.Pin(c.ID) {
+		t.Fatal("置顶 c 失败")
+	}
+	before := order()
+	st.promoteClipboardAfterPaste(c.ID)
+	if got := order(); got != before {
+		t.Fatalf("置顶条目被移动：%q → %q", before, got)
 	}
 }

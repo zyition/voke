@@ -357,6 +357,24 @@ func (s *Store) Unpin(id string) bool {
 	return true
 }
 
+// Promote 在「粘贴后移至顶部」开启时提升一条普通历史：更新 LastUsedAt 并挪到
+// 普通区最前。置顶条目不参与——它已在整个列表之上，挪动只会打乱置顶顺序，
+// 因此原样返回 changed=false。返回的 Item 供调用方落盘（last_used_at 已变）。
+func (s *Store) Promote(id string, now time.Time) (Item, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	it := s.byID[id]
+	if it == nil {
+		return Item{}, false
+	}
+	if it.Pinned {
+		return *it, false
+	}
+	it.LastUsedAt = now
+	s.moveUnpinnedFront(it)
+	return *it, true
+}
+
 // Delete 删除一条；返回是否存在。
 func (s *Store) Delete(id string) bool {
 	s.mu.Lock()

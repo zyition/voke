@@ -117,9 +117,48 @@ func (st *appState) captureClipboard() {
 	}
 }
 
-// isClipboardPlugin 报告当前是否落在剪贴板插件态。
+// isClipboardPlugin 报告当前是否停在剪贴板插件态。
 func (st *appState) isClipboardPlugin() bool {
 	return st.providerActive() && st.engineState.PluginID() == providerClipboardID
+}
+
+// clipboardMoveToTopEnabled 读「粘贴后移至顶部」开关：没写 [clipboard]
+// move_to_top 时默认开启（剪贴板管理器的主流默认，与持久化一致）。
+func clipboardMoveToTopEnabled(loaded appcfg.Loaded) bool {
+	if !loaded.HasClipboardMoveToTop {
+		return true
+	}
+	return loaded.ClipboardMoveToTop
+}
+
+// promoteClipboardAfterPaste 实现「粘贴后移至顶部」：开关关闭时不做任何事；
+// 普通条目更新 LastUsedAt、挪到普通区最前并落盘，置顶条目不动（Promote 内部
+// 拒绝，避免越过置顶组）。仅复制 / 提权失败后面板会重新出现，这时重查结果并
+// 让选中跟着这条走到新位置，而不是停在原来的行号上。
+func (st *appState) promoteClipboardAfterPaste(ref string) {
+	if st.hist == nil || !clipboardMoveToTopEnabled(st.cfg) {
+		return
+	}
+	promoted, changed := st.hist.Promote(ref, time.Now())
+	if !changed {
+		return
+	}
+	st.persistClipUpsert(promoted)
+	if !st.isClipboardPlugin() || st.panel == nil || !st.panel.IsVisible() {
+		return
+	}
+	var sel *selectionAnchor
+	for i := range st.provRows {
+		if st.provRows[i].Action.Ref == ref {
+			sel = &selectionAnchor{key: providerRowKey(st.provRows[i].Match), index: i}
+			break
+		}
+	}
+	if sel != nil {
+		st.submitProviderQuerySel(-1, sel)
+		return
+	}
+	st.refreshClipboardRows()
 }
 
 // refreshClipboardRows 重跑剪贴板查询，并尽量保持当前选中行。
@@ -165,6 +204,9 @@ func (st *appState) pasteClipboardItem(ref string, plain bool) {
 	st.clipSeq.Store(platform.ClipboardSequence())
 	st.clipSuppress = payload
 	st.clipSuppressUntil = time.Now().Add(clipboardSuppressWindow)
+
+	// 「粘贴后移至顶部」：写回成功即算一次使用（无目标窗口、仅复制的回退也算）。
+	st.promoteClipboardAfterPaste(ref)
 
 	target := st.clipTarget
 	if !target.Valid() {
