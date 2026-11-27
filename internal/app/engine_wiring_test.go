@@ -1507,14 +1507,12 @@ func TestPickerArrowKeysMoveOnlyPickerSelection(t *testing.T) {
 	}
 	st.moveSelection(1)
 	st.moveSelection(1)
-	if st.pickerChosen != 2 {
-		t.Errorf("连按 ↓ 越过末尾后 pickerChosen=%d，想要钳在 2", st.pickerChosen)
-	}
-	for range 3 {
-		st.moveSelection(-1)
-	}
 	if st.pickerChosen != 0 {
-		t.Errorf("连按 ↑ 越过开头后 pickerChosen=%d，想要钳在 0", st.pickerChosen)
+		t.Errorf("末行再按 ↓ 应绕回首行，pickerChosen=%d，想要 0", st.pickerChosen)
+	}
+	st.moveSelection(-1)
+	if st.pickerChosen != 2 {
+		t.Errorf("首行再按 ↑ 应绕回末行，pickerChosen=%d，想要 2", st.pickerChosen)
 	}
 	if st.model.Chosen != 0 {
 		t.Errorf("picker 态的方向键不该动 apps 选中行，实得 model.Chosen=%d", st.model.Chosen)
@@ -1798,4 +1796,59 @@ func TestCtrlBackspaceResetsWithoutInputFocus(t *testing.T) {
 	if got := resultNames(st); got != wantAll {
 		t.Errorf("复位后顶层结果 = %q，想要全量 %q", got, wantAll)
 	}
+}
+
+// TestMoveSelectionWrapsAtBothEnds 覆盖 moveSelection 的其余三条分派：apps /
+// provider / global 都在两端绕回（picker 的绕回由 TestPickerArrowKeysMoveOnlyPickerSelection
+// 顺带守着）。绝对定位（st.choose / 点击 / 刷新恢复）仍钳位，见 panelstate 的
+// TestChooseClampsAndEmitsScrollIntent。
+func TestMoveSelectionWrapsAtBothEnds(t *testing.T) {
+	st := newWiredState(t, "Chrome", "Firefox", "VLC")
+	st.pluginReg = builtinProviders()
+
+	t.Run("apps", func(t *testing.T) {
+		typeInto(st, "")
+		n := len(st.model.Results)
+		if n < 2 {
+			t.Fatalf("apps 结果只有 %d 条，绕回断言无意义", n)
+		}
+		st.choose(n - 1)
+		st.moveSelection(1)
+		if st.model.Chosen != 0 {
+			t.Errorf("末行再按 ↓ 应绕回首行，Chosen=%d，想要 0", st.model.Chosen)
+		}
+		st.moveSelection(-1)
+		if st.model.Chosen != n-1 {
+			t.Errorf("首行再按 ↑ 应绕回末行，Chosen=%d，想要 %d", st.model.Chosen, n-1)
+		}
+	})
+
+	t.Run("provider", func(t *testing.T) {
+		st.engineState = engine.NewState(engine.Plugin, "base64", "", "")
+		st.provRows = []providers.RankedMatch{{}, {}}
+		st.provChosen = 0
+		st.moveSelection(-1)
+		if st.provChosen != 1 {
+			t.Errorf("首行再按 ↑ 应绕回末行，provChosen=%d，想要 1", st.provChosen)
+		}
+		st.moveSelection(1)
+		if st.provChosen != 0 {
+			t.Errorf("末行再按 ↓ 应绕回首行，provChosen=%d，想要 0", st.provChosen)
+		}
+	})
+
+	t.Run("global", func(t *testing.T) {
+		st.engineState = engine.NewState(engine.Global, "", "", "")
+		st.globalProvRows = []providers.RankedMatch{{}}
+		st.globalRows = []globalRow{{}, {}}
+		st.globalChosen = 0
+		st.moveSelection(-1)
+		if st.globalChosen != 1 {
+			t.Errorf("首行再按 ↑ 应绕回末行，globalChosen=%d，想要 1", st.globalChosen)
+		}
+		st.moveSelection(1)
+		if st.globalChosen != 0 {
+			t.Errorf("末行再按 ↓ 应绕回首行，globalChosen=%d，想要 0", st.globalChosen)
+		}
+	})
 }

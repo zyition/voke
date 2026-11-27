@@ -81,7 +81,7 @@ The configuration file lives at `%APPDATA%\voke\config.toml`:
 |---|---|
 | `Alt+Space` | Show / hide the panel (toggle; configurable in Settings) |
 | Plugin shortcut | User-recorded per plugin; reveals the panel directly in that plugin, or focuses it if already there. It never hides the panel. Unbound by default except clipboard's ``Alt+` `` |
-| `↑` / `↓` | Move the selection up / down |
+| `↑` / `↓` | Move the selection up / down (wraps at the ends) |
 | `Ctrl+N` / `Ctrl+P` | Move down / up (same as `↓` / `↑`) |
 | `Enter` | Run the selected item |
 | `Esc` | Hide the panel (it also hides on focus loss) |

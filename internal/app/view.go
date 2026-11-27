@@ -661,22 +661,30 @@ func (st *appState) onEsc() {
 	st.hidePanel()
 }
 
-// moveSelection 移动选中行：picker 模式在自己的列表上走，其余（含 Global）
-// 逐字是接线前的 `st.choose(st.model.Chosen ± delta)`。
+// navWrap 是方向键在两端的绕回策略：true = 末行 ↓ 回首行、首行 ↑ 回末行。
+// 只作用于相对移动（moveSelection），绝对定位仍钳位；将来若做成设置项，改这一处。
+const navWrap = true
+
+// moveSelection 移动选中行：picker / provider / global / apps 各走自己的列表。
+// 移动量是 delta 步——当前所有调用方都传 ±1（↑↓、Ctrl+N/P、Tab/Shift+Tab），
+// 但绕回判定按 delta 通用（StepIndex），不把「单步」写死在这里。
+//
+// 绝对定位（点击某行、过滤复位到 0、异步刷新按锚点恢复）不走本函数，仍由各自的
+// chooser 钳位。
 func (st *appState) moveSelection(delta int) {
 	if st.engineState.Mode() == engine.PluginPicker {
-		st.choosePicker(st.pickerChosen + delta)
+		st.choosePicker(panelstate.StepIndex(st.pickerChosen, delta, len(st.pickerRows), navWrap))
 		return
 	}
 	if st.providerActive() {
-		st.chooseProvider(st.provChosen + delta)
+		st.chooseProvider(panelstate.StepIndex(st.provChosen, delta, len(st.provRows), navWrap))
 		return
 	}
 	if st.globalActive() {
-		st.chooseGlobal(st.globalChosen + delta)
+		st.chooseGlobal(panelstate.StepIndex(st.globalChosen, delta, len(st.globalRows), navWrap))
 		return
 	}
-	st.choose(st.model.Chosen + delta)
+	st.choose(panelstate.StepIndex(st.model.Chosen, delta, len(st.model.Results), navWrap))
 }
 
 // choose 移动选中行（钳在 [0, len-1]），并把「滚入视野」的意图执行到 st.list。

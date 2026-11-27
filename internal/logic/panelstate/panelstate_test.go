@@ -109,8 +109,39 @@ func TestFilterUsesModelFreq(t *testing.T) {
 	}
 }
 
+// TestStepIndex 锁相对移动的两端语义：wrap=true 绕回、false 钳位，两个方向
+// 与空/单元素列表都覆盖。变异点：把两段取模写成一段（负数越界）或把 clamp 的
+// 上下界写反，本用例立刻红。
+func TestStepIndex(t *testing.T) {
+	tests := []struct {
+		name          string
+		cur, delta, n int
+		wrap          bool
+		want          int
+	}{
+		{"绕回：末行再↓回 0", 2, 1, 3, true, 0},
+		{"绕回：首行再↑回末行", 0, -1, 3, true, 2},
+		{"绕回：越过一圈", 0, 7, 3, true, 1},
+		{"绕回：负方向越过一圈", 0, -4, 3, true, 2},
+		{"钳位：末行再↓不动", 2, 1, 3, false, 2},
+		{"钳位：首行再↑不动", 0, -1, 3, false, 0},
+		{"钳位：大步长夹到末行", 0, 10, 3, false, 2},
+		{"钳位：负大步长夹到首行", 2, -10, 3, false, 0},
+		{"空列表恒 0（绕回）", 5, 1, 0, true, 0},
+		{"空列表恒 0（钳位）", 5, -1, 0, false, 0},
+		{"单元素绕回仍是 0", 0, 1, 1, true, 0},
+	}
+	for _, tc := range tests {
+		if got := StepIndex(tc.cur, tc.delta, tc.n, tc.wrap); got != tc.want {
+			t.Errorf("%s：StepIndex(%d,%d,%d,%t)=%d，想要 %d",
+				tc.name, tc.cur, tc.delta, tc.n, tc.wrap, got, tc.want)
+		}
+	}
+}
+
 // TestChooseClampsAndEmitsScrollIntent 验 Choose 的钳位与意图（这是变异测试
-// 的靶子：把钳位改成不夹取，本用例立刻红）。
+// 的靶子：把钳位改成不夹取，本用例立刻红）。Choose 只服务绝对定位，方向键的
+// 绕回走 StepIndex。
 func TestChooseClampsAndEmitsScrollIntent(t *testing.T) {
 	m := Model{Results: testutil.MkApps("AA", "BB", "CC")}
 	if acts := m.Choose(10); len(acts) != 1 || acts[0].Kind != ActionScrollTo || m.Chosen != 2 {

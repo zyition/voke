@@ -78,6 +78,23 @@ func (m *Model) Filter() []Action {
 	return m.Choose(0)
 }
 
+// StepIndex 把「相对移动 delta 步」落到列表下标上：wrap 为真时在两端绕回
+// （末行再 ↓ 回 0、首行再 ↑ 回 n-1），为假时钳在 [0, n-1]。
+//
+// 与 Choose 的分工：Choose 是**绝对定位**（过滤复位到 0、点击某行、异步刷新按
+// 锚点落位），永远钳位；StepIndex 只服务方向键这类**相对移动**，是否绕回由调用方
+// 显式传入。Go 的 % 对负数返回负数，故绕回用两段取模。空列表恒 0（`Chosen` 的
+// 复位值），由调用方决定是否滚动。
+func StepIndex(cur, delta, n int, wrap bool) int {
+	if n <= 0 {
+		return 0
+	}
+	if !wrap {
+		return max(0, min(cur+delta, n-1))
+	}
+	return ((cur+delta)%n + n) % n
+}
+
 // Choose 把选中钳位在 [0, len-1] 并返回「滚到该行」的意图。对应原
 // appState.choose()，但**不自己调 ScrollIntoView**——滚动是 main 侧副作用。
 // 结果为空时只复位选中（返回 nil），与原实现「空列表不滚动」一致。
